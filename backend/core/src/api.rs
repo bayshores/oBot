@@ -53,7 +53,8 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     }
 
     if db.list_bots()?.is_empty() {
-        let b = new_bot(&db, &config, "General Bot", "magenta", "blob", "", "")?;
+        let nb = crate::bots::NewBot { name: "General Bot".into(), color: "magenta".into(), shape: "blob".into(), ..Default::default() };
+        let b = crate::bots::build(&db, &config, &nb)?;
         db.upsert_bot(&b)?;
         db.kv_set("main_bot", &b.id);
     }
@@ -607,51 +608,6 @@ async fn put_prefs(State(st): State<Shared>, Json(v): Json<Value>) -> ApiResult<
 
 // ---------------------------------------------------------------- bots
 
-fn folder_name(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '-' })
-        .collect();
-    let s = s.trim().trim_matches('-').to_string();
-    if s.is_empty() { "Bot".into() } else { s }
-}
-
-fn new_bot(db: &Db, cfg: &Config, name: &str, color: &str, shape: &str, instructions: &str, model: &str) -> anyhow::Result<Bot> {
-    let root = PathBuf::from(&cfg.workspace_root);
-    let used: Vec<String> = db.list_bots()?.into_iter().map(|b| b.workdir).collect();
-    let base = folder_name(name);
-    let mut dir = root.join(&base);
-    let mut n = 2;
-    while used.contains(&dir.to_string_lossy().into_owned()) {
-        dir = root.join(format!("{base} {n}"));
-        n += 1;
-    }
-    std::fs::create_dir_all(&dir)?;
-    let now = now_ms();
-    Ok(Bot {
-        id: new_id(),
-        name: name.trim().to_string(),
-        color: color.into(),
-        shape: shape.into(),
-        instructions: instructions.into(),
-        model: model.into(),
-        hidden: false,
-        created_at: now,
-        updated_at: now,
-        last_preview: String::new(),
-        unread: 0,
-        running: false,
-        activity: Value::Null,
-        workdir: dir.to_string_lossy().into_owned(),
-        session_id: String::new(),
-        label: String::new(),
-        pinned: false,
-        notifications: true,
-        main: false,
-        conversation_id: String::new(),
-    })
-}
-
 async fn all_bots(st: &AppState) -> ApiResult<Vec<Bot>> {
     let mut out = vec![];
     for b in st.db.list_bots()? {
@@ -716,31 +672,16 @@ async fn create_bot(State(st): State<Shared>, Json(b): Json<BotBody>) -> ApiResu
     if name.trim().is_empty() {
         return Err(bad("Give your bot a name"));
     }
-    let cfg = st.config.read().await.clone();
-    let bot = new_bot(
-        &st.db,
-        &cfg,
-        &name,
-        &b.color.unwrap_or_default(),
-        &b.shape.unwrap_or_default(),
-        &b.instructions.unwrap_or_default(),
-        &b.model.unwrap_or_default(),
-    )?;
-    st.db.upsert_bot(&bot)?;
-    st.emit("bot.created", json!({ "bot": bot }));
-    // A new bot says hello first.
-    let intro = if bot.instructions.trim().is_empty() {
-        "[openbot] You were just created and this is the start of your chat with the user. Say hi in one or two short, \
-         friendly messages: introduce yourself by name, say what you can do on this computer, and ask what they'd \
-         like help with or what you should focus on. Don't use any tools."
-            .to_string()
-    } else {
-        "[openbot] You were just created and this is the start of your chat with the user. Say hi in one or two short, \
-         friendly messages: introduce yourself by name and your role (from your standing instructions) and ask how \
-         you can help. Don't use any tools."
-            .to_string()
+    let nb = crate::bots::NewBot {
+        name,
+        color: b.color.unwrap_or_default(),
+        shape: b.shape.unwrap_or_default(),
+        instructions: b.instructions.unwrap_or_default(),
+        model: b.model.unwrap_or_default(),
+        label: b.label.unwrap_or_default(),
     };
-    runner::enqueue(&st, &bot.id, intro).await;
+    let bot = crate::bots::create(&st, &nb).await?;
+    crate::bots::say_hello(&st, &bot, "").await;
     Ok(Json(bot))
 }
 
@@ -767,15 +708,8 @@ async fn patch_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(
 }
 
 async fn delete_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    if st.db.kv_get("main_bot").as_deref() == Some(id.as_str()) {
-        return Err(bad("Your Main Bot can't be deleted. Make another Bot your Main Bot first."));
-    }
-    runner::stop(&st, &id).await;
-    st.screens.stop(&st, &id).await;
-    st.queues.lock().await.remove(&id);
-    st.db.delete_bot(&id)?;
-    st.db.delete_routines_of_bot(&id)?;
-    st.emit("bot.deleted", json!({ "bot_id": id }));
+    get_bot(&st, &id).await?;
+    crate::bots::delete(&st, &id).await.map_err(|e| bad(&e))?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -978,7 +912,6 @@ fn rule_for(tool: &str, input: &Value) -> String {
 
 /// Called by the MCP helper. Shows an approval card and waits for the user's answer.
 async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprove>) -> ApiResult<Json<Value>> {
-    let approval_id = new_id();
     let summary = runner::tool_summary(&b.tool_name, &b.input, false);
 
     // Auto-review: let a fast model wave through routine actions so the user isn't pestered.
@@ -1003,18 +936,38 @@ async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprov
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| crate::review::fallback_rule(&b.tool_name, &b.input));
     let reason = verdict.as_ref().map(|v| v.reason.clone()).unwrap_or_default();
+    let allowed = ask_approval(&st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason).await?;
+    Ok(Json(if allowed {
+        json!({ "behavior": "allow", "updatedInput": b.input })
+    } else {
+        json!({ "behavior": "deny", "message": "The user said no to this action. Don't retry it; ask them in the chat if you're unsure what to do." })
+    }))
+}
+
+/// Show an Allow / Deny card in the bot's chat and wait for the user's answer.
+/// An empty `proposed_rule` hides "Always allow". Returns false if the run ends first.
+pub(crate) async fn ask_approval(
+    st: &Shared,
+    bot_id: &str,
+    tool_name: &str,
+    summary: &str,
+    input: &Value,
+    proposed_rule: &str,
+    reason: &str,
+) -> anyhow::Result<bool> {
+    let approval_id = new_id();
     let m = Message {
         id: new_id(),
-        bot_id: b.bot_id.clone(),
+        bot_id: bot_id.to_string(),
         role: "approval".into(),
-        text: summary.clone(),
+        text: summary.to_string(),
         html: String::new(),
         status: "pending".into(),
         meta: json!({
             "approval_id": approval_id,
-            "tool_name": b.tool_name,
+            "tool_name": tool_name,
             "summary": summary,
-            "input": trim_value(&b.input),
+            "input": trim_value(input),
             "proposed_rule": proposed_rule,
             "reason": reason,
         }),
@@ -1022,34 +975,29 @@ async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprov
     };
     st.db.upsert_message(&m)?;
     st.emit_message(true, &m);
-    if let Ok(Some(mut bot)) = st.db.get_bot(&b.bot_id) {
-        bot.last_preview = format!("Needs your OK: {}", preview(&summary));
+    if let Ok(Some(mut bot)) = st.db.get_bot(bot_id) {
+        bot.last_preview = format!("Needs your OK: {}", preview(summary));
         bot.updated_at = now_ms();
         bot.unread += 1;
         let _ = st.db.upsert_bot(&bot);
-        st.emit_bot(&b.bot_id).await;
+        st.emit_bot(bot_id).await;
     }
-    if st.is_running(&b.bot_id).await {
-        runner::set_activity(&st, &b.bot_id, Some(("waiting_for_you", "Waiting for your OK"))).await;
+    if st.is_running(bot_id).await {
+        runner::set_activity(st, bot_id, Some(("waiting_for_you", "Waiting for your OK"))).await;
     }
 
     let (tx, rx) = oneshot::channel();
     st.approvals.lock().await.insert(
         approval_id.clone(),
         PendingApproval {
-            bot_id: b.bot_id.clone(),
+            bot_id: bot_id.to_string(),
             message_id: m.id.clone(),
-            tool_name: b.tool_name.clone(),
-            input: b.input.clone(),
+            tool_name: tool_name.to_string(),
+            input: input.clone(),
             reply: tx,
         },
     );
-    let allowed = rx.await.unwrap_or(false);
-    Ok(Json(if allowed {
-        json!({ "behavior": "allow", "updatedInput": b.input })
-    } else {
-        json!({ "behavior": "deny", "message": "The user said no to this action. Don't retry it; ask them in the chat if you're unsure what to do." })
-    }))
+    Ok(rx.await.unwrap_or(false))
 }
 
 #[derive(Deserialize)]
@@ -1065,7 +1013,7 @@ async fn decide_approval(State(st): State<Shared>, UrlPath(id): UrlPath<String>,
         .remove(&id)
         .ok_or_else(|| not_found("This request already ended"))?;
     let allow = d.decision == "allow" || d.decision == "always";
-    if d.decision == "always" {
+    if d.decision == "always" && !p.tool_name.starts_with("mcp__openbot__") {
         let rule = rule_for(&p.tool_name, &p.input);
         let proposed = st
             .db

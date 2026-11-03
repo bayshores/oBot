@@ -139,6 +139,10 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__openbot__show_page" => ("working", "Making a page".into()),
         "mcp__openbot__send_file" => ("working", "Sending a file".into()),
         "mcp__openbot__remember" | "mcp__openbot__recall" | "mcp__openbot__forget" => ("thinking", "Remembering".into()),
+        "mcp__openbot__list_bots" | "mcp__openbot__get_bot" => ("reading_file", "Looking at your Bots".into()),
+        "mcp__openbot__create_bot" => ("working", "Setting up a Bot".into()),
+        "mcp__openbot__update_bot" | "mcp__openbot__move_routine" => ("working", "Updating your Bots".into()),
+        "mcp__openbot__delete_bot" => ("waiting_for_you", "Waiting for your OK".into()),
         n if n.starts_with("mcp__openbot__") => ("working", "Working".into()),
         n if n.starts_with("mcp__playwright") || n.contains("browser") => ("browsing", "Browsing the web".into()),
         n if n.starts_with("mcp__computer") => ("on_its_computer", "On its computer".into()),
@@ -222,7 +226,16 @@ fn persona(state: &Shared, bot: &Bot) -> String {
          (long-term memory), check_back_later (wake yourself up later and message the user), create_routine / \
          list_routines / update_routine / delete_routine (recurring tasks) and set_status. Use them like a \
          capable assistant would: remember useful facts about the user without being asked, send files instead \
-         of pasting long content, and when you promise to follow up later, schedule it with check_back_later.\n",
+         of pasting long content, and when you promise to follow up later, schedule it with check_back_later.\n\
+         Memory works like this: facts saved with about:'user' are shared by all of the user's Bots; facts saved \
+         with about:'me' are yours alone.\n\
+         \nYou can also look after the user's other Bots: list_bots and get_bot (see them), create_bot (a new Bot \
+         with its instructions, private memories and routines, ready from its first message), update_bot (name, \
+         tagline, look, instructions), delete_bot (retire one; the user always confirms with an Allow / Deny card), \
+         move_routine (hand a routine to another Bot), and the \"bot\" option of remember, recall, create_routine and \
+         list_routines (act for another Bot). Only create, change or delete Bots when the user asks for it or agrees \
+         to your plan. When splitting work across Bots, move each Bot's private facts and routines to it, and \
+         retire old Bots only after everything worth keeping has been moved.\n",
     );
     if crate::screen::platform_ok().is_ok() {
         s.push_str(

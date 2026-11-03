@@ -8,6 +8,7 @@
 //! - `security` device pairing, per-device tokens, Origin/Host checks, failed-login limits
 
 pub mod api;
+pub mod bots;
 pub mod computer;
 pub mod config;
 pub mod db;

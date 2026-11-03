@@ -255,6 +255,7 @@ impl Db {
     pub fn delete_bot(&self, id: &str) -> anyhow::Result<()> {
         let c = self.c();
         c.execute("DELETE FROM messages WHERE bot_id = ?1", [id])?;
+        c.execute("DELETE FROM memories WHERE bot_id = ?1", [id])?;
         c.execute("DELETE FROM bots WHERE id = ?1", [id])?;
         Ok(())
     }
@@ -412,7 +413,7 @@ impl Db {
         self.c().execute(
             r#"INSERT INTO routines (id,bot_id,name,prompt,schedule,enabled,next_run_at,last_run_at,unread_runs,created_at)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
-               ON CONFLICT(id) DO UPDATE SET name=?3,prompt=?4,schedule=?5,enabled=?6,next_run_at=?7,last_run_at=?8,unread_runs=?9"#,
+               ON CONFLICT(id) DO UPDATE SET bot_id=?2,name=?3,prompt=?4,schedule=?5,enabled=?6,next_run_at=?7,last_run_at=?8,unread_runs=?9"#,
             params![
                 r.id, r.bot_id, r.name, r.prompt, r.schedule.to_string(), r.enabled as i64,
                 r.next_run_at, r.last_run_at, r.unread_runs, r.created_at

@@ -2606,6 +2606,7 @@
     Read: ['file', 'Files', 'read a file'],
     WebFetch: ['globe', 'Web', 'open a web page'],
     WebSearch: ['globe', 'Web', 'search the web'],
+    mcp__openbot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
   };
   // Approval card (settings-and-bots.md 2.3.1)
   const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
@@ -2623,7 +2624,7 @@
     const shell = tool === 'Bash' || tool === 'PowerShell';
     const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(tool);
     const [ic, , verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', '', `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', '', `use ${tool || 'a tool'}`]);
-    const source = shell ? 'Terminal' : mcp ? mcp[1].replace(/[_-]/g, ' ') : 'Auto-review';
+    const source = shell ? 'Terminal' : APPROVAL_VERB[tool] ? APPROVAL_VERB[tool][1] : mcp ? mcp[1].replace(/[_-]/g, ' ') : 'Auto-review';
     const input = meta.input && typeof meta.input === 'object' ? meta.input : null;
     const rule = (meta.proposed_rule || '').trim();
     let well = null;
@@ -2689,8 +2690,12 @@
   }
   function eventLine(m) {
     const meta = m.meta || {};
-    const ic = /routine/.test(meta.kind || '') ? 'clock' : 'bolt';
-    const el = h('div', { class: 'event-line', title: m.created_at ? fmtTime(m.created_at) : null }, icon(ic, 13), h('span', null, m.text || (meta.kind || 'Event').replace(/-/g, ' ')));
+    const kind = meta.kind || '';
+    const ic = /routine/.test(kind) ? 'clock' : kind === 'bot-deleted' ? 'trash' : /^bot-/.test(kind) ? 'sparkle' : 'bolt';
+    const el = h('div', { class: 'event-line', title: m.created_at ? fmtTime(m.created_at) : null }, icon(ic, 13), h('span', null, m.text || (kind || 'Event').replace(/-/g, ' ')));
+    // Events about another Bot (one this Bot set up, changed, or handed a routine to) link to it.
+    const other = meta.bot_id && meta.bot_id !== m.bot_id ? S.bots.get(meta.bot_id) : null;
+    if (other) el.append(h('button', { class: 'event-open', onclick: () => (S.bots.has(other.id) ? selectBot(other.id) : toast('That Bot was deleted')) }, 'Open ' + other.name));
     return el;
   }
   function toolIconName(name = '') {

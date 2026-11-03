@@ -210,6 +210,29 @@ Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday 
 //         | {kind:"weekly",day:"monday",time} | {kind:"monthly",day:1..31,time}
 ```
 
+## Bot tools (the `openbot` MCP server)
+
+Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they never need approval except `delete_bot`.
+
+| Tool | What it does |
+|---|---|
+| `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message) |
+| `send_file {path, caption?}` · `show_page {title, html \| path}` | file in the chat · sandboxed HTML page |
+| `remember {fact, about?: "user"\|"me", bot?}` | save a fact. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
+| `recall {bot?}` · `forget {id}` | list facts (own or another bot's) · delete one |
+| `check_back_later {note, in_minutes \| at}` | one-time wake-up |
+| `create_routine {name, prompt, schedule, bot?}` · `list_routines {bot?, all?}` · `update_routine {id, …}` · `delete_routine {id}` · `move_routine {id, to_bot}` | routines, for this bot or another |
+| `list_bots` · `get_bot {bot}` | see the user's bots (instructions, private memories, routines) |
+| `create_bot {name, instructions, label?, look?, memories?[], routines?[], briefing?}` | new bot, ready from its first message; it says hello in its own chat. Names must be unique; max 50 bots |
+| `update_bot {bot, name?, label?, look?, instructions?, add_instructions?}` | change a bot (or itself) |
+| `delete_bot {bot, reason?}` | retire a bot. Always shows an Allow / Deny card and waits, whatever the permission mode. Not the Main Bot, not itself |
+| `set_status {text}` | status line under the bot's name |
+
+`bot` arguments take a bot's name (any case) or id. `look` is one of the avatar skins (`violet` … `camo`).
+Actions on other bots leave an `event` message in both chats with `meta {kind, bot_id}`
+(`bot-created`, `bot-created-by`, `bot-updated`, `bot-updated-by`, `bot-deleted`, `routine-created`,
+`routine-moved`, `routine-deleted`); the UI shows an "Open <name>" link for `meta.bot_id`.
+
 ## Bot screens
 
 Each bot can have its own Linux screen: a virtual display (Xvfb, 1280×800) with the openbox

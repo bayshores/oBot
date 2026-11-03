@@ -1,18 +1,20 @@
 //! openbot's own tools for bots (served to Claude Code through the `openbot` MCP server in mcp.rs).
 //! They give bots extra abilities: quick-reply buttons, sending files, showing pages,
-//! memory, routines, check-ins and a status line.
+//! memory, routines, check-ins, a status line, and setting up or retiring the user's other Bots.
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::db::{Memory, Message, Routine};
+use crate::db::{Bot, Memory, Message, Routine};
 use crate::routines::{self, routine_json};
 use crate::state::Shared;
 use crate::util::{new_id, now_ms, truncate_chars};
 
 /// Tool definitions advertised over MCP (besides `approve`, which lives in mcp.rs).
 pub fn definitions() -> Value {
+    #[allow(non_snake_case)]
+    let SKINS_JSON = json!(crate::bots::SKINS);
     let sched = json!({
         "type": "object",
         "description": "When it runs, in this computer's local time. One of: {kind:'once', at:'2026-11-03T09:00'} · {kind:'interval', minutes:60} · {kind:'daily', time:'08:00'} · {kind:'weekdays', time:'08:00'} · {kind:'weekly', day:'monday', time:'09:30'} · {kind:'monthly', day:1, time:'09:00'}",
@@ -52,16 +54,19 @@ pub fn definitions() -> Value {
         },
         {
             "name": "remember",
-            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Use for preferences, names, routines, important details. Keep each fact short.",
+            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Use for preferences, names, routines, important details. Keep each fact short. To hand a fact to another of the user's Bots, give its name in \"bot\": it becomes that Bot's own memory.",
             "inputSchema": {"type": "object", "properties": {
                 "fact": {"type": "string"},
-                "about": {"type": "string", "enum": ["user", "me"], "description": "'user' = about the user (shared with all bots), 'me' = only for this bot"}
+                "about": {"type": "string", "enum": ["user", "me"], "description": "'user' = about the user (shared with all bots), 'me' = only for this bot"},
+                "bot": {"type": "string", "description": "Optional: another Bot's name or id to save this for (only that Bot sees it)"}
             }, "required": ["fact"]}
         },
         {
             "name": "recall",
-            "description": "List everything you remember (with ids, so you can forget outdated facts).",
-            "inputSchema": {"type": "object", "properties": {}}
+            "description": "List everything you remember (with ids, so you can forget outdated facts). Give \"bot\" to see what another Bot remembers.",
+            "inputSchema": {"type": "object", "properties": {
+                "bot": {"type": "string", "description": "Optional: another Bot's name or id"}
+            }}
         },
         {
             "name": "forget",
@@ -79,21 +84,25 @@ pub fn definitions() -> Value {
         },
         {
             "name": "create_routine",
-            "description": "Create a recurring task you'll run on a schedule (e.g. a morning briefing every weekday at 8:00). Only create one when the user asks for it or agrees.",
+            "description": "Create a recurring task you'll run on a schedule (e.g. a morning briefing every weekday at 8:00). Only create one when the user asks for it or agrees. Give \"bot\" to create it for another of the user's Bots (it then runs in that Bot's chat).",
             "inputSchema": {"type": "object", "properties": {
                 "name": {"type": "string"},
                 "prompt": {"type": "string", "description": "What to do each time"},
-                "schedule": sched
+                "schedule": sched.clone(),
+                "bot": {"type": "string", "description": "Optional: another Bot's name or id"}
             }, "required": ["name", "prompt", "schedule"]}
         },
         {
             "name": "list_routines",
-            "description": "List your routines and scheduled check-ins.",
-            "inputSchema": {"type": "object", "properties": {}}
+            "description": "List your routines and scheduled check-ins. Give \"bot\" for another Bot's, or all:true for every Bot's.",
+            "inputSchema": {"type": "object", "properties": {
+                "bot": {"type": "string", "description": "Optional: another Bot's name or id"},
+                "all": {"type": "boolean"}
+            }}
         },
         {
             "name": "update_routine",
-            "description": "Change, pause or resume one of your routines.",
+            "description": "Change, pause or resume a routine (yours or another Bot's, by id).",
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string"}, "name": {"type": "string"}, "prompt": {"type": "string"},
                 "schedule": sched, "enabled": {"type": "boolean"}
@@ -101,8 +110,63 @@ pub fn definitions() -> Value {
         },
         {
             "name": "delete_routine",
-            "description": "Delete one of your routines.",
+            "description": "Delete a routine (yours or another Bot's, by id).",
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
+        },
+        {
+            "name": "move_routine",
+            "description": "Hand a routine over to another of the user's Bots (it keeps its schedule and then runs in that Bot's chat).",
+            "inputSchema": {"type": "object", "properties": {
+                "id": {"type": "string"},
+                "to_bot": {"type": "string", "description": "The Bot's name or id"}
+            }, "required": ["id", "to_bot"]}
+        },
+        {
+            "name": "list_bots",
+            "description": "List all of the user's Bots: name, id, tagline, a preview of their instructions, and how many routines and private memories each has.",
+            "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "get_bot",
+            "description": "Everything about one Bot: its full instructions, look, private memories and routines.",
+            "inputSchema": {"type": "object", "properties": {
+                "bot": {"type": "string", "description": "The Bot's name or id"}
+            }, "required": ["bot"]}
+        },
+        {
+            "name": "create_bot",
+            "description": "Create a new Bot for the user (it appears in their sidebar and says hello in its own chat). Only do this when the user asks for it or agrees to your plan. Give it clear standing instructions, and hand it the private facts and routines that belong to it so it is ready from its first message. Facts about the user that every Bot should know don't need copying: those are shared already.",
+            "inputSchema": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "Short name, e.g. 'School Bot' (max 40 characters)"},
+                "instructions": {"type": "string", "description": "Its standing instructions: its job, what to focus on, how to behave"},
+                "label": {"type": "string", "description": "Optional tagline shown under its name (max 60 characters)"},
+                "look": {"type": "string", "enum": SKINS_JSON.clone(), "description": "Optional color or pattern; a free color is picked if left out"},
+                "memories": {"type": "array", "items": {"type": "string"}, "description": "Optional facts only this Bot should know (max 50)"},
+                "routines": {"type": "array", "description": "Optional routines for it (max 10)", "items": {"type": "object", "properties": {
+                    "name": {"type": "string"}, "prompt": {"type": "string"}, "schedule": sched.clone()
+                }, "required": ["name", "prompt", "schedule"]}},
+                "briefing": {"type": "string", "description": "Optional note for its first message: why it was set up and what the user wants from it"}
+            }, "required": ["name", "instructions"]}
+        },
+        {
+            "name": "update_bot",
+            "description": "Change one of the user's Bots (or yourself): its name, tagline, look or standing instructions. Use add_instructions to append to its instructions instead of replacing them. Only when the user asks for it or agrees.",
+            "inputSchema": {"type": "object", "properties": {
+                "bot": {"type": "string", "description": "The Bot's name or id"},
+                "name": {"type": "string"},
+                "label": {"type": "string"},
+                "look": {"type": "string", "enum": SKINS_JSON.clone()},
+                "instructions": {"type": "string", "description": "Replaces its instructions"},
+                "add_instructions": {"type": "string", "description": "Appended to its instructions"}
+            }, "required": ["bot"]}
+        },
+        {
+            "name": "delete_bot",
+            "description": "Retire one of the user's Bots: its chat, its private memories and its routines are deleted. The user always gets an Allow / Deny card first, and this waits for their answer. Move anything worth keeping (routines, facts) to another Bot before deleting. The Main Bot and you yourself can't be deleted.",
+            "inputSchema": {"type": "object", "properties": {
+                "bot": {"type": "string", "description": "The Bot's name or id"},
+                "reason": {"type": "string", "description": "One short sentence the user sees on the card"}
+            }, "required": ["bot"]}
         },
         {
             "name": "set_status",
@@ -119,8 +183,67 @@ pub fn definitions() -> Value {
     list
 }
 
+/// "1 routine", "3 routines".
+fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 fn s<'a>(args: &'a Value, k: &str) -> &'a str {
     args.get(k).and_then(Value::as_str).unwrap_or("").trim()
+}
+
+/// Find one of the user's Bots by id or name (names match without caring about case).
+fn find_bot(state: &Shared, key: &str) -> Result<Bot, String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("Say which Bot (its name or id)".into());
+    }
+    let bots = state.db.list_bots().map_err(|e| e.to_string())?;
+    if let Some(b) = bots.iter().find(|b| b.id == key) {
+        return Ok(b.clone());
+    }
+    let named: Vec<&Bot> = bots.iter().filter(|b| b.name.eq_ignore_ascii_case(key)).collect();
+    match named.len() {
+        1 => Ok(named[0].clone()),
+        0 => Err(format!("No Bot called \"{key}\". Use list_bots to see their names.")),
+        _ => Err(format!("Several Bots are called \"{key}\"; use the id from list_bots instead.")),
+    }
+}
+
+/// The Bot a memory/routine tool acts on: another Bot when "bot" is given, otherwise the caller.
+fn target_bot(state: &Shared, me: &Bot, args: &Value) -> Result<Bot, String> {
+    let key = s(args, "bot");
+    if key.is_empty() { Ok(me.clone()) } else { find_bot(state, key) }
+}
+
+fn check_look(look: &str) -> Result<(), String> {
+    if look.is_empty() || crate::bots::SKINS.contains(&look) {
+        Ok(())
+    } else {
+        Err(format!("Unknown look \"{look}\". Use one of: {}", crate::bots::SKINS.join(", ")))
+    }
+}
+
+/// A routine ready to save (its schedule checked and its first run worked out).
+fn new_routine(bot_id: &str, name: &str, prompt: &str, schedule: &Value) -> Result<Routine, String> {
+    let sched = normalize_schedule(schedule)?;
+    let next = routines::next_run(&sched, now_ms()).ok_or("That schedule never runs")?;
+    let r = Routine {
+        id: new_id()[..10].to_string(),
+        bot_id: bot_id.into(),
+        name: truncate_chars(name.trim(), 80),
+        prompt: prompt.trim().into(),
+        schedule: sched,
+        enabled: true,
+        next_run_at: Some(next),
+        last_run_at: None,
+        unread_runs: 0,
+        created_at: now_ms(),
+    };
+    if r.name.is_empty() || r.prompt.is_empty() {
+        return Err("A routine needs a name and a prompt".into());
+    }
+    Ok(r)
 }
 
 /// Parse "2026-11-03T09:00" (local) into unix ms.
@@ -299,22 +422,29 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             if fact.is_empty() {
                 return Err("remember needs a fact".into());
             }
-            let about_user = s(args, "about") != "me";
+            let target = target_bot(state, &bot, args)?;
+            let for_other = target.id != bot_id;
+            let about_user = !for_other && s(args, "about") != "me";
             let m = Memory {
                 id: new_id()[..8].to_string(),
-                bot_id: if about_user { None } else { Some(bot_id.to_string()) },
+                bot_id: if about_user { None } else { Some(target.id.clone()) },
                 text: truncate_chars(fact, 500),
                 created_at: now_ms(),
             };
             state.db.add_memory(&m).map_err(|e| e.to_string())?;
-            state.emit("memories.updated", json!({"bot_id": bot_id}));
-            Ok(format!("Remembered (id {}).", m.id))
+            state.emit("memories.updated", json!({"bot_id": target.id}));
+            if for_other {
+                Ok(format!("Saved for {} (id {}). They'll know it from their next message.", target.name, m.id))
+            } else {
+                Ok(format!("Remembered (id {}).", m.id))
+            }
         }
 
         "recall" => {
-            let mems = state.db.memories_for(bot_id).map_err(|e| e.to_string())?;
+            let target = target_bot(state, &bot, args)?;
+            let mems = state.db.memories_for(&target.id).map_err(|e| e.to_string())?;
             if mems.is_empty() {
-                return Ok("You don't have any saved memories yet.".into());
+                return Ok(if target.id == bot_id { "You don't have any saved memories yet.".into() } else { format!("{} has no saved memories yet.", target.name) });
             }
             Ok(mems
                 .iter()
@@ -357,49 +487,46 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
         }
 
         "create_routine" => {
-            let sched = normalize_schedule(args.get("schedule").unwrap_or(&Value::Null))?;
-            let next = routines::next_run(&sched, now_ms()).ok_or("That schedule never runs")?;
-            let r = Routine {
-                id: new_id()[..10].to_string(),
-                bot_id: bot_id.into(),
-                name: truncate_chars(s(args, "name"), 80),
-                prompt: s(args, "prompt").into(),
-                schedule: sched,
-                enabled: true,
-                next_run_at: Some(next),
-                last_run_at: None,
-                unread_runs: 0,
-                created_at: now_ms(),
-            };
-            if r.name.is_empty() || r.prompt.is_empty() {
-                return Err("create_routine needs a name and a prompt".into());
-            }
+            let target = target_bot(state, &bot, args)?;
+            let r = new_routine(&target.id, s(args, "name"), s(args, "prompt"), args.get("schedule").unwrap_or(&Value::Null))?;
             state.db.upsert_routine(&r).map_err(|e| e.to_string())?;
-            crate::runner::add_event(
-                state,
-                bot_id,
-                &format!("Created routine “{}” · {}", r.name, routines::describe(&r.schedule)),
-                json!({"kind": "routine-created", "routine_id": r.id}),
-            );
-            state.emit("routines.updated", json!({"bot_id": bot_id}));
-            Ok(format!("Routine saved (id {}). {}.", r.id, routines::describe(&r.schedule)))
+            let what = format!("“{}” · {}", r.name, routines::describe(&r.schedule));
+            if target.id == bot_id {
+                crate::runner::add_event(state, bot_id, &format!("Created routine {what}"), json!({"kind": "routine-created", "routine_id": r.id}));
+            } else {
+                crate::runner::add_event(state, bot_id, &format!("Created routine {what} for {}", target.name), json!({"kind": "routine-created", "routine_id": r.id, "bot_id": target.id}));
+                crate::runner::add_event(state, &target.id, &format!("{} gave you the routine {what}", bot.name), json!({"kind": "routine-created", "routine_id": r.id, "bot_id": bot_id}));
+            }
+            state.emit("routines.updated", json!({"bot_id": target.id}));
+            Ok(format!("Routine saved (id {}) for {}. {}.", r.id, if target.id == bot_id { "you".to_string() } else { target.name.clone() }, routines::describe(&r.schedule)))
         }
 
         "list_routines" => {
-            let rs = state.db.routines_for(Some(bot_id)).map_err(|e| e.to_string())?;
+            let all = args.get("all").and_then(Value::as_bool).unwrap_or(false);
+            let rs = if all {
+                state.db.routines_for(None).map_err(|e| e.to_string())?
+            } else {
+                let target = target_bot(state, &bot, args)?;
+                state.db.routines_for(Some(&target.id)).map_err(|e| e.to_string())?
+            };
             if rs.is_empty() {
                 return Ok("No routines yet.".into());
             }
-            Ok(rs.iter().map(|r| routine_json(r).to_string()).collect::<Vec<_>>().join("\n"))
+            let names: std::collections::HashMap<String, String> =
+                state.db.list_bots().map_err(|e| e.to_string())?.into_iter().map(|b| (b.id, b.name)).collect();
+            Ok(rs
+                .iter()
+                .map(|r| {
+                    let mut v = routine_json(r);
+                    v["bot_name"] = json!(names.get(&r.bot_id).cloned().unwrap_or_default());
+                    v.to_string()
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
         }
 
         "update_routine" => {
-            let mut r = state
-                .db
-                .get_routine(s(args, "id"))
-                .map_err(|e| e.to_string())?
-                .filter(|r| r.bot_id == bot_id)
-                .ok_or("No routine with that id")?;
+            let mut r = state.db.get_routine(s(args, "id")).map_err(|e| e.to_string())?.ok_or("No routine with that id")?;
             if let Some(n) = args.get("name").and_then(Value::as_str) {
                 r.name = truncate_chars(n.trim(), 80);
             }
@@ -415,24 +542,241 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             }
             r.next_run_at = if r.enabled { routines::next_run(&r.schedule, now_ms()) } else { None };
             state.db.upsert_routine(&r).map_err(|e| e.to_string())?;
-            state.emit("routines.updated", json!({"bot_id": bot_id}));
+            state.emit("routines.updated", json!({"bot_id": r.bot_id}));
             Ok("Routine updated.".into())
         }
 
         "delete_routine" => {
-            let id = s(args, "id");
-            let ok = state
-                .db
-                .get_routine(id)
-                .map_err(|e| e.to_string())?
-                .filter(|r| r.bot_id == bot_id)
-                .is_some();
-            if !ok {
-                return Err("No routine with that id".into());
+            let r = state.db.get_routine(s(args, "id")).map_err(|e| e.to_string())?.ok_or("No routine with that id")?;
+            state.db.delete_routine(&r.id).map_err(|e| e.to_string())?;
+            if r.bot_id != bot_id {
+                crate::runner::add_event(state, &r.bot_id, &format!("{} deleted the routine “{}”", bot.name, r.name), json!({"kind": "routine-deleted", "bot_id": bot_id}));
             }
-            state.db.delete_routine(id).map_err(|e| e.to_string())?;
-            state.emit("routines.updated", json!({"bot_id": bot_id}));
+            state.emit("routines.updated", json!({"bot_id": r.bot_id}));
             Ok("Routine deleted.".into())
+        }
+
+        "move_routine" => {
+            let mut r = state.db.get_routine(s(args, "id")).map_err(|e| e.to_string())?.ok_or("No routine with that id")?;
+            let to = find_bot(state, s(args, "to_bot"))?;
+            if r.bot_id == to.id {
+                return Ok(format!("That routine already belongs to {}.", to.name));
+            }
+            let from = state.db.get_bot(&r.bot_id).ok().flatten().map(|b| b.name).unwrap_or_else(|| "another Bot".into());
+            let from_id = std::mem::replace(&mut r.bot_id, to.id.clone());
+            r.unread_runs = 0;
+            state.db.upsert_routine(&r).map_err(|e| e.to_string())?;
+            let what = format!("“{}” · {}", r.name, routines::describe(&r.schedule));
+            crate::runner::add_event(state, &from_id, &format!("Moved the routine {what} to {}", to.name), json!({"kind": "routine-moved", "routine_id": r.id, "bot_id": to.id}));
+            crate::runner::add_event(state, &to.id, &format!("Took over the routine {what} from {from}"), json!({"kind": "routine-moved", "routine_id": r.id, "bot_id": from_id}));
+            state.emit("routines.updated", json!({"bot_id": from_id}));
+            state.emit("routines.updated", json!({"bot_id": to.id}));
+            Ok(format!("Moved. {} now runs it ({}).", to.name, routines::describe(&r.schedule)))
+        }
+
+        "list_bots" => {
+            let main = state.db.kv_get("main_bot").unwrap_or_default();
+            let bots = state.db.list_bots().map_err(|e| e.to_string())?;
+            let mut out = vec![];
+            for b in bots {
+                let routines = state.db.routines_for(Some(&b.id)).map(|v| v.len()).unwrap_or(0);
+                let private = state.db.memories_for(&b.id).map(|v| v.iter().filter(|m| m.bot_id.is_some()).count()).unwrap_or(0);
+                let mut tags = vec![];
+                if b.id == main { tags.push("Main Bot"); }
+                if b.id == bot_id { tags.push("you"); }
+                if b.hidden { tags.push("hidden"); }
+                let instr = b.instructions.trim().replace('\n', " ");
+                out.push(format!(
+                    "- {name} (id {id}){tags}{label} · {routines} · {private}\n  Instructions: {instr}",
+                    name = b.name,
+                    id = b.id,
+                    tags = if tags.is_empty() { String::new() } else { format!(" [{}]", tags.join(", ")) },
+                    label = if b.label.is_empty() { String::new() } else { format!(" — {}", b.label) },
+                    instr = if instr.is_empty() { "(none)".to_string() } else { truncate_chars(&instr, 240) },
+                    routines = count(routines, "routine", "routines"),
+                    private = count(private, "private memory", "private memories"),
+                ));
+            }
+            Ok(format!("{} Bots:\n{}", out.len(), out.join("\n")))
+        }
+
+        "get_bot" => {
+            let b = find_bot(state, s(args, "bot"))?;
+            let main = state.db.kv_get("main_bot").unwrap_or_default();
+            let mems: Vec<Value> = state
+                .db
+                .memories_for(&b.id)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .filter(|m| m.bot_id.is_some())
+                .map(|m| json!({"id": m.id, "text": m.text}))
+                .collect();
+            let rs: Vec<Value> = state.db.routines_for(Some(&b.id)).map_err(|e| e.to_string())?.iter().map(routine_json).collect();
+            Ok(json!({
+                "id": b.id, "name": b.name, "label": b.label, "look": b.color,
+                "main_bot": b.id == main, "is_you": b.id == bot_id,
+                "instructions": b.instructions,
+                "private_memories": mems,
+                "routines": rs,
+                "note": "Facts about the user are shared by every Bot and aren't listed here; use recall to see them."
+            })
+            .to_string())
+        }
+
+        "create_bot" => {
+            let name = s(args, "name");
+            if name.is_empty() || name.chars().count() > 40 {
+                return Err("Give the Bot a name of 1 to 40 characters".into());
+            }
+            let instructions = s(args, "instructions");
+            if instructions.is_empty() {
+                return Err("Give the Bot standing instructions (its job and how to behave)".into());
+            }
+            if instructions.chars().count() > crate::bots::MAX_INSTRUCTIONS {
+                return Err(format!("Instructions are too long (max {} characters)", crate::bots::MAX_INSTRUCTIONS));
+            }
+            let look = s(args, "look");
+            check_look(look)?;
+            let bots = state.db.list_bots().map_err(|e| e.to_string())?;
+            if let Some(same) = bots.iter().find(|b| b.name.eq_ignore_ascii_case(name)) {
+                return Err(format!("There's already a Bot called {} (id {}). Use update_bot to change it, or pick another name.", same.name, same.id));
+            }
+            if bots.len() >= 50 {
+                return Err("The user already has 50 Bots; retire some first.".into());
+            }
+            // Check everything before creating anything, so a mistake doesn't leave half a Bot.
+            let facts: Vec<String> = args
+                .get("memories")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect())
+                .unwrap_or_default();
+            if facts.len() > 50 {
+                return Err("At most 50 memories at once".into());
+            }
+            let routine_specs = args.get("routines").and_then(Value::as_array).cloned().unwrap_or_default();
+            if routine_specs.len() > 10 {
+                return Err("At most 10 routines at once".into());
+            }
+            let mut planned = vec![];
+            for (i, r) in routine_specs.iter().enumerate() {
+                let p = new_routine("", s(r, "name"), s(r, "prompt"), r.get("schedule").unwrap_or(&Value::Null))
+                    .map_err(|e| format!("Routine {} (“{}”): {e}", i + 1, s(r, "name")))?;
+                planned.push(p);
+            }
+
+            let nb = crate::bots::NewBot {
+                name: name.into(),
+                color: if look.is_empty() { crate::bots::free_color(&state.db) } else { look.into() },
+                shape: "ball".into(),
+                instructions: instructions.into(),
+                model: String::new(),
+                label: s(args, "label").into(),
+            };
+            let new = crate::bots::create(state, &nb).await.map_err(|e| e.to_string())?;
+            for f in &facts {
+                state
+                    .db
+                    .add_memory(&Memory { id: new_id()[..8].to_string(), bot_id: Some(new.id.clone()), text: truncate_chars(f, 500), created_at: now_ms() })
+                    .map_err(|e| e.to_string())?;
+            }
+            for mut r in planned {
+                r.bot_id = new.id.clone();
+                state.db.upsert_routine(&r).map_err(|e| e.to_string())?;
+            }
+            crate::runner::add_event(state, &new.id, &format!("Set up by {}", bot.name), json!({"kind": "bot-created-by", "bot_id": bot_id}));
+            crate::runner::add_event(state, bot_id, &format!("Set up the Bot “{}”", new.name), json!({"kind": "bot-created", "bot_id": new.id}));
+            state.emit("memories.updated", json!({"bot_id": new.id}));
+            state.emit("routines.updated", json!({"bot_id": new.id}));
+            crate::bots::say_hello(state, &new, s(args, "briefing")).await;
+            Ok(format!(
+                "Created {} (id {}) with {} and {}. It's in the user's sidebar and is saying hello in its own chat.",
+                new.name,
+                new.id,
+                count(facts.len(), "private memory", "private memories"),
+                count(routine_specs.len(), "routine", "routines")
+            ))
+        }
+
+        "update_bot" => {
+            let mut b = find_bot(state, s(args, "bot"))?;
+            let mut changed = vec![];
+            if let Some(n) = args.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) {
+                if n.chars().count() > 40 {
+                    return Err("Names are at most 40 characters".into());
+                }
+                if let Ok(other) = find_bot(state, n) {
+                    if other.id != b.id {
+                        return Err(format!("There's already a Bot called {}", other.name));
+                    }
+                }
+                b.name = n.into();
+                changed.push("name");
+            }
+            if let Some(l) = args.get("label").and_then(Value::as_str) {
+                b.label = truncate_chars(l.trim(), 60);
+                changed.push("tagline");
+            }
+            if let Some(l) = args.get("look").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()) {
+                check_look(l)?;
+                b.color = l.into();
+                b.shape = "ball".into();
+                changed.push("look");
+            }
+            if let Some(i) = args.get("instructions").and_then(Value::as_str) {
+                b.instructions = i.trim().into();
+                changed.push("instructions");
+            }
+            if let Some(a) = args.get("add_instructions").and_then(Value::as_str).map(str::trim).filter(|a| !a.is_empty()) {
+                b.instructions = if b.instructions.trim().is_empty() { a.into() } else { format!("{}\n\n{a}", b.instructions.trim_end()) };
+                if !changed.contains(&"instructions") {
+                    changed.push("instructions");
+                }
+            }
+            if changed.is_empty() {
+                return Err("Nothing to change: give name, label, look, instructions or add_instructions".into());
+            }
+            if b.instructions.chars().count() > crate::bots::MAX_INSTRUCTIONS {
+                return Err(format!("Instructions would be too long (max {} characters)", crate::bots::MAX_INSTRUCTIONS));
+            }
+            b.updated_at = now_ms();
+            state.db.upsert_bot(&b).map_err(|e| e.to_string())?;
+            state.emit_bot(&b.id).await;
+            let list = changed.join(", ");
+            if b.id == bot_id {
+                crate::runner::add_event(state, bot_id, &format!("Updated its own {list}"), json!({"kind": "bot-updated", "bot_id": b.id}));
+            } else {
+                crate::runner::add_event(state, bot_id, &format!("Updated {}: {list}", b.name), json!({"kind": "bot-updated", "bot_id": b.id}));
+                crate::runner::add_event(state, &b.id, &format!("{} updated your {list}", bot.name), json!({"kind": "bot-updated-by", "bot_id": bot_id}));
+            }
+            Ok(format!("Updated {} ({list}). It applies from {} next message.", b.name, if b.id == bot_id { "your" } else { "its" }))
+        }
+
+        "delete_bot" => {
+            let b = find_bot(state, s(args, "bot"))?;
+            if b.id == bot_id {
+                return Err("You can't delete yourself. The user can do it from the app.".into());
+            }
+            if state.db.kv_get("main_bot").as_deref() == Some(b.id.as_str()) {
+                return Err(format!("{} is the user's Main Bot and can't be deleted.", b.name));
+            }
+            let rcount = state.db.routines_for(Some(&b.id)).map(|v| v.len()).unwrap_or(0);
+            let reason = truncate_chars(s(args, "reason").trim_end_matches(['.', '!', ' ']), 200);
+            let summary = format!(
+                "Delete the Bot “{}”{}. {} deleted too.",
+                b.name,
+                if reason.is_empty() { String::new() } else { format!(" ({reason})") },
+                if rcount > 0 { format!("Its chat, its own memories and its {} are", count(rcount, "routine", "routines")) } else { "Its chat and its own memories are".to_string() }
+            );
+            // Always asks, whatever the permission settings: this can't be undone.
+            let ok = crate::api::ask_approval(state, bot_id, "mcp__openbot__delete_bot", &summary, &json!({"bot": b.name, "bot_id": b.id, "reason": reason}), "", "")
+                .await
+                .map_err(|e| e.to_string())?;
+            if !ok {
+                return Err(format!("The user chose to keep {}. Don't ask again unless they bring it up.", b.name));
+            }
+            crate::bots::delete(state, &b.id).await?;
+            crate::runner::add_event(state, bot_id, &format!("Deleted the Bot “{}”", b.name), json!({"kind": "bot-deleted"}));
+            Ok(format!("Deleted {}.", b.name))
         }
 
         "request_control" => {
