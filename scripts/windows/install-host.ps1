@@ -82,8 +82,24 @@ if (-not $ServerExe -or -not (Test-Path $ServerExe)) {
   exit 1
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-Get-Process openbot-server -ErrorAction SilentlyContinue | Stop-Process -Force
-Copy-Item $ServerExe $Target -Force
+# Updating: stop the running copy first (the startup task, the server and its helper processes),
+# then wait until Windows lets go of the file.
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+for ($i = 0; $i -lt 20; $i++) {
+  $running = Get-Process openbot-server -ErrorAction SilentlyContinue
+  if (-not $running) { break }
+  $running | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 500
+}
+$copied = $false
+for ($i = 0; $i -lt 10 -and -not $copied; $i++) {
+  try { Copy-Item $ServerExe $Target -Force -ErrorAction Stop; $copied = $true }
+  catch { Start-Sleep -Seconds 1 }
+}
+if (-not $copied) {
+  Write-Host "Couldn't replace $Target (it's still in use). Restart the PC and run this script again." -ForegroundColor Red
+  exit 1
+}
 Write-Host "[1/5] Installed $Target" -ForegroundColor Green
 
 # 2. Claude Code
