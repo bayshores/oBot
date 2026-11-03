@@ -124,8 +124,17 @@ if (-not $ts) {
       Write-Host $existing
       Write-Host "      Not changing it. To share openbot on another port run:  tailscale serve --bg --https=8443 $Port"
     } else {
-      & $ts serve --bg --yes $Port 2>&1 | Out-Host
-      if ($LASTEXITCODE -ne 0) {
+      $serveOk = $false
+      try {
+        $ErrorActionPreference = "Continue"   # tailscale prints notes on stderr; don't treat them as errors
+        & $ts serve --bg --yes $Port 2>&1 | ForEach-Object { "$_" } | Out-Host
+        $serveOk = ($LASTEXITCODE -eq 0)
+      } catch {
+        $serveOk = $false
+      } finally {
+        $ErrorActionPreference = "Stop"
+      }
+      if (-not $serveOk) {
         Write-Host "[3/5] Tailscale Serve didn't start. It may need HTTPS turned on for your tailnet:" -ForegroundColor Yellow
         Write-Host "      open https://login.tailscale.com/admin/dns , enable MagicDNS and HTTPS Certificates, then run this script again."
       } else {
@@ -163,7 +172,8 @@ if ($KeepAwake) {
 }
 
 Start-Sleep -Seconds 3
-$pair = (& $Target pair | Out-String)
+$ErrorActionPreference = "Continue"
+$pair = (& $Target pair 2>&1 | ForEach-Object { "$_" } | Out-String)
 $code = if ($pair -match 'Pairing code:\s+(\d{3}) (\d{3})') { "$($Matches[1]) $($Matches[2])" } else { "(run: $Target pair)" }
 Write-Host ""
 if ($ServeUrl) {
