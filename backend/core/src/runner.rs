@@ -108,7 +108,7 @@ pub async fn set_activity(state: &Shared, bot_id: &str, a: Option<(&str, &str)>)
         let mut map = state.activity.lock().unwrap_or_else(|e| e.into_inner());
         match a {
             Some((kind, label)) => {
-                let v = json!({ "kind": kind, "label": label });
+                let v = json!({ "kind": kind, "label": crate::vault::redact(label) });
                 if map.get(bot_id) == Some(&v) {
                     false
                 } else {
@@ -207,7 +207,7 @@ enum Outcome {
     ResumeFailed,
 }
 
-fn persona(state: &Shared, bot: &Bot) -> String {
+fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     let host = sysinfo::System::host_name().unwrap_or_else(|| "this computer".into());
     let os = sysinfo::System::long_os_version().unwrap_or_else(|| std::env::consts::OS.into());
     let mut s = format!(
@@ -271,13 +271,12 @@ fn persona(state: &Shared, bot: &Bot) -> String {
             }
         }
     }
-    if let Ok(cfg) = state.config.try_read() {
-        if !cfg.vault.is_empty() {
-            s.push_str("\nSecrets the user saved for you (available as environment variables in your shell; never print their values):\n");
-            for sec in &cfg.vault {
-                let what = if sec.description.trim().is_empty() { "no description" } else { sec.description.trim() };
-                s.push_str(&format!("- ${} — {what}\n", sec.name));
-            }
+    let secrets = crate::vault::for_bot(cfg, &bot.id);
+    if !secrets.is_empty() {
+        s.push_str("\nSecrets the user saved for you (available as environment variables in your shell; never print their values):\n");
+        for sec in secrets {
+            let what = if sec.description.trim().is_empty() { "no description" } else { sec.description.trim() };
+            s.push_str(&format!("- ${} — {what}\n", sec.name.trim()));
         }
     }
     if !bot.instructions.trim().is_empty() {
@@ -305,7 +304,7 @@ fn build_command(
     let p = |path: &std::path::Path| if wsl { crate::util::to_wsl_path(path) } else { path.to_string_lossy().into_owned() };
 
     let persona_path = bot_dir.join("persona.md");
-    let mut persona_text = persona(state, bot);
+    let mut persona_text = persona(state, bot, cfg);
     if wsl {
         persona_text = persona_text.replace(&bot.workdir, &crate::util::to_wsl_path(std::path::Path::new(&bot.workdir)));
     }
@@ -426,21 +425,22 @@ fn build_command(
         .kill_on_drop(true)
         .env("OPENBOT", "1");
 
-    if cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() {
+    // A locked key (still encrypted, see vault.rs) is useless, so it counts as not set.
+    let api_key_ok = cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() && !crate::vault::is_locked(&cfg.api_key);
+    if api_key_ok {
         cmd.env("ANTHROPIC_API_KEY", &cfg.api_key);
     } else {
         // Use the Claude subscription login of this computer.
         cmd.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
     }
     let mut passed: Vec<String> = vec!["OPENBOT".into()];
-    if cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() {
+    if api_key_ok {
         passed.push("ANTHROPIC_API_KEY".into());
     }
-    for s in &cfg.vault {
-        if !s.name.trim().is_empty() {
-            cmd.env(s.name.trim(), &s.value);
-            passed.push(s.name.trim().to_string());
-        }
+    // Only the secrets meant for this Bot (and never ones with a reserved name).
+    for s in crate::vault::for_bot(cfg, &bot.id) {
+        cmd.env(s.name.trim(), &s.value);
+        passed.push(s.name.trim().to_string());
     }
     if wsl {
         // Windows -> WSL only passes the environment variables listed in WSLENV.

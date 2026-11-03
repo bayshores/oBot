@@ -38,7 +38,8 @@ pub fn preview(s: &str) -> String {
     truncate_chars(flat.trim(), 120)
 }
 
-/// Mask a secret like "sk-ant-api03-abcdef" -> "sk-ant-…cdef".
+/// Mask a secret so only its last 4 characters show: "sk-ant-api03-abcdef" -> "••••cdef".
+/// Values of 8 characters or fewer show nothing but dots (4 would be half of it).
 pub fn hint(secret: &str) -> String {
     let n = secret.chars().count();
     if n == 0 {
@@ -47,9 +48,8 @@ pub fn hint(secret: &str) -> String {
     if n <= 8 {
         return "••••".into();
     }
-    let head: String = secret.chars().take(6).collect();
     let tail: String = secret.chars().skip(n - 4).collect();
-    format!("{head}…{tail}")
+    format!("••••{tail}")
 }
 
 /// On Windows, stop child processes from flashing a console window.

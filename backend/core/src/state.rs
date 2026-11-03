@@ -74,6 +74,7 @@ impl AppState {
         b.running = self.is_running(&b.id).await;
         b.main = self.db.kv_get("main_bot").as_deref() == Some(b.id.as_str());
         b.conversation_id = b.session_id.clone();
+        b.last_preview = crate::vault::redact(&b.last_preview);
         if b.running {
             b.activity = self
                 .activity
@@ -92,8 +93,11 @@ impl AppState {
         }
     }
 
+    /// Tell open apps about a new or changed chat message. Saved secret values are hidden first.
     pub fn emit_message(&self, created: bool, m: &Message) {
         let ty = if created { "message.created" } else { "message.updated" };
+        let mut m = m.clone();
+        crate::vault::redact_message(&mut m);
         self.emit(ty, json!({ "message": m }));
     }
 

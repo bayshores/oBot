@@ -5323,16 +5323,24 @@
   }
 
   // ── Vault › Secrets (3.7) ──
-  const RESERVED_ENV = ['PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'PWD', 'DISPLAY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'FTP_PROXY'];
-  const RESERVED_PREFIX = ['LD_', 'CURSOR_', 'CLOUD_AGENT_', 'SAND_'];
+  // The reserved names come from the server (vault.rs), which checks them again on save.
   function secretNameProblem(n) {
     if (!n) return 'Enter an environment variable name';
     if (n.length > 128) return 'Too long. Maximum length is 128.';
     if (!/^[A-Z][A-Z0-9_]*$/.test(n)) return 'Use an uppercase environment variable name (A-Z, 0-9, _) that starts with a letter';
-    if (RESERVED_ENV.includes(n)) return `${n} is reserved by the computer`;
-    const p = RESERVED_PREFIX.find((x) => n.startsWith(x));
-    if (p) return `Names starting with ${p} are reserved by the computer`;
+    const rv = (S.settings && S.settings.vault_reserved) || { names: [], prefixes: [] };
+    if (rv.names.includes(n)) return `${n} is reserved: the computer, Claude Code or openbot needs it to run Bots. Pick another name.`;
+    const p = rv.prefixes.find((x) => n.startsWith(x));
+    if (p) return `Names starting with ${p} are reserved: Claude Code or the computer uses them. Pick another name.`;
     return '';
+  }
+  // "All Bots", "Food Bot and Mail Bot", "No Bots"
+  function secretAccessText(v) {
+    if (!v.bots) return 'All Bots can use it';
+    const names = v.bots.map((id) => S.bots.get(id)).filter(Boolean).map((b) => b.name);
+    if (!names.length) return 'No Bots can use it. Use Edit to pick some.';
+    const list = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+    return 'Only ' + list + ' can use it';
   }
   function secretValueProblem(v) {
     if (!v) return 'Paste the secret';
@@ -5357,19 +5365,39 @@
       form && form.mode === 'replace' && form.name === v.name
         ? secretForm(form, v)
         : row(
-            h('span', { class: 'secret-name' }, icon('key', 15), h('span', { class: 'mono' }, v.name)),
+            h(
+              'span',
+              { class: 'secret-name' },
+              icon('key', 15),
+              h('span', { class: 'mono' }, v.name),
+              v.hint && h('span', { class: 'secret-hint mono' }, v.hint),
+              v.locked && h('span', { class: 'chip warn' }, 'Locked'),
+              v.name_problem && h('span', { class: 'chip warn' }, 'Not used')
+            ),
             h(
               'div',
               { class: 'secret-ctl' },
-              pillBtn('Replace', () => ((ui.vaultForm = { mode: 'replace', name: v.name }), rerenderSettings(true)), { disabled: !!form, 'aria-label': `Replace ${v.name}` }),
+              pillBtn('Edit', () => ((ui.vaultForm = { mode: 'replace', name: v.name }), rerenderSettings(true)), { disabled: !!form, 'aria-label': `Edit ${v.name}` }),
               pillBtn('Remove', () => removeSecret(v.name), { disabled: !!form, 'aria-label': `Remove ${v.name}` })
             ),
-            v.description || null
+            h(
+              'span',
+              null,
+              v.description ? h('span', { class: 'secret-desc' }, v.description) : null,
+              h('span', { class: 'secret-access' }, secretAccessText(v)),
+              v.locked && h('span', { class: 'secret-problem' }, 'This value can’t be unlocked on this computer, so no Bot gets it. Use Edit to enter it again.'),
+              v.name_problem && h('span', { class: 'secret-problem' }, v.name_problem + ' Bots don’t get it until you remove it and add it under another name.')
+            )
           )
     );
     if (form && form.mode === 'add') rows.push(secretForm(form, null));
     out.append(h('div', { class: 'set-section' }, head, rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No secrets yet'))));
-    out.append(note('Secrets stay on the computer where your Bots run. Bots see the names and what they are for, never the values.'));
+    out.append(
+      note(
+        'Secrets stay on the computer where your Bots run. Bots see the names and what they are for, never the values. If a value shows up in a chat, it’s replaced with ••••. ',
+        h('span', { class: 'secret-protection' }, (s.vault_protection || 'Not encrypted') + '.')
+      )
+    );
     return out;
   }
   async function removeSecret(name) {
@@ -5386,7 +5414,42 @@
     const ui = S.settingsUI;
     const nameIn = h('input', { class: 'field mono', value: existing ? existing.name : form.nameV || '', placeholder: 'GITHUB_TOKEN', maxlength: '128', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Environment variable name', disabled: !!existing });
     const descIn = h('input', { class: 'field', value: existing ? existing.description || '' : form.descV || '', placeholder: 'GitHub access for opening pull requests', maxlength: '300', 'aria-label': 'What it is for (shown to the Bot)' });
-    const valIn = h('input', { class: 'field mono', type: 'password', placeholder: existing ? 'Leave empty to keep the current value' : '', autocomplete: 'new-password', 'aria-label': 'Value' });
+    const keepOk = existing && !existing.locked; // an empty value keeps the saved one
+    const valIn = h('input', { class: 'field mono', type: 'password', placeholder: keepOk ? 'Leave empty to keep the current value' : '', autocomplete: 'new-password', 'aria-label': 'Value' });
+    // Which Bots can use it: null = all, else a list of Bot ids.
+    if (!('bots' in form)) form.bots = existing && existing.bots ? existing.bots.slice() : null;
+    const botsErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    const botList = h('div', { class: 'secret-bots', role: 'group', 'aria-label': 'Bots that can use this secret' });
+    const drawBots = () => {
+      botList.hidden = form.bots === null;
+      botList.replaceChildren(
+        ...orderedBots().map((b) => {
+          const on = form.bots !== null && form.bots.includes(b.id);
+          return h(
+            'button',
+            {
+              type: 'button',
+              class: 'secret-bot' + (on ? ' on' : ''),
+              'aria-pressed': on ? 'true' : 'false',
+              onclick: () => {
+                form.bots = on ? form.bots.filter((x) => x !== b.id) : [...form.bots, b.id];
+                botsErr.hidden = true;
+                drawBots();
+              },
+            },
+            avatar(b, 20),
+            h('span', null, b.name),
+            on ? icon('check', 14) : null
+          );
+        })
+      );
+    };
+    const scopeSel = selectEl(form.bots === null ? 'all' : 'some', [['all', 'All Bots'], ['some', 'Only the Bots I pick']], (v) => {
+      form.bots = v === 'all' ? null : form.bots || [];
+      botsErr.hidden = true;
+      drawBots();
+    });
+    drawBots();
     const nameErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
     const valErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
     nameIn.addEventListener('input', () => {
@@ -5400,16 +5463,20 @@
       const name = nameIn.value.trim();
       const value = valIn.value;
       const np = existing ? '' : secretNameProblem(name) || (S.settings.vault || []).some((x) => x.name === name) ? secretNameProblem(name) || `${name} already exists. Use Replace to change it.` : '';
-      const vp = existing && !value ? '' : secretValueProblem(value);
+      const vp = keepOk && !value ? '' : secretValueProblem(value);
+      const bp = form.bots !== null && !form.bots.length ? 'Pick at least one Bot, or choose All Bots' : '';
       nameErr.textContent = np;
       nameErr.hidden = !np;
       valErr.textContent = vp;
       valErr.hidden = !vp;
+      botsErr.textContent = bp;
+      botsErr.hidden = !bp;
       if (np) return nameIn.focus();
       if (vp) return valIn.focus();
+      if (bp) return;
       e.currentTarget.disabled = true;
       try {
-        S.settings = await api('/api/vault', { method: 'POST', body: { name, value, description: descIn.value.trim() } });
+        S.settings = await api('/api/vault', { method: 'POST', body: { name, value, description: descIn.value.trim(), bots: form.bots } });
         ui.vaultForm = null;
       } catch (x) {
         e.currentTarget.disabled = false;
@@ -5440,10 +5507,14 @@
       nameErr,
       h('label', { class: 'f-label' }, 'What it is for (shown to the Bot)'),
       descIn,
-      h('label', { class: 'f-label' }, 'Value'),
+      h('label', { class: 'f-label' }, existing && existing.locked ? 'Value (enter it again)' : 'Value'),
       valIn,
       valErr,
-      h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(existing ? 'Replace' : 'Add secret', save, 'primary'))
+      h('label', { class: 'f-label' }, 'Which Bots can use it'),
+      scopeSel,
+      botList,
+      botsErr,
+      h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(existing ? 'Save' : 'Add secret', save, 'primary'))
     );
   }
 
@@ -5516,7 +5587,7 @@
               claude.logged_in ? `Signed in to Claude Code as ${claude.email || 'your account'}${claude.subscription ? ` · ${claude.subscription}` : ''}` : claude.installed ? 'Claude Code isn’t signed in on that computer. Open a terminal there, run claude, and log in.' : 'Install Claude Code on the computer where bots run, then run claude and log in.',
               () => putSettings({ auth_mode: 'subscription' })
             ),
-            radio(s.auth_mode === 'api_key', 'Anthropic API key', s.api_key_set ? `Key saved: ${s.api_key_hint || '••••'}` : 'Pay per use with a key from console.anthropic.com.', () => {
+            radio(s.auth_mode === 'api_key', 'Anthropic API key', s.api_key_locked ? 'The saved key can’t be unlocked on this computer. Enter it again.' : s.api_key_set ? `Key saved: ${s.api_key_hint || '••••'}` : 'Pay per use with a key from console.anthropic.com.', () => {
               if (s.api_key_set) putSettings({ auth_mode: 'api_key' });
               else {
                 keyIn.focus();

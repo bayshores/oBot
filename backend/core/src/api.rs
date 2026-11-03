@@ -97,6 +97,9 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         crate::computer::claude_info(&claude_path).await;
     });
 
+    // Hide saved secret values in chats saved before they were in the Vault.
+    spawn_redact_history(state.clone());
+
     crate::routines::spawn_scheduler(state.clone());
     crate::screen::Screens::spawn_reaper(state.clone());
 
@@ -1614,31 +1617,77 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
     Ok(Json(settings))
 }
 
-fn valid_env_name(n: &str) -> bool {
-    let mut chars = n.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+/// Hide saved secret values in earlier chats and memories (runs in the background).
+fn spawn_redact_history(st: Shared) {
+    tokio::task::spawn_blocking(move || match st.db.redact_history() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("vault: hid secret values in {n} saved messages/memories"),
+        Err(e) => tracing::warn!("vault: couldn't check saved chats for secret values: {e}"),
+    });
 }
 
-async fn add_secret(State(st): State<Shared>, Json(s): Json<Secret>) -> ApiResult<Json<Value>> {
+/// What the app sends to add or edit a secret.
+#[derive(Deserialize)]
+struct SecretIn {
+    name: String,
+    /// Empty when editing = keep the saved value.
+    #[serde(default)]
+    value: String,
+    #[serde(default)]
+    description: String,
+    /// Bot ids that may use it; null or missing = every Bot.
+    #[serde(default)]
+    bots: Option<Vec<String>>,
+}
+
+async fn add_secret(State(st): State<Shared>, Json(s): Json<SecretIn>) -> ApiResult<Json<Value>> {
     let name = s.name.trim().to_string();
-    if !valid_env_name(&name) {
-        return Err(bad("Use letters, numbers and _ only, like GITHUB_TOKEN"));
+    if let Some(p) = crate::vault::name_problem(&name) {
+        return Err(bad(&p));
     }
+    if s.value.len() > 4096 {
+        return Err(bad("Too large. Maximum size is 4 KiB."));
+    }
+    if s.description.chars().count() > 300 {
+        return Err(bad("Keep “What it is for” under 300 characters"));
+    }
+    let bots = match s.bots {
+        None => None,
+        Some(ids) => {
+            let known: Vec<String> = st.db.list_bots()?.into_iter().map(|b| b.id).collect();
+            let mut ids: Vec<String> = ids.into_iter().filter(|i| known.contains(i)).collect();
+            ids.dedup();
+            if ids.is_empty() {
+                return Err(bad("Pick at least one Bot, or choose All Bots"));
+            }
+            Some(ids)
+        }
+    };
+    let new_value = !s.value.is_empty();
     {
         let mut cfg = st.config.write().await;
-        if s.value.is_empty() {
-            // Editing only the description keeps the saved value.
+        let value = if new_value {
+            s.value
+        } else {
+            // Editing only the description or the Bots keeps the saved value.
             let old = cfg.vault.iter().find(|x| x.name == name).map(|x| x.value.clone());
             let Some(value) = old else { return Err(bad("Enter the secret's value")) };
-            cfg.vault.retain(|x| x.name != name);
-            cfg.vault.push(Secret { name, value, description: s.description.trim().to_string() });
-        } else {
-            cfg.vault.retain(|x| x.name != name);
-            cfg.vault.push(Secret { name, value: s.value, description: s.description.trim().to_string() });
+            if crate::vault::is_locked(&value) {
+                return Err(bad("This secret is locked on this computer. Enter its value again."));
+            }
+            value
+        };
+        let pos = cfg.vault.iter().position(|x| x.name == name);
+        let secret = Secret { name, value, description: s.description.trim().to_string(), bots };
+        match pos {
+            Some(i) => cfg.vault[i] = secret, // keep its place in the list
+            None => cfg.vault.push(secret),
         }
     }
     st.save_config().await?;
+    if new_value {
+        spawn_redact_history(st.clone());
+    }
     let settings = st.config.read().await.settings_json();
     st.emit("settings.updated", json!({ "settings": settings }));
     Ok(Json(settings))

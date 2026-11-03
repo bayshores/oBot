@@ -85,12 +85,20 @@ Message = {
 
 Settings = {
   auth_mode: "subscription" | "api_key",
-  api_key_set: boolean, api_key_hint: string,      // e.g. "sk-ant-…a1b2"
+  api_key_set: boolean, api_key_hint: string,      // e.g. "••••a1b2" (only the last 4 characters)
+  api_key_locked: boolean,                           // saved but can't be decrypted on this computer
   permission_mode: "ask" | "auto" | "accept_edits" | "allow_all",
   allow_rules: string[],                             // e.g. ["Bash(git status)", "WebFetch"]
   default_model: string,                             // "" | "opus" | "sonnet" | "haiku"
   workspace_root: string,
-  vault: [{ name: string, hint: string, description: string }]  // secrets exposed to bots as env vars
+  vault: [{ name: string, hint: string,              // hint: "••••abcd" (last 4 only; "••••" for values of 8 characters or fewer)
+            description: string,
+            bots: string[] | null,                   // Bot ids that get it; null = every Bot
+            locked: boolean,                         // saved but can't be decrypted here: no Bot gets it until re-entered
+            name_problem: string | null }]           // set if the name is now reserved: no Bot gets it
+                                                     // secrets are passed to the allowed Bots as env vars
+  vault_protection: string,                          // how values are saved, e.g. "Encrypted with Windows DPAPI"
+  vault_reserved: { names: string[], prefixes: string[] }  // refused secret names (compared ignoring case)
   auto_review: boolean,                              // Settings › Permissions › Auto-Review (default true)
   review_ask: string[],   // "Always Ask" plain-language rules (max 20, 1000 chars each; wins over allow)
   review_allow: string[], // "Allow without Asking" rules
@@ -149,7 +157,7 @@ Usage = {
 | POST | /api/approvals/:approval_id | `{decision:"allow"|"always"|"deny"}` | `{ok:true}` |
 | GET | /api/settings | – | `Settings` |
 | PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, workspace_root}` (`api_key:""` clears it) | `Settings` |
-| POST | /api/vault | `{name,value}` | `Settings` |
+| POST | /api/vault | `{name, value, description, bots}`, see below | `Settings` |
 | DELETE | /api/vault/:name | – | `Settings` |
 | GET | /api/computer | `?refresh=1` re-checks Claude Code now | `Computer` |
 | GET | /api/hello | – (no token) | `{app:"openbot", version, name}`: lets setup recognize an openbot computer |
@@ -166,7 +174,7 @@ Usage = {
 | DELETE | /api/memories/:id | – | `{ok}` |
 | GET | /pages/:id | – | HTML made by a bot (sandboxed by CSP). The server appends a script that posts `{type:'openbot:height', height}` to the parent. |
 | PUT | /api/settings | also `{auto_review, review_ask, review_allow}` | `Settings` |
-| POST | /api/vault | `{name, value, description}` (empty value = keep old value, change description) | `Settings` |
+| POST | /api/vault | `{name, value, description, bots}`: adds or edits a secret. Empty `value` = keep the saved one. `bots`: null = every Bot, else a non-empty list of Bot ids. 400 for reserved names (see `vault_reserved`), values over 4 KiB, or an empty `bots` list. Saved values are replaced with `••••` in chats and memories from then on, including older ones. | `Settings` |
 | POST | /api/bots/:id/make-main | – | `{ok}` ("Replace with different Bot") |
 | DELETE | /api/bots/:id | – | 400 for the Main Bot |
 | PATCH | /api/bots/:id | also `{label, pinned, notifications}` | `Bot` |

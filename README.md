@@ -147,6 +147,24 @@ Data lives in `%APPDATA%\openbot` (bots, chats, settings). Bot folders are in `%
 
 "Always allow" remembers that exact action. You can see and remove the list under Permissions.
 
+## Vault (Settings › Vault)
+
+Secrets (API keys, tokens) your Bots can use in commands as environment variables, like `$GITHUB_TOKEN`.
+
+* **Only the Bots you pick.** Each secret goes to **All Bots** or only the Bots you choose. Other Bots
+  don't get it and aren't told it exists.
+* **Saved encrypted.** Values (and the Anthropic API key) are encrypted in `config.json` with a key the
+  system keeps: Windows DPAPI on Windows, the Keychain on a Mac, a file only your account can read on
+  Linux (`vault.key` in the data folder). A copy of the files taken to another computer can't be read.
+  Bots run as your user account, so a Bot that tried hard could still decrypt them; picking which Bots
+  get a secret limits what each Bot is handed, it isn't a wall.
+* **Hidden in chats.** If a saved value shows up in a chat, a command's output or a memory, openbot saves
+  and shows `••••` instead. The app only ever shows the last 4 characters of a value.
+* **Names that would break Bots are refused** (like `PATH`, `HOME`, `NODE_OPTIONS`, or anything starting
+  with `ANTHROPIC_` or `CLAUDE`).
+* If the key can't be read (for example `vault.key` was deleted), the values stay saved but **Locked**:
+  no Bot gets them, and Settings › Vault asks you to enter them again.
+
 ## Building Windows/Mac installers automatically
 
 Push this folder to a GitHub repository. `.github/workflows/build.yml` builds `openbot-server.exe`,

@@ -10,10 +10,15 @@ use crate::util::{hint, random_token};
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Secret {
     pub name: String,
+    /// Saved encrypted in config.json (see vault.rs); plain text in memory.
+    #[serde(default, with = "crate::vault::sealed")]
     pub value: String,
     /// "What it is for" (shown to the bot so it knows when to use it).
     #[serde(default)]
     pub description: String,
+    /// Which Bots get this secret (their ids). None = every Bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bots: Option<Vec<String>>,
 }
 
 /// Which computer the UI should talk to. Only meaningful on the "home" server
@@ -40,6 +45,8 @@ pub struct Config {
     pub token: String,
     /// "subscription" (use the Claude Code login) or "api_key".
     pub auth_mode: String,
+    /// Saved encrypted in config.json (see vault.rs).
+    #[serde(with = "crate::vault::sealed")]
     pub api_key: String,
     /// "ask" | "auto" | "accept_edits" | "allow_all"
     pub permission_mode: String,
@@ -103,6 +110,8 @@ impl Default for Config {
 
 impl Config {
     pub fn load_or_create(path: &Path) -> anyhow::Result<Config> {
+        // The Vault key must be ready before secret values are read (they are saved encrypted).
+        crate::vault::init(path.parent().unwrap_or(Path::new(".")));
         let mut cfg = if path.exists() {
             let text = std::fs::read_to_string(path)?;
             serde_json::from_str::<Config>(&text).unwrap_or_default()
@@ -118,6 +127,7 @@ impl Config {
         if !cfg.prefs.is_object() {
             cfg.prefs = json!({});
         }
+        // Saving right away also encrypts values that older versions saved as plain text.
         cfg.save(path)?;
         Ok(cfg)
     }
@@ -134,6 +144,7 @@ impl Config {
             let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
         }
         std::fs::rename(&tmp, path)?;
+        crate::vault::remember_values(self);
         Ok(())
     }
 
@@ -142,12 +153,20 @@ impl Config {
         json!({
             "auth_mode": self.auth_mode,
             "api_key_set": !self.api_key.is_empty(),
-            "api_key_hint": hint(&self.api_key),
+            "api_key_locked": crate::vault::is_locked(&self.api_key),
+            "api_key_hint": if crate::vault::is_locked(&self.api_key) { String::new() } else { hint(&self.api_key) },
             "permission_mode": self.permission_mode,
             "allow_rules": self.allow_rules,
             "default_model": self.default_model,
             "workspace_root": self.workspace_root,
-            "vault": self.vault.iter().map(|s| json!({"name": s.name, "hint": hint(&s.value), "description": s.description})).collect::<Vec<_>>(),
+            "vault": self.vault.iter().map(|s| {
+                let locked = crate::vault::is_locked(&s.value);
+                json!({"name": s.name, "hint": if locked { String::new() } else { hint(&s.value) },
+                       "description": s.description, "bots": s.bots, "locked": locked,
+                       "name_problem": crate::vault::name_problem(&s.name)})
+            }).collect::<Vec<_>>(),
+            "vault_protection": crate::vault::protection(),
+            "vault_reserved": {"names": &crate::vault::RESERVED_NAMES[..], "prefixes": &crate::vault::RESERVED_PREFIXES[..]},
             "auto_review": self.auto_review,
             "review_allow": self.review_allow,
             "review_ask": self.review_ask,

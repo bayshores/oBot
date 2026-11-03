@@ -23,6 +23,7 @@ pub mod security;
 pub mod state;
 pub mod tools;
 pub mod util;
+pub mod vault;
 
 pub use api::{start, ServeOptions, StartedServer};
 

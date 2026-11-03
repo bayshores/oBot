@@ -149,6 +149,7 @@ impl Db {
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             PRAGMA busy_timeout = 5000;
+            PRAGMA secure_delete = ON;  -- overwritten text (e.g. a hidden secret) doesn't linger in free space
             CREATE TABLE IF NOT EXISTS bots (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -245,7 +246,7 @@ impl Db {
                updated_at=?9,last_preview=?10,unread=?11,workdir=?12,session_id=?13,label=?14,pinned=?15,notifications=?16"#,
             params![
                 b.id, b.name, b.color, b.shape, b.instructions, b.model, b.hidden as i64,
-                b.created_at, b.updated_at, b.last_preview, b.unread, b.workdir, b.session_id,
+                b.created_at, b.updated_at, crate::vault::redact(&b.last_preview), b.unread, b.workdir, b.session_id,
                 b.label, b.pinned as i64, b.notifications as i64
             ],
         )?;
@@ -260,9 +261,61 @@ impl Db {
         Ok(())
     }
 
+    /// Hide saved secret values in chats, memories and sidebar previews saved earlier (for example before the
+    /// secret was added to the Vault). Returns how many rows changed.
+    pub fn redact_history(&self) -> anyhow::Result<usize> {
+        let c = self.c();
+        let mut changed = 0;
+        // Read row by row and keep only the changed ones, so a long history isn't all in memory.
+        let msgs = {
+            let mut st = c.prepare("SELECT * FROM messages")?;
+            let mut out = Vec::new();
+            for m in st.query_map([], row_to_msg)? {
+                let mut m = m?;
+                if crate::vault::redact_message(&mut m) {
+                    out.push(m);
+                }
+            }
+            out
+        };
+        for m in msgs {
+            c.execute(
+                "UPDATE messages SET text=?2, html=?3, meta=?4 WHERE id=?1",
+                params![m.id, m.text, m.html, m.meta.to_string()],
+            )?;
+            changed += 1;
+        }
+        let mems = {
+            let mut st = c.prepare("SELECT id, text FROM memories")?;
+            let v = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            v
+        };
+        for (id, text) in mems {
+            if let Some(t) = crate::vault::redact_str(&text) {
+                c.execute("UPDATE memories SET text=?2 WHERE id=?1", params![id, t])?;
+                changed += 1;
+            }
+        }
+        let previews = {
+            let mut st = c.prepare("SELECT id, last_preview FROM bots")?;
+            let v = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            v
+        };
+        for (id, text) in previews {
+            if let Some(t) = crate::vault::redact_str(&text) {
+                c.execute("UPDATE bots SET last_preview=?2 WHERE id=?1", params![id, t])?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
     // ---------- messages ----------
 
+    /// Save a chat message. Saved secret values are replaced with •••• first (see vault.rs).
     pub fn upsert_message(&self, m: &Message) -> anyhow::Result<()> {
+        let mut m = m.clone();
+        crate::vault::redact_message(&mut m);
         let c = self.c();
         c.execute(
             r#"INSERT INTO messages (id,bot_id,role,text,html,status,meta,created_at,seq)
@@ -384,7 +437,7 @@ impl Db {
     pub fn add_memory(&self, m: &Memory) -> anyhow::Result<()> {
         self.c().execute(
             "INSERT INTO memories (id, bot_id, text, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![m.id, m.bot_id, m.text, m.created_at],
+            params![m.id, m.bot_id, crate::vault::redact(&m.text), m.created_at],
         )?;
         Ok(())
     }
