@@ -87,6 +87,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         limiter: crate::security::RateLimiter::default(),
         device_seen: std::sync::Mutex::new(HashMap::new()),
         pair_lock: Mutex::new(()),
+        screens: Default::default(),
     });
 
     // Look up Claude Code in the background so the first screen loads fast.
@@ -96,6 +97,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     });
 
     crate::routines::spawn_scheduler(state.clone());
+    crate::screen::Screens::spawn_reaper(state.clone());
 
     let app = router(state.clone());
     tokio::spawn(async move {
@@ -127,6 +129,12 @@ fn router(state: Shared) -> Router {
         .route("/api/approvals/{id}", post(decide_approval))
         .route("/api/internal/approve", post(internal_approve))
         .route("/api/internal/tool", post(internal_tool))
+        .route("/api/screens/status", get(screens_status))
+        .route("/api/screens/setup", post(screens_setup))
+        .route("/api/bots/{id}/screen", get(bot_screen))
+        .route("/api/bots/{id}/screen/start", post(bot_screen_start))
+        .route("/api/bots/{id}/screen/stop", post(bot_screen_stop))
+        .route("/api/bots/{id}/screen/ws", get(bot_screen_ws))
         .route("/api/messages/{id}/answer", post(answer_widget))
         .route("/api/bots/{id}/routines", get(list_routines))
         .route("/api/routines/{id}", axum::routing::patch(patch_routine).delete(delete_routine))
@@ -160,7 +168,8 @@ fn router(state: Shared) -> Router {
 
     Router::new()
         .route("/", get(ui_index))
-        .route("/ui/{name}", get(ui_static))
+        .route("/ui/{*path}", get(ui_static))
+        .route("/vendor/{*path}", get(|UrlPath(p): UrlPath<String>| async move { ui_response(&format!("vendor/{p}")) }))
         .route("/app.css", get(|| async { ui_response("app.css") }))
         .route("/app.js", get(|| async { ui_response("app.js") }))
         .route("/avatar.js", get(|| async { ui_response("avatar.js") }))
@@ -337,7 +346,8 @@ mod ui_assets {
 
 /// Serve a UI file. OPENBOT_UI_DIR=/path/to/ui reads from disk instead (handy while editing the UI).
 fn ui_response(name: &str) -> Response {
-    if name.contains("..") || name.contains('/') || name.contains('\\') {
+    // Subfolders are allowed (vendor/novnc/core/rfb.js); climbing out isn't.
+    if name.is_empty() || name.contains("..") || name.contains('\\') || name.starts_with('/') || name.contains("//") {
         return StatusCode::NOT_FOUND.into_response();
     }
     let bytes: Option<Vec<u8>> = std::env::var("OPENBOT_UI_DIR")
@@ -761,6 +771,7 @@ async fn delete_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> A
         return Err(bad("Your Main Bot can't be deleted. Make another Bot your Main Bot first."));
     }
     runner::stop(&st, &id).await;
+    st.screens.stop(&st, &id).await;
     st.queues.lock().await.remove(&id);
     st.db.delete_bot(&id)?;
     st.db.delete_routines_of_bot(&id)?;
@@ -1105,8 +1116,81 @@ struct ToolCall {
 }
 
 async fn internal_tool(State(st): State<Shared>, Json(c): Json<ToolCall>) -> Json<Value> {
-    let (text, is_error) = crate::tools::call(&st, &c.bot_id, &c.name, &c.arguments).await;
-    Json(json!({ "text": text, "is_error": is_error }))
+    let r = crate::tools::call(&st, &c.bot_id, &c.name, &c.arguments).await;
+    let image = r.image.map(|(data, mime)| json!({ "data": data, "mime": mime }));
+    Json(json!({ "text": r.text, "is_error": r.is_error, "image": image }))
+}
+
+// ---------------------------------------------------------------- bot screens (screen.rs)
+
+static SCREEN_SETUP_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Are bot screens possible here, and is everything installed?
+async fn screens_status(State(st): State<Shared>) -> Json<Value> {
+    let cfg = st.config.read().await.clone();
+    let mut v = crate::screen::status(&cfg).await;
+    v["setup_running"] = json!(SCREEN_SETUP_RUNNING.load(std::sync::atomic::Ordering::SeqCst));
+    v["running"] = json!(st.screens.running_ids().await);
+    Json(v)
+}
+
+/// Install what screens need (takes a few minutes). Progress arrives as "screens.setup" events.
+async fn screens_setup(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    crate::screen::platform_ok().map_err(|e| bad(&e))?;
+    if SCREEN_SETUP_RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(Json(json!({ "started": false, "running": true })));
+    }
+    st.emit("screens.setup", json!({ "state": "running" }));
+    let st2 = st.clone();
+    tokio::spawn(async move {
+        let cfg = st2.config.read().await.clone();
+        let result = crate::screen::setup(&cfg).await;
+        SCREEN_SETUP_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        match result {
+            Ok(log) => st2.emit("screens.setup", json!({ "state": "done", "log": log })),
+            Err(e) => st2.emit("screens.setup", json!({ "state": "error", "error": e })),
+        }
+    });
+    Ok(Json(json!({ "started": true })))
+}
+
+async fn bot_screen(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    st.db.get_bot(&id)?.ok_or_else(|| not_found("No such bot"))?;
+    let supported = crate::screen::platform_ok();
+    Ok(Json(json!({
+        "supported": supported.is_ok(),
+        "reason": supported.err(),
+        "running": st.screens.is_running(&id).await,
+        "width": crate::screen::WIDTH,
+        "height": crate::screen::HEIGHT,
+    })))
+}
+
+/// Start (or reuse) the bot's screen. The password is what the viewer needs to connect.
+async fn bot_screen_start(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    st.db.get_bot(&id)?.ok_or_else(|| not_found("No such bot"))?;
+    let info = st.screens.ensure(&st, &id).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({
+        "running": true,
+        "password": info.password,
+        "width": crate::screen::WIDTH,
+        "height": crate::screen::HEIGHT,
+    })))
+}
+
+async fn bot_screen_stop(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    st.screens.stop(&st, &id).await;
+    Ok(Json(json!({ "running": false })))
+}
+
+/// Live view: the app's noVNC viewer connects here; we forward to the screen's VNC server.
+async fn bot_screen_ws(State(st): State<Shared>, UrlPath(id): UrlPath<String>, ws: WebSocketUpgrade) -> ApiResult<Response> {
+    st.db.get_bot(&id)?.ok_or_else(|| not_found("No such bot"))?;
+    let info = st.screens.ensure(&st, &id).await.map_err(|e| bad(&e))?;
+    Ok(ws
+        .protocols(["binary"])
+        .max_message_size(64 * 1024 * 1024)
+        .on_upgrade(move |socket| crate::screen::proxy(st, id, socket, info.port)))
 }
 
 #[derive(Deserialize)]

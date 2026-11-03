@@ -51,6 +51,8 @@ pub struct AppState {
     pub device_seen: std::sync::Mutex<HashMap<String, i64>>,
     /// Only one pairing attempt at a time (the code file is shared).
     pub pair_lock: Mutex<()>,
+    /// Each bot's virtual screen (see screen.rs).
+    pub screens: crate::screen::Screens,
 }
 
 pub type Shared = Arc<AppState>;

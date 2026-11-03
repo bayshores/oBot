@@ -134,7 +134,8 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "Bash" | "PowerShell" | "BashOutput" | "KillShell" => ("running_commands", "Running commands".into()),
         "Task" | "Agent" => ("working", "Working with a helper".into()),
         "TodoWrite" => ("thinking", "Planning".into()),
-        "mcp__openbot__ask_user" => ("waiting_for_you", "Waiting for you".into()),
+        "mcp__openbot__ask_user" | "mcp__openbot__request_control" => ("waiting_for_you", "Waiting for you".into()),
+        n if n.starts_with("mcp__openbot__computer_") => ("on_its_computer", "On its computer".into()),
         "mcp__openbot__show_page" => ("working", "Making a page".into()),
         "mcp__openbot__send_file" => ("working", "Sending a file".into()),
         "mcp__openbot__remember" | "mcp__openbot__recall" | "mcp__openbot__forget" => ("thinking", "Remembering".into()),
@@ -223,6 +224,17 @@ fn persona(state: &Shared, bot: &Bot) -> String {
          capable assistant would: remember useful facts about the user without being asked, send files instead \
          of pasting long content, and when you promise to follow up later, schedule it with check_back_later.\n",
     );
+    if crate::screen::platform_ok().is_ok() {
+        s.push_str(
+            "\nYou also have your own computer screen: a 1280 x 800 Linux desktop with a Chromium browser that \
+             keeps your logins. The user can watch it live and take control. Use it for websites that need a real \
+             browser (clicking through pages, filling forms, logged-in sites): computer_open (open a URL), \
+             computer_screenshot, computer_click, computer_type, computer_key, computer_scroll, computer_move, \
+             computer_drag and computer_wait. Every action returns a fresh screenshot; look at it before the next \
+             step. Never type passwords, 2FA codes or payment details yourself: call request_control, say what you \
+             need, and end your turn. Do the same for CAPTCHAs or when you're stuck.\n",
+        );
+    }
     s.push_str(&format!(
         "Current local time for the user: {} ({}). Routine and check-in times use this timezone.\n",
         crate::util::now_local().format("%A %Y-%m-%d %H:%M"),

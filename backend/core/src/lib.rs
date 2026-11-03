@@ -17,6 +17,7 @@ pub mod mcp;
 pub mod review;
 pub mod routines;
 pub mod runner;
+pub mod screen;
 pub mod security;
 pub mod state;
 pub mod tools;

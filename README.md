@@ -105,6 +105,23 @@ pairing code, then click **Connect**. Your bots now live on the Windows PC.
   connect the app to `http://127.0.0.1:7777` with **Use a token instead** and the token from
   `openbot-server token` on the PC.
 
+### Bot screens (watch and take control)
+
+Each Bot can get its own screen: a Linux desktop with a Chrome window, running inside WSL on the PC.
+The Bot clicks, types and browses on it, and you can watch live or take over.
+
+1. On the PC, WSL with Ubuntu must be installed (`wsl --install -d Ubuntu`).
+2. In the app: Settings › Computer › **Bot screens** › **Set up**. It installs Xvfb, x11vnc, openbox,
+   xdotool and a browser inside Ubuntu (a few minutes).
+3. In a chat, the **screen button** (top right) opens the Bot's screen. It is view-only until you
+   choose **Take control**; choose **Hand back** when you're done. While a Bot works on its screen,
+   a **Watch** button shows next to "On its computer".
+4. When a Bot needs a login, a 2FA code or a payment, it asks you with a card that has **Open screen**.
+   Do the step yourself, then choose **I'm done**. Bots are told never to type passwords themselves.
+
+The screen's VNC server only listens on 127.0.0.1 inside the PC; the app reaches it through the
+openbot server with your device's key. Logins in a Bot's browser are kept in its own profile.
+
 ### Useful commands on the PC
 
 ```powershell

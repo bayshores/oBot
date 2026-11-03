@@ -39,7 +39,8 @@ fn ask_server(url: &str, token: &str, bot_id: &str, args: &Value) -> Value {
     }
 }
 
-fn call_tool(url: &str, token: &str, bot_id: &str, name: &str, args: &Value) -> (String, bool) {
+/// Returns (text, is_error, optional (base64 image, mime type)).
+fn call_tool(url: &str, token: &str, bot_id: &str, name: &str, args: &Value) -> (String, bool, Option<(String, String)>) {
     let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build();
     match agent
         .post(&format!("{url}/api/internal/tool"))
@@ -50,10 +51,11 @@ fn call_tool(url: &str, token: &str, bot_id: &str, name: &str, args: &Value) -> 
             Ok(v) => (
                 v.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
                 v.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+                v.get("image").and_then(|i| Some((i.get("data")?.as_str()?.to_string(), i.get("mime")?.as_str()?.to_string()))),
             ),
-            Err(e) => (format!("openbot sent an unreadable answer: {e}"), true),
+            Err(e) => (format!("openbot sent an unreadable answer: {e}"), true, None),
         },
-        Err(e) => (format!("openbot couldn't run the tool: {e}"), true),
+        Err(e) => (format!("openbot couldn't run the tool: {e}"), true, None),
     }
 }
 
@@ -117,8 +119,12 @@ pub fn run_approval_mcp() -> anyhow::Result<()> {
                         let decision = ask_server(&url, &token, &bot_id, &args);
                         json!({"content": [{"type": "text", "text": decision.to_string()}]})
                     } else {
-                        let (text, is_error) = call_tool(&url, &token, &bot_id, &name, &args);
-                        json!({"content": [{"type": "text", "text": text}], "isError": is_error})
+                        let (text, is_error, image) = call_tool(&url, &token, &bot_id, &name, &args);
+                        let mut content = vec![json!({"type": "text", "text": text})];
+                        if let Some((data, mime)) = image {
+                            content.push(json!({"type": "image", "data": data, "mimeType": mime}));
+                        }
+                        json!({"content": content, "isError": is_error})
                     };
                     send(&out, json!({"jsonrpc": "2.0", "id": id, "result": result}));
                 });

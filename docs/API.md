@@ -180,6 +180,13 @@ Usage = {
 | POST | /api/claude/update | – | `{ok, output}` runs `claude update` |
 | POST | /api/claude/logout | – | `{ok, output}` runs `claude auth logout` (Settings › Sign Out) |
 | POST | /api/open-folder | `{path}` | `{ok}` opens Finder/Explorer on the computer (local only) |
+| GET | /api/screens/status | – | `{supported, ready, missing:[program], browser, where, setup_running, running:[bot_id]}` (Bot screens; see below) |
+| POST | /api/screens/setup | – | `{started}`; installs the screen programs and a browser inside WSL (Windows hosts). Progress: `screens.setup` events. On Linux hosts it fails with the command to run yourself |
+| GET | /api/bots/:id/screen | – | `{supported, reason, running, width, height}` |
+| POST | /api/bots/:id/screen/start | – | `{running, password, width, height}` starts the bot's screen if needed. `password` is the one-off VNC password for the viewer |
+| POST | /api/bots/:id/screen/stop | – | `{running:false}` closes the bot's browser and screen (its browser profile, so logins, stays) |
+| GET (ws) | /api/bots/:id/screen/ws?token= | – | WebSocket (subprotocol `binary`) piped to the screen's VNC server; the UI connects noVNC here |
+| GET | /vendor/*path | – | third-party UI files (`frontend/ui/vendor/`, e.g. noVNC) |
 | GET (ws) | /api/events?token= | – | stream of events |
 
 Errors: non-2xx with `{error: string}`.
@@ -192,6 +199,8 @@ Errors: non-2xx with `{error: string}`.
 * `usage.updated {usage}` · `settings.updated {settings}`
 * `devices.updated` (a device was paired or removed; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
+* `screen.updated {bot_id, running}` (a bot's screen started or stopped)
+* `screens.setup {state:"running"|"done"|"error", log?, error?}`
 * `resync` (reload everything)
 
 ```ts
@@ -200,6 +209,24 @@ Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday 
 // schedule: {kind:"once",at:ms} | {kind:"interval",minutes} | {kind:"daily"|"weekdays",time:"HH:MM"}
 //         | {kind:"weekly",day:"monday",time} | {kind:"monthly",day:1..31,time}
 ```
+
+## Bot screens
+
+Each bot can have its own Linux screen: a virtual display (Xvfb, 1280×800) with the openbox
+window manager, a Chrome/Chromium window with the bot's own profile
+(`~/.openbot/screens/<bot>/profile` inside Linux), and an x11vnc server on 127.0.0.1 only.
+On Windows hosts it runs inside WSL (`wsl_distro`); on Linux hosts directly. Screens start on
+first use and stop after 30 minutes with no bot run and no viewer.
+
+The bot gets these MCP tools (each returns a screenshot): `computer_screenshot`,
+`computer_click {x,y,button?,count?}`, `computer_move {x,y}`, `computer_drag {from_x,from_y,to_x,to_y}`,
+`computer_scroll {x,y,direction,amount?}`, `computer_type {text}`, `computer_key {keys}` (xdotool
+names like `ctrl+l`), `computer_open {url}` and `computer_wait {seconds?}`. While it uses them,
+`bot.activity.kind` is `on_its_computer`. `request_control {reason}` posts a widget message with
+`meta.screen:true` and the option "I'm done": the user opens the screen, chooses Take control,
+does the step (a login, a code, a payment), and answers.
+
+The app's viewer (noVNC) is view-only until the user chooses Take control.
 
 ## Desktop bridge (only inside the openbot desktop app)
 

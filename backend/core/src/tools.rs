@@ -23,7 +23,7 @@ pub fn definitions() -> Value {
         },
         "required": ["kind"]
     });
-    json!([
+    let mut list = json!([
         {
             "name": "ask_user",
             "description": "Ask the user a quick question with tap-to-answer buttons in the chat (like 'Which one?' with 2-5 options). Returns right away; the user's choice arrives later as their next message, so end your turn after calling this.",
@@ -109,7 +109,14 @@ pub fn definitions() -> Value {
             "description": "Show a short status under your name while you work on something long (e.g. 'Comparing 12 flights').",
             "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
         }
-    ])
+    ]);
+    // Bots get their own screen where this computer can run one (Windows + WSL, or Linux).
+    if crate::screen::platform_ok().is_ok() {
+        if let Some(a) = list.as_array_mut() {
+            a.extend(crate::screen::tool_definitions());
+        }
+    }
+    list
 }
 
 fn s<'a>(args: &'a Value, k: &str) -> &'a str {
@@ -169,11 +176,27 @@ fn url_path(rel: &str) -> String {
     out
 }
 
-/// Run one openbot tool. Returns (text for the model, is_error).
-pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> (String, bool) {
+/// What a tool hands back to the model: text, and for screen tools a screenshot.
+pub struct ToolResult {
+    pub text: String,
+    pub is_error: bool,
+    pub image: Option<(String, String)>, // (base64, mime type)
+}
+
+/// Run one openbot tool.
+pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> ToolResult {
+    if name.starts_with("computer_") {
+        if state.db.get_bot(bot_id).ok().flatten().is_none() {
+            return ToolResult { text: "this bot no longer exists".into(), is_error: true, image: None };
+        }
+        return match crate::screen::computer_tool(state, bot_id, name, args).await {
+            Ok(o) => ToolResult { text: o.text, is_error: false, image: o.image },
+            Err(e) => ToolResult { text: e, is_error: true, image: None },
+        };
+    }
     match run(state, bot_id, name, args).await {
-        Ok(t) => (t, false),
-        Err(e) => (e, true),
+        Ok(t) => ToolResult { text: t, is_error: false, image: None },
+        Err(e) => ToolResult { text: e, is_error: true, image: None },
     }
 }
 
@@ -410,6 +433,22 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             state.db.delete_routine(id).map_err(|e| e.to_string())?;
             state.emit("routines.updated", json!({"bot_id": bot_id}));
             Ok("Routine deleted.".into())
+        }
+
+        "request_control" => {
+            crate::screen::platform_ok()?;
+            let reason = truncate_chars(s(args, "reason"), 200);
+            let reason = if reason.is_empty() { "I need you to do something on my screen.".to_string() } else { reason };
+            // Make sure the screen is up so "Open screen" works right away.
+            state.screens.ensure(state, bot_id).await?;
+            post(
+                state,
+                bot_id,
+                "widget",
+                &reason,
+                json!({"question": reason, "options": ["I'm done"], "allow_custom": true, "answer": null, "screen": true}),
+            );
+            Ok("A card asking the user to take over your screen is in the chat. End your turn now; when they reply (usually \"I'm done\"), take a screenshot and continue.".into())
         }
 
         "set_status" => {

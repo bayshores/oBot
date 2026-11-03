@@ -122,6 +122,8 @@
     plus: '<path d="M12 5v14M5 12h14"/>',
     gridPlus: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><path d="M16.75 13.75v6M13.75 16.75h6"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 000-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 00-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 007 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 000 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 002.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 002.6-1.5l2.4 1 2-3.4z"/>',
+    power: '<path d="M12 3.5v8"/><path d="M7.2 6.6a7.5 7.5 0 109.6 0"/>',
+    pointer: '<path d="M5.5 3.5l13 6.2-5.6 1.8-1.8 5.6z"/><path d="M13 13l5.5 5.5"/>',
     monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16v4"/>',
     shield: '<path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z"/>',
     vault: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><circle cx="12" cy="12" r="3.3"/><path d="M12 8.7V6.8M12 17.2v-1.9M8.7 12H6.8M17.2 12h-1.9"/>',
@@ -407,6 +409,10 @@
     homeToken: null,
     apiBase: location.origin,
     apiToken: null,
+    screensOn: new Set(), // bot ids whose screen is running
+    screenStatus: null, // /api/screens/status
+    screenSetup: null, // last screens.setup event
+    screenUI: null, // the open screen viewer
     conn: { mode: 'local', url: '', token: '' },
     prefs: {},
     bots: new Map(),
@@ -892,6 +898,7 @@
     renderSysBanner();
     if (S.settingsUI) rerenderSettings(true);
     maybeOnboard();
+    loadScreenStatus();
   }
   function applyBootstrap(b) {
     S.bots.clear();
@@ -1066,6 +1073,19 @@
       case 'message.created':
       case 'message.updated':
         if (e.message) upsertMessage(e.message, e.type === 'message.created');
+        break;
+      case 'screen.updated':
+        if (e.running) S.screensOn.add(e.bot_id);
+        else S.screensOn.delete(e.bot_id);
+        renderScreenBtn();
+        if (S.screenUI && S.screenUI.botId === e.bot_id && !e.running) S.screenUI.stopped();
+        break;
+      case 'screens.setup':
+        S.screenSetup = e;
+        if (e.state !== 'running') loadScreenStatus();
+        if (S.settingsUI && S.settingsUI.tab === 'computer') rerenderSettings();
+        if (e.state === 'done') toast('Bot screens are set up');
+        if (e.state === 'error') toast('Setting up Bot screens didn’t finish', 'error');
         break;
       case 'messages.cleared':
         if (S.msgs.has(e.bot_id)) S.msgs.set(e.bot_id, []);
@@ -1744,6 +1764,7 @@
     pill.setAttribute('aria-expanded', S.panelOpen ? 'true' : 'false');
     pill.dataset.tip = 'Bot settings';
     pill.dataset.kbd = isMac ? '⌘⇧,' : 'Ctrl+Shift+,';
+    renderScreenBtn();
   }
 
   // ───────────────────────────── chat: transcript ─────────────────────────────
@@ -1855,7 +1876,7 @@
     }
     const list = S.msgs.get(b.id);
     if (!list) {
-      reconcile(colEl, [h('div', { class: 'tx-spacer' }), h('div', { class: 'load-older' }, spinner('sm'))]);
+      reconcile(colEl, [h('div', { class: 'tx-spacer' }), h('div', { class: 'load-older' }, spinner('lg'))]);
       return;
     }
     const shown = list.filter(isShown);
@@ -1871,7 +1892,7 @@
       return;
     }
     if (S.hasMore.get(b.id)) {
-      want.push(h('div', { class: 'load-older' }, S.loading.has(b.id) ? spinner('sm') : ''));
+      want.push(h('div', { class: 'load-older' }, S.loading.has(b.id) ? spinner('lg') : ''));
     }
     // NEW divider: before the first unread message (counted from the end)
     if (S.newDiv && S.newDiv.botId === b.id && !S.newDiv.msgId && S.newDiv.unread > 0) {
@@ -1979,9 +2000,13 @@
         { class: 'row bot', 'data-speaker': 'bot', 'data-bubble-start': '1', role: 'status' },
         h('div', { class: 'activity' }, av, h('span', { class: 'act-text' }, phrase, elapsed))
       );
-      actEl._parts = { av, phrase, elapsed };
+      const watch = h('button', { class: 'act-watch', hidden: true, 'data-tip': 'Watch its screen', onclick: () => openScreen(actEl._bot) }, icon('monitor', 13, '', 2), 'Watch');
+      $('.activity', actEl).append(watch);
+      actEl._parts = { av, phrase, elapsed, watch };
     }
-    const { av, phrase } = actEl._parts;
+    const { av, phrase, watch } = actEl._parts;
+    actEl._bot = b.id;
+    watch.hidden = !(b.activity && b.activity.kind === 'on_its_computer');
     if (av._bot !== b.id) {
       av._bot = b.id;
       av._look = null;
@@ -2252,6 +2277,13 @@
     const answered = meta.answer != null;
     const card = h('div', { class: 'card widget' + (answered ? ' answered' : ''), role: 'group', 'aria-label': meta.question || 'Question' });
     card.append(h('div', { class: 'card-title' }, meta.question || m.text || 'Question'));
+    if (meta.screen) {
+      card.classList.add('bs-ask');
+      card.append(
+        h('div', { class: 'card-sub' }, answered ? 'You took over the Bot’s screen.' : 'The Bot needs you to do this on its screen. Open it, take control, then choose I’m done.'),
+        h('button', { class: 'btn' + (answered ? '' : ' primary') + ' bs-open', onclick: () => openScreen(m.bot_id, { control: !answered }) }, icon('monitor', 15), answered ? 'View screen' : 'Open screen')
+      );
+    }
     const list = h('div', { class: 'opts' });
     const buttons = [];
     let busy = false;
@@ -2321,6 +2353,215 @@
     card._answer = answer;
     card._opts = opts;
     return card;
+  }
+
+  // ── bot screens: each Bot has its own Linux screen (Xvfb + a browser) that you can watch and take over
+  async function loadScreenStatus() {
+    try {
+      S.screenStatus = await api('/api/screens/status');
+      if (S.screenStatus.setup_running && !S.screenSetup) S.screenSetup = { state: 'running' };
+      S.screensOn = new Set(S.screenStatus.running || []);
+    } catch {
+      S.screenStatus = null;
+    }
+    renderScreenBtn();
+    if (S.settingsUI && S.settingsUI.tab === 'computer') rerenderSettings();
+  }
+  function renderScreenBtn() {
+    const btn = $('#screenBtn');
+    if (!btn) return;
+    const b = curBot();
+    btn.hidden = !b || !(S.screenStatus && S.screenStatus.supported);
+    const on = !!b && S.screensOn.has(b.id);
+    btn.classList.toggle('live', on);
+    btn.dataset.tip = on ? 'Bot’s screen (on)' : 'Bot’s screen';
+    btn.setAttribute('aria-label', on ? 'Bot’s screen, on' : 'Bot’s screen');
+  }
+  function screensRow() {
+    const st = S.screenStatus;
+    if (!st || !st.supported) return null;
+    const busy = S.screenSetup && S.screenSetup.state === 'running';
+    const failed = S.screenSetup && S.screenSetup.state === 'error' ? S.screenSetup.error : '';
+    let sub;
+    let ctl;
+    if (busy) {
+      sub = 'Installing the screen programs and a browser in Linux. This takes a few minutes.';
+      ctl = h('span', { class: 'set-status' }, spinner('xs'), 'Setting up…');
+    } else if (st.ready) {
+      sub = `Each Bot gets its own screen with a browser (in ${st.where || 'Linux'}). Watch it or take control from the screen button at the top of a chat.`;
+      ctl = h('span', { class: 'set-status ok' }, icon('check', 14, '', 2.4), 'Ready');
+    } else {
+      const missing = (st.missing || []).concat(st.browser ? [] : ['a browser']);
+      sub = `Bots need a few Linux programs to get their own screen${missing.length ? ` (missing: ${missing.join(', ')})` : ''}.`;
+      ctl = btn('Set up', async () => {
+        S.screenSetup = { state: 'running' };
+        rerenderSettings();
+        try {
+          await api('/api/screens/setup', { method: 'POST' });
+        } catch (e) {
+          S.screenSetup = { state: 'error', error: (e && e.message) || String(e) };
+          rerenderSettings();
+        }
+      });
+    }
+    return h(
+      'div',
+      null,
+      row('Bot screens', ctl, sub, '', 'bot-screens'),
+      failed ? h('pre', { class: 'set-log err', role: 'alert' }, failed) : null
+    );
+  }
+
+  // The live viewer. control:true starts with "Take control" on (used by the hand-over card).
+  function openScreen(botId, { control = false } = {}) {
+    if (S.screenUI) S.screenUI.close();
+    const bot = S.bots.get(botId);
+    const name = bot ? bot.name : 'Bot';
+    let rfb = null;
+    let closing = false;
+    let ctl = false;
+    const status = h('span', { class: 'bs-status' }, 'Starting the screen…');
+    const ctlBtn = h('button', { class: 'btn primary', disabled: true, onclick: () => setControl(!ctl) });
+    const reBtn = h('button', { class: 'btn', hidden: true, onclick: () => connect() }, icon('refresh', 15), 'Reconnect');
+    const stopBtn = h(
+      'button',
+      {
+        class: 'ghost-btn',
+        'data-tip': 'Turn off the screen (its browser closes; logins are kept)',
+        'aria-label': 'Turn off the screen',
+        onclick: () => {
+          // Closing the browser cleanly takes a few seconds; the toolbar dot updates when it's done.
+          close();
+          api(`/api/bots/${encodeURIComponent(botId)}/screen/stop`, { method: 'POST' }).catch(fail);
+        },
+      },
+      icon('power', 17)
+    );
+    const closeBtn = h('button', { class: 'ghost-btn', 'aria-label': 'Close', 'data-tip': 'Close', onclick: () => close() }, icon('x', 17, '', 2.2));
+    const msg = h('div', { class: 'bs-msg' }, spinner('lg'));
+    const stage = h('div', { class: 'bs-stage' }, msg);
+    const hint = h('div', { class: 'bs-hint' });
+    const box = h(
+      'div',
+      { class: 'dialog bs-dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': `${name}’s screen` },
+      h('div', { class: 'bs-head' }, h('div', { class: 'bs-title' }, h('h2', { class: 'dialog-title' }, `${name}’s screen`), status), h('div', { class: 'bs-actions' }, reBtn, ctlBtn, stopBtn, closeBtn)),
+      stage,
+      hint
+    );
+    const closeModal = openModal(box, { cls: 'bs-overlay', onClose: () => cleanup() });
+    S.screenUI = {
+      botId,
+      close: () => close(),
+      stopped: () => {
+        if (closing) return;
+        showMsg('The screen was turned off.', true);
+      },
+    };
+    function close() {
+      closeModal();
+    }
+    function cleanup() {
+      closing = true;
+      if (rfb) rfb.disconnect();
+      rfb = null;
+      if (S.screenUI && S.screenUI.botId === botId) S.screenUI = null;
+    }
+    function setStatus(text, kind = '') {
+      status.textContent = text;
+      status.dataset.kind = kind;
+    }
+    function showMsg(text, retry) {
+      msg.textContent = '';
+      msg.append(h('div', null, text));
+      if (retry) msg.append(h('button', { class: 'btn', onclick: () => connect() }, icon('refresh', 15), 'Start it again'));
+      msg.hidden = false;
+      ctlBtn.disabled = true;
+      hint.textContent = '';
+      setStatus('Off', 'off');
+    }
+    function setControl(on) {
+      ctl = on;
+      ctlBtn.textContent = '';
+      ctlBtn.append(icon(on ? 'check' : 'pointer', 15, '', 2.2), on ? 'Hand back' : 'Take control');
+      ctlBtn.classList.toggle('primary', !on);
+      stage.classList.toggle('controlling', on);
+      if (rfb) {
+        rfb.viewOnly = !on;
+        if (on) rfb.focus();
+      }
+      if (!rfb || !msg.hidden) return; // not connected yet: connect() shows the status
+      setStatus(on ? 'You’re in control' : 'Watching', on ? 'ctl' : 'live');
+      hint.textContent = on
+        ? 'Your mouse and keyboard now go to the Bot’s screen. Choose Hand back when you’re done.'
+        : 'You’re watching. The Bot keeps working; choose Take control to use the screen yourself.';
+    }
+    async function connect() {
+      reBtn.hidden = true;
+      msg.textContent = '';
+      msg.append(spinner('lg'));
+      msg.hidden = false;
+      setStatus('Starting the screen…');
+      if (rfb) {
+        rfb.disconnect();
+        rfb = null;
+      }
+      let info;
+      let RFB;
+      try {
+        info = await api(`/api/bots/${encodeURIComponent(botId)}/screen/start`, { method: 'POST' });
+        ({ default: RFB } = await import('/vendor/novnc/core/rfb.js'));
+      } catch (e) {
+        if (closing) return;
+        const text = (e && e.message) || 'The screen couldn’t start.';
+        msg.textContent = '';
+        msg.append(h('div', null, text));
+        if (/set up/i.test(text))
+          msg.append(
+            h('button', { class: 'btn primary', onclick: () => { close(); openSettings('computer'); } }, 'Open Settings')
+          );
+        else msg.append(h('button', { class: 'btn', onclick: () => connect() }, icon('refresh', 15), 'Try again'));
+        setStatus('Off', 'off');
+        return;
+      }
+      if (closing) return;
+      S.screensOn.add(botId);
+      renderScreenBtn();
+      const u = new URL(S.apiBase);
+      u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+      u.pathname = `/api/bots/${encodeURIComponent(botId)}/screen/ws`;
+      u.search = '?token=' + encodeURIComponent(S.apiToken || '');
+      const r = new RFB(stage, u.toString(), { credentials: { password: info.password }, wsProtocols: ['binary'] });
+      rfb = r;
+      r.scaleViewport = true;
+      r.resizeSession = false;
+      r.background = 'transparent';
+      r.viewOnly = !ctl;
+      r.addEventListener('connect', () => {
+        if (rfb !== r) return;
+        msg.hidden = true;
+        ctlBtn.disabled = false;
+        setControl(ctl);
+      });
+      r.addEventListener('disconnect', (ev) => {
+        if (rfb !== r || closing) return;
+        rfb = null;
+        ctlBtn.disabled = true;
+        msg.textContent = '';
+        msg.append(h('div', null, ev.detail && ev.detail.clean ? 'The screen closed.' : 'Lost the connection to the screen.'));
+        msg.hidden = false;
+        reBtn.hidden = false;
+        hint.textContent = '';
+        setStatus('Disconnected', 'off');
+      });
+      r.addEventListener('credentialsrequired', () => r.sendCredentials({ password: info.password }));
+      r.addEventListener('securityfailure', () => {
+        if (rfb === r) setStatus('Couldn’t sign in to the screen', 'off');
+      });
+    }
+    setControl(control);
+    ctlBtn.disabled = true;
+    setStatus('Starting the screen…');
+    connect();
   }
 
   // ── visualization (sandboxed page made by a bot)
@@ -3792,7 +4033,7 @@
       if (!items.length) {
         results.append(
           msgLoading
-            ? h('div', { class: 'sr-empty' }, spinner('sm'))
+            ? h('div', { class: 'sr-empty' }, spinner('lg'))
             : h('div', { class: 'sr-empty' }, icon('search', 28), q ? 'No results' : 'No Bots yet')
         );
       }
@@ -4415,7 +4656,8 @@
                   '',
                   'bot-runner'
                 )
-              : null
+              : null,
+            screensRow()
           )
         )
       );
@@ -6048,6 +6290,11 @@
   $('#templatesBtn').append(icon('gridPlus', 20));
   $('#settingsBtn').append(icon('gear', 19));
   $('#menuBtn').append(icon('menu', 18));
+  $('#screenBtn').append(icon('monitor', 18), h('span', { class: 'bs-dot', 'aria-hidden': 'true' }));
+  $('#screenBtn').addEventListener('click', () => {
+    const b = curBot();
+    if (b) openScreen(b.id);
+  });
   $('#attachBtn').append(icon('plus', 16, '', 2.2));
   $('#micBtn').append(icon('mic', 15, '', 2));
   $('#sendBtn').append(icon('arrowUp', 16, 'g-send', 2.4), icon('mic', 15, 'g-mic', 2.2), icon('stop', 22, 'g-stop'));
