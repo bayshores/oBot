@@ -53,6 +53,31 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused])
+        // Menu bar: openbot › Settings… (⌘,) and Connect to Remote Computer…
+        .menu(|app| {
+            let menu = tauri::menu::Menu::default(app)?;
+            #[cfg(target_os = "macos")]
+            if let Some(tauri::menu::MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
+                use tauri::menu::{MenuItem, PredefinedMenuItem};
+                let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+                let remote = MenuItem::with_id(app, "remote", "Connect to Remote Computer…", true, None::<&str>)?;
+                app_menu.insert(&PredefinedMenuItem::separator(app)?, 1)?;
+                app_menu.insert(&settings, 2)?;
+                app_menu.insert(&remote, 3)?;
+            }
+            Ok(menu)
+        })
+        .on_menu_event(|app, event| {
+            let call = match event.id().as_ref() {
+                "settings" => "window.openbotOpenSettings && window.openbotOpenSettings()",
+                "remote" => "window.openbotOpenSettings && window.openbotOpenSettings('computer')",
+                _ => return,
+            };
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+                let _ = w.eval(call);
+            }
+        })
         .setup(move |app| {
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("openbot")

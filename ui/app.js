@@ -3947,6 +3947,8 @@
   const TAB_ALIAS = { account: 'usage' };
   const SAVE_ERR = 'Couldn’t save. Try again.';
   const USAGE_URL = 'https://claude.ai/settings/usage';
+  // The desktop app's menu bar (openbot › Settings…, Connect to Remote Computer…) calls this.
+  window.openbotOpenSettings = (tab) => openSettings(tab);
   function openSettings(tab) {
     tab = TAB_ALIAS[tab] || tab;
     if (S.settingsUI) {
