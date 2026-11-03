@@ -141,3 +141,45 @@ pub fn timezone_label() -> String {
         None => "this computer's timezone".into(),
     }
 }
+
+/// `C:\Users\me\x` -> `/mnt/c/Users/me/x` (how a Windows path looks from inside WSL).
+pub fn to_wsl_path(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = s.strip_prefix("//?/").unwrap_or(&s).to_string();
+    let b = s.as_bytes();
+    if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
+        format!("/mnt/{}{}", (b[0] as char).to_ascii_lowercase(), &s[2..])
+    } else {
+        s
+    }
+}
+
+/// `/mnt/c/Users/me/x` -> `C:\Users\me\x` on Windows (paths that bots running in WSL hand back).
+/// Anything else is returned unchanged.
+pub fn from_wsl_path(p: &str) -> std::path::PathBuf {
+    if cfg!(windows) {
+        let b = p.as_bytes();
+        if p.starts_with("/mnt/") && b.len() >= 6 && b[5].is_ascii_alphabetic() && (b.len() == 6 || b[6] == b'/') {
+            let rest = if b.len() > 6 { &p[6..] } else { "" };
+            return std::path::PathBuf::from(format!("{}:{}", (b[5] as char).to_ascii_uppercase(), if rest.is_empty() { "\\".to_string() } else { rest.replace('/', "\\") }));
+        }
+    }
+    std::path::PathBuf::from(p)
+}
+
+#[cfg(test)]
+mod wsl_path_tests {
+    use super::*;
+    #[test]
+    fn to_wsl() {
+        assert_eq!(to_wsl_path(std::path::Path::new(r"C:\Users\me\OpenBot\x")), "/mnt/c/Users/me/OpenBot/x");
+        assert_eq!(to_wsl_path(std::path::Path::new(r"\\?\D:\a b")), "/mnt/d/a b");
+        assert_eq!(to_wsl_path(std::path::Path::new("/home/me")), "/home/me");
+    }
+    #[test]
+    fn from_wsl_non_windows_is_unchanged() {
+        if !cfg!(windows) {
+            assert_eq!(from_wsl_path("/mnt/c/x"), std::path::PathBuf::from("/mnt/c/x"));
+        }
+    }
+}

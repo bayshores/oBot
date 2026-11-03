@@ -65,6 +65,11 @@ pub struct Config {
     pub timezone: String,
     /// Devices paired with a pairing code. Each has its own token (only its hash is stored).
     pub devices: Vec<crate::security::Device>,
+    /// Where bots run Claude Code: "native" (directly on this computer) or "wsl" (Windows only:
+    /// inside a WSL Linux distro, with Claude Code's sandbox turned on).
+    pub runner: String,
+    /// The WSL distro used when runner = "wsl".
+    pub wsl_distro: String,
 }
 
 impl Default for Config {
@@ -90,6 +95,8 @@ impl Default for Config {
             mcp_servers: vec![],
             timezone: String::new(),
             devices: vec![],
+            runner: "native".into(),
+            wsl_distro: "Ubuntu".into(),
         }
     }
 }
@@ -146,6 +153,9 @@ impl Config {
             "review_ask": self.review_ask,
             "mcp_servers": self.mcp_servers.iter().map(mask_mcp).collect::<Vec<_>>(),
             "timezone": self.timezone,
+            "runner": self.runner,
+            "wsl_distro": self.wsl_distro,
+            "wsl_available": cfg!(windows),
         })
     }
 }

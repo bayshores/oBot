@@ -212,7 +212,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             if p.is_empty() {
                 return Err("send_file needs a path".into());
             }
-            let mut src = PathBuf::from(p);
+            let mut src = crate::util::from_wsl_path(p);
             if src.is_relative() {
                 src = workdir.join(src);
             }
@@ -254,7 +254,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 if p.is_empty() {
                     return Err("show_page needs html or a path".into());
                 }
-                let mut src = PathBuf::from(p);
+                let mut src = crate::util::from_wsl_path(p);
                 if src.is_relative() {
                     src = workdir.join(src);
                 }

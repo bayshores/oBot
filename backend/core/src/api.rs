@@ -1457,6 +1457,8 @@ struct SettingsBody {
     default_model: Option<String>,
     workspace_root: Option<String>,
     claude_path: Option<String>,
+    runner: Option<String>,
+    wsl_distro: Option<String>,
     auto_review: Option<bool>,
     review_allow: Option<Vec<String>>,
     review_ask: Option<Vec<String>>,
@@ -1526,6 +1528,22 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
         }
         if let Some(v) = b.claude_path {
             cfg.claude_path = v.trim().to_string();
+        }
+        if let Some(v) = b.runner {
+            if !["native", "wsl"].contains(&v.as_str()) {
+                return Err(bad("runner must be \"native\" or \"wsl\""));
+            }
+            if v == "wsl" && !cfg!(windows) {
+                return Err(bad("Running bots in WSL only works on a Windows computer"));
+            }
+            cfg.runner = v;
+        }
+        if let Some(v) = b.wsl_distro {
+            let v = v.trim();
+            if v.is_empty() || v.len() > 64 || !v.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) {
+                return Err(bad("That isn't a valid WSL distro name"));
+            }
+            cfg.wsl_distro = v.to_string();
         }
         if let Some(v) = b.auto_review {
             cfg.auto_review = v;

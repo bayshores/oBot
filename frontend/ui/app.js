@@ -4397,7 +4397,25 @@
               'Let openbot open files and run tasks on your computer. Auto-review still checks everything first.',
               '',
               'local-execution'
-            )
+            ),
+            // Windows computers only: run Claude Code inside WSL Linux, where its sandbox works.
+            s.wsl_available
+              ? row(
+                  'Where Bots run commands',
+                  selectEl(
+                    s.runner === 'wsl' ? 'wsl' : 'native',
+                    [
+                      ['native', 'Directly on Windows'],
+                      ['wsl', `In Linux (WSL: ${s.wsl_distro || 'Ubuntu'}), sandboxed`],
+                    ],
+                    (v) => putSettings({ runner: v }, 'bot-runner'),
+                    'ghost'
+                  ),
+                  'In Linux, commands run in Claude Code’s sandbox and can only change files in the Bot’s folder. Needs Claude Code installed and logged in inside WSL.',
+                  '',
+                  'bot-runner'
+                )
+              : null
           )
         )
       );

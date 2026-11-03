@@ -274,8 +274,17 @@ fn build_command(
     std::fs::create_dir_all(&bot_dir)?;
     std::fs::create_dir_all(&bot.workdir)?;
 
+    // runner = "wsl" (Windows only): Claude Code runs inside a WSL Linux distro with its sandbox on.
+    // The bot sees Windows paths as /mnt/c/..., so every path we hand it is translated.
+    let wsl = cfg!(windows) && cfg.runner == "wsl";
+    let p = |path: &std::path::Path| if wsl { crate::util::to_wsl_path(path) } else { path.to_string_lossy().into_owned() };
+
     let persona_path = bot_dir.join("persona.md");
-    std::fs::write(&persona_path, persona(state, bot))?;
+    let mut persona_text = persona(state, bot);
+    if wsl {
+        persona_text = persona_text.replace(&bot.workdir, &crate::util::to_wsl_path(std::path::Path::new(&bot.workdir)));
+    }
+    std::fs::write(&persona_path, persona_text)?;
 
     let mut args: Vec<String> = vec![
         "-p".into(),
@@ -284,7 +293,7 @@ fn build_command(
         "--verbose".into(),
         "--include-partial-messages".into(),
         "--append-system-prompt-file".into(),
-        persona_path.to_string_lossy().into_owned(),
+        p(&persona_path),
         // Rebuild the system prompt each run so new memories, routines and the time are current.
         "--system-prompt-snapshot".into(),
         "off".into(),
@@ -328,15 +337,21 @@ fn build_command(
         };
         servers.insert(name.to_string(), entry);
     }
+    // In WSL the helper is still this Windows program (started through WSL interop, so it reaches
+    // the server on Windows' 127.0.0.1). WSLENV lists the variables WSL may pass to it.
+    let mut helper_env = json!({
+        "OPENBOT_URL": format!("http://127.0.0.1:{}", state.port),
+        "OPENBOT_TOKEN": cfg.token,
+        "OPENBOT_BOT_ID": bot.id,
+    });
+    if wsl {
+        helper_env["WSLENV"] = json!("OPENBOT_URL:OPENBOT_TOKEN:OPENBOT_BOT_ID");
+    }
     servers.insert("openbot".into(), json!({
         "type": "stdio",
-        "command": state.self_exe.to_string_lossy(),
+        "command": p(&state.self_exe),
         "args": ["mcp-approve"],
-        "env": {
-            "OPENBOT_URL": format!("http://127.0.0.1:{}", state.port),
-            "OPENBOT_TOKEN": cfg.token,
-            "OPENBOT_BOT_ID": bot.id,
-        }
+        "env": helper_env,
     }));
     let mcp = json!({ "mcpServers": servers });
     std::fs::write(&mcp_path, serde_json::to_vec_pretty(&mcp)?)?;
@@ -346,7 +361,15 @@ fn build_command(
         let _ = std::fs::set_permissions(&mcp_path, std::fs::Permissions::from_mode(0o600));
     }
     args.push("--mcp-config".into());
-    args.push(mcp_path.to_string_lossy().into_owned());
+    args.push(p(&mcp_path));
+    if wsl {
+        // Claude Code's sandbox (bubblewrap) works in WSL2: commands can only write inside the bot's folder.
+        let settings_path = bot_dir.join("sandbox-settings.json");
+        let settings = json!({ "sandbox": { "enabled": true, "autoAllowBashIfSandboxed": true } });
+        std::fs::write(&settings_path, serde_json::to_vec_pretty(&settings)?)?;
+        args.push("--settings".into());
+        args.push(p(&settings_path));
+    }
     if mode != "bypassPermissions" {
         // Route "may I?" questions to the chat as Allow / Deny cards.
         args.push("--permission-prompt-tool".into());
@@ -360,9 +383,18 @@ fn build_command(
     args.push("mcp__openbot".into());
     args.extend(cfg.allow_rules.iter().cloned());
 
-    let mut cmd = Command::new(claude);
-    cmd.args(&args)
-        .current_dir(&bot.workdir)
+    let mut cmd = if wsl {
+        // wsl.exe -d <distro> --cd <workdir> --exec sh -c 'exec "$HOME/.local/bin/claude" "$@"' claude <args>
+        let mut c = Command::new("wsl.exe");
+        c.args(["-d", &cfg.wsl_distro, "--cd", &bot.workdir, "--exec", "sh", "-c", r#"exec "$HOME/.local/bin/claude" "$@""#, "claude"]);
+        c.args(&args);
+        c
+    } else {
+        let mut c = Command::new(claude);
+        c.args(&args);
+        c
+    };
+    cmd.current_dir(&bot.workdir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -375,10 +407,26 @@ fn build_command(
         // Use the Claude subscription login of this computer.
         cmd.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
     }
+    let mut passed: Vec<String> = vec!["OPENBOT".into()];
+    if cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() {
+        passed.push("ANTHROPIC_API_KEY".into());
+    }
     for s in &cfg.vault {
         if !s.name.trim().is_empty() {
             cmd.env(s.name.trim(), &s.value);
+            passed.push(s.name.trim().to_string());
         }
+    }
+    if wsl {
+        // Windows -> WSL only passes the environment variables listed in WSLENV.
+        let mut list = std::env::var("WSLENV").unwrap_or_default();
+        for n in passed {
+            if !list.is_empty() {
+                list.push(':');
+            }
+            list.push_str(&n);
+        }
+        cmd.env("WSLENV", list);
     }
     hide_console(&mut cmd);
     Ok(cmd)
@@ -411,7 +459,8 @@ async fn drive(
 ) -> anyhow::Result<Outcome> {
     let bot = state.db.get_bot(bot_id)?.ok_or_else(|| anyhow!("This bot was deleted."))?;
     let cfg = state.config.read().await.clone();
-    let claude = find_claude(&cfg.claude_path).ok_or_else(|| {
+    let in_wsl = cfg!(windows) && cfg.runner == "wsl";
+    let claude = if in_wsl { Some(PathBuf::from("wsl.exe")) } else { find_claude(&cfg.claude_path) }.ok_or_else(|| {
         anyhow!(
             "Claude Code isn't installed on this computer. Install it (https://claude.com/claude-code), \
              then open a terminal, run `claude` once and log in."

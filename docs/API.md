@@ -96,6 +96,9 @@ Settings = {
   review_allow: string[], // "Allow without Asking" rules
   mcp_servers: [{ name, type: "http"|"stdio", url?, headers?, command?, args?, env? }]  // header/env values masked
   timezone: string,      // IANA name like "America/Los_Angeles"; "" = the computer's timezone. Routine times use it. PUT accepts it.
+  runner: "native"|"wsl", // where bots run Claude Code. "wsl" (Windows hosts only) runs it inside WSL with its sandbox on. PUT accepts it.
+  wsl_distro: string,    // WSL distro for runner "wsl" (default "Ubuntu"). PUT accepts it.
+  wsl_available: bool,   // true when the server runs on Windows (the "wsl" runner can be used)
 }
 // permission_mode values: "ask" (Ask every time; auto-review may wave routine actions through),
 //   "allow_all" (Always allow), "never" (Never allow: anything needing approval is denied), plus legacy "auto", "accept_edits".
