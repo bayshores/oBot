@@ -147,7 +147,8 @@ if (-not $ts) {
 }
 
 # 4. Start at boot, as you (so it can use your Claude login), restart on crash
-$user = "$env:USERDOMAIN\$env:USERNAME"
+# The real account name (env vars like USERDOMAIN can be wrong in SSH sessions).
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $cmd = "& '$Target' --port $Port *>> '$LogFile'"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
   -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$cmd`""
