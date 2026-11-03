@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Lets the openbot page (served by the built-in local server) drag the window, notify and badge.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:*"] },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "notification:default"
+  ]
+}

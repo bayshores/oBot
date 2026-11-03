@@ -1,0 +1,4326 @@
+/* openbot UI. Plain JS, no build step. Talks to the openbot server API (docs/API.md).
+   Bot characters come from avatar.js (window.OBAvatar). */
+'use strict';
+(() => {
+  // ───────────────────────────── helpers ─────────────────────────────
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    if (attrs) {
+      for (const k in attrs) {
+        const v = attrs[k];
+        if (v == null || v === false) continue;
+        if (k === 'class') el.className = v;
+        else if (k === 'style') {
+          if (typeof v === 'string') el.style.cssText = v;
+          else for (const sk in v) el.style.setProperty(sk.startsWith('--') ? sk : sk.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()), v[sk]);
+        } else if (k === 'html') el.innerHTML = v;
+        else if (k === 'text') el.textContent = v;
+        else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+        else if (k === 'value') el.value = v;
+        else if (k === 'checked' || k === 'disabled' || k === 'selected' || k === 'hidden') el[k] = !!v;
+        else el.setAttribute(k, v === true ? '' : String(v));
+      }
+    }
+    appendKids(el, kids);
+    return el;
+  }
+  function appendKids(el, kids) {
+    for (const k of kids) {
+      if (k == null || k === false || k === true) continue;
+      if (Array.isArray(k)) appendKids(el, k);
+      else if (k instanceof Node) el.appendChild(k);
+      else el.appendChild(document.createTextNode(String(k)));
+    }
+  }
+  const debounce = (fn, ms) => {
+    let t;
+    return (...a) => {
+      clearTimeout(t);
+      t = setTimeout(() => fn(...a), ms);
+    };
+  };
+  const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const modKey = (e) => (isMac ? e.metaKey : e.ctrlKey);
+  const MOD = isMac ? '⌘' : 'Ctrl+';
+  const isEditable = (el) => !!(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable));
+
+  function hostOf(url) {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url || 'the computer';
+    }
+  }
+  function fmtBytes(n) {
+    if (!n && n !== 0) return '—';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) {
+      n /= 1024;
+      i++;
+    }
+    return `${n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)} ${u[i]}`;
+  }
+  function fmtDuration(secs) {
+    if (secs == null) return '—';
+    secs = Math.max(0, Math.floor(secs));
+    const d = Math.floor(secs / 86400);
+    const hr = Math.floor((secs % 86400) / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    if (d) return `${d} day${d === 1 ? '' : 's'}${hr ? `, ${hr} hr` : ''}`;
+    if (hr) return `${hr} hr${m ? ` ${m} min` : ''}`;
+    if (m) return `${m} min`;
+    return 'less than a minute';
+  }
+  function fmtResetsIn(unixSecs) {
+    const diff = unixSecs - Date.now() / 1000;
+    if (diff <= 0) return 'Resets soon';
+    const d = Math.round(diff / 86400);
+    if (diff >= 86400 * 1.5) return `Resets in ${d} days`;
+    if (diff >= 86400) return 'Resets in 1 day';
+    const hr = Math.round(diff / 3600);
+    if (diff >= 3600) return `Resets in ${hr} hour${hr === 1 ? '' : 's'}`;
+    const m = Math.max(1, Math.round(diff / 60));
+    return `Resets in ${m} minute${m === 1 ? '' : 's'}`;
+  }
+  function fmtTime(ms) {
+    try {
+      return new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    } catch {
+      return '';
+    }
+  }
+  const fmtUsd = (n) => (n == null ? '—' : n < 0.01 && n > 0 ? '< $0.01' : `$${(n || 0).toFixed(2)}`);
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  // Centered time label: "Today 3:42 PM", "Yesterday 3:42 PM", "Tue, Nov 9 3:42 PM", "Nov 9, 2025 3:42 PM"
+  function timeLabel(ms) {
+    const d = new Date(ms);
+    const now = new Date();
+    const day0 = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((day0(now) - day0(d)) / 86400000);
+    const t = clock(ms);
+    if (diffDays === 0) return `Today ${t}`;
+    if (diffDays === 1) return `Yesterday ${t}`;
+    if (d.getFullYear() === now.getFullYear()) return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${t}`;
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} ${t}`;
+  }
+  const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
+  function fmtElapsed(ms) {
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m`;
+    return `${Math.floor(s / 3600)}h`;
+  }
+
+  // ───────────────────────────── icons ─────────────────────────────
+  const ICONS = {
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    gridPlus: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><path d="M16.75 13.75v6M13.75 16.75h6"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 000-3l2-1.6-2-3.4-2.4 1a7.5 7.5 0 00-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 007 6.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 000 3l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 002.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 002.6-1.5l2.4 1 2-3.4z"/>',
+    monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8.5 20h7M12 16v4"/>',
+    shield: '<path d="M12 3l7.5 3v5.5c0 4.6-3.2 8.3-7.5 9.5-4.3-1.2-7.5-4.9-7.5-9.5V6z"/>',
+    vault: '<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><circle cx="12" cy="12" r="3.3"/><path d="M12 8.7V6.8M12 17.2v-1.9M8.7 12H6.8M17.2 12h-1.9"/>',
+    bars: '<path d="M6 20v-7M12 20V5M18 20v-9"/>',
+    updates: '<path d="M7 17.5a4.5 4.5 0 01-.6-8.96A6 6 0 0118 9.5a4 4 0 01-.5 7.97"/><path d="M12 11v9M8.8 17l3.2 3.2 3.2-3.2"/>',
+    x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
+    mic: '<rect x="9" y="3.5" width="6" height="10.5" rx="3"/><path d="M5.8 11a6.2 6.2 0 0012.4 0M12 17.2V20.5"/>',
+    wave: '<path d="M4 10.5v3M8 7.5v9M12 4.5v15M16 7.5v9M20 10.5v3"/>',
+    arrowUp: '<path d="M12 19V5.5M6 11l6-6 6 6"/>',
+    arrowDown: '<path d="M12 5v13.5M6 13l6 6 6-6"/>',
+    stop: '<rect x="7" y="7" width="10" height="10" rx="2.2" fill="currentColor" stroke="none"/>',
+    chevronDown: '<path d="M6 9l6 6 6-6"/>',
+    chevronRight: '<path d="M9.5 6l6 6-6 6"/>',
+    chevronLeft: '<path d="M14.5 6l-6 6 6 6"/>',
+    terminal: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/>',
+    file: '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/>',
+    pencil: '<path d="M4 20h4L19 9a2.8 2.8 0 00-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+    globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>',
+    bolt: '<path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    alert: '<path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.3v.2"/>',
+    copy: '<rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.5"/><path d="M15.5 8.5V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7.5a2 2 0 002 2h2.5"/>',
+    folder: '<path d="M3.5 7a2 2 0 012-2h4l2 2.5h7a2 2 0 012 2V17a2 2 0 01-2 2h-13a2 2 0 01-2-2z"/>',
+    eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/>',
+    trash: '<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l1 12a2 2 0 002 2h5a2 2 0 002-2l1-12M9.5 7V4.5h5V7"/>',
+    refresh: '<path d="M20 11a8 8 0 00-14.5-4.5L4 8M4 4v4h4M4 13a8 8 0 0014.5 4.5L20 16M20 20v-4h-4"/>',
+    menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M14.5 8.5l2 2"/>',
+    sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+    external: '<path d="M9 15L18 6M10.5 6H18v7.5"/><path d="M18 16.5V18a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h1.5"/>',
+    reset: '<path d="M4 12a8 8 0 108-8 8.3 8.3 0 00-6 2.6L4 8.5"/><path d="M4 4v4.5h4.5"/>',
+    link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
+    image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-5-5-9 8.5"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2.2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
+    download: '<path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/>',
+    clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+    chart: '<path d="M4 20h16"/><path d="M7 16v-5M12 16V7M17 16v-8"/>',
+    pin: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/>',
+    more: '<circle cx="5.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
+    star: '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
+    play: '<path d="M7 5l12 7-12 7z"/>',
+    pause: '<path d="M8 5v14M16 5v14"/>',
+    pinOff: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6M4 4l16 16"/>',
+    bell: '<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
+    keyboard: '<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8"/>',
+    person: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0114 0"/>',
+    brain: '<path d="M9 4.5a3 3 0 00-3 3 3 3 0 00-1.5 5.5A3 3 0 007 18a2.5 2.5 0 005 0V6.5a2 2 0 00-3-2zM15 4.5a3 3 0 013 3 3 3 0 011.5 5.5A3 3 0 0117 18a2.5 2.5 0 01-5 0"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
+    moon: '<path d="M19.5 14.5A8 8 0 019.5 4.5a8 8 0 1010 10z"/>',
+    display: '<rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M9 20h6"/>',
+    sidebar: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/>',
+  };
+  function icon(name, size = 18, extraClass = '', sw = 1.8) {
+    const span = document.createElement('span');
+    span.className = 'ico ' + extraClass;
+    span.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ''}</svg>`;
+    return span;
+  }
+  const spinner = (cls = '') => h('span', { class: 'spinner ' + cls, 'aria-label': 'Working' });
+
+  // ───────────────────────────── avatars (avatar.js) ─────────────────────────────
+  const OB = () => (window.OBAvatar && typeof window.OBAvatar.svg === 'function' ? window.OBAvatar : null);
+  const COLOR_IDS = ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'];
+  const COLOR_LABELS = { black: 'Black', brown: 'Brown', red: 'Red', orange: 'Orange', yellow: 'Yellow', green: 'Green', cyan: 'Cyan', blue: 'Blue', violet: 'Violet', magenta: 'Magenta', gray: 'Gray' };
+  // body ink per colour (dark / light), used for swatches and the fallback disc
+  const COLOR_INK = {
+    black: ['#ffffff', '#000000'], brown: ['#a16b39', '#a06b39'], red: ['#fc2c3e', '#fb2b3e'], orange: ['#f9670e', '#fd690f'],
+    yellow: ['#f69412', '#f59312'], green: ['#14c370', '#14c16f'], cyan: ['#13b8a3', '#13b7a2'], blue: ['#1884fc', '#1e86fc'],
+    violet: ['#905afb', '#8f59f9'], magenta: ['#fb3499', '#f93498'], gray: ['#777777', '#959595'],
+  };
+  // colours stored by the previous UI build (hex) → colour ids
+  const LEGACY_HEX = { '#e0458f': 'magenta', '#f0a033': 'orange', '#3a7bff': 'blue', '#e5484d': 'red', '#30a46c': 'green', '#8e4ec6': 'violet', '#12a594': 'cyan', '#f5d90a': 'yellow' };
+  const LEGACY_SHAPE = { drop: 'teardrop' };
+  const FALLBACK_SHAPES = ['blob', 'cloud', 'square', 'sparkle', 'clover', 'heart', 'flower', 'teardrop', 'tablet', 'wedge', 'house', 'star', 'hex'];
+  function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function colorIdOf(c) {
+    if (!c) return null;
+    const v = String(c).toLowerCase().trim();
+    if (COLOR_IDS.includes(v)) return v;
+    if (v === 'purple') return 'violet';
+    if (LEGACY_HEX[v]) return LEGACY_HEX[v];
+    const rgb = hexToRgb(v);
+    if (!rgb) return null;
+    let best = null;
+    let bestD = Infinity;
+    for (const id of COLOR_IDS) {
+      if (id === 'black') continue;
+      const [r, g, b] = hexToRgb(COLOR_INK[id][0]);
+      const d = (r - rgb[0]) ** 2 + (g - rgb[1]) ** 2 + (b - rgb[2]) ** 2;
+      if (d < bestD) {
+        bestD = d;
+        best = id;
+      }
+    }
+    return best;
+  }
+  function hashDefaults(id) {
+    let h0 = 2166136261;
+    for (const ch of String(id || '')) {
+      h0 ^= ch.charCodeAt(0);
+      h0 = Math.imul(h0, 16777619);
+    }
+    h0 >>>= 0;
+    return { shape: FALLBACK_SHAPES[h0 % 8], color: COLOR_IDS[1 + (h0 % 10)] };
+  }
+  function defaultsFor(id) {
+    const A = OB();
+    try {
+      if (A && A.defaults) return A.defaults(String(id || ''));
+    } catch {}
+    return hashDefaults(id);
+  }
+  const shapeList = () => (OB() && OB().SHAPES) || FALLBACK_SHAPES;
+  const pickerShapes = () => (OB() && OB().PICKER_SHAPES) || FALLBACK_SHAPES;
+  const colorList = () => {
+    const A = OB();
+    if (A && Array.isArray(A.COLORS)) return A.COLORS.map((c) => (typeof c === 'string' ? c : c.id));
+    return COLOR_IDS;
+  };
+  function lookOf(bot) {
+    bot = bot || {};
+    const d = defaultsFor(bot.id);
+    let shape = bot.shape ? LEGACY_SHAPE[bot.shape] || bot.shape : '';
+    if (!shape || !shapeList().includes(shape)) shape = d.shape;
+    const color = colorIdOf(bot.color) || d.color;
+    return { shape, color };
+  }
+  const themeName = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+  const inkOf = (color) => {
+    const A = OB();
+    try {
+      if (A && A.ink) return A.ink(color, themeName());
+    } catch {}
+    const c = COLOR_INK[color] || COLOR_INK.gray;
+    return themeName() === 'light' ? c[1] : c[0];
+  };
+
+  // Activity kind (bot.activity.kind) → avatar animation state
+  const ACT_STATE = {
+    thinking: 'thinking', searching_web: 'searching', reading_web: 'reading', reading_file: 'reading', writing_file: 'writing',
+    running_commands: 'running', browsing: 'reading', on_its_computer: 'computing', connecting: 'orbit', waiting_for_you: 'waiting',
+    working: 'working', status: 'working',
+  };
+  function botState(b) {
+    if (!b || !b.running) return 'idle';
+    if (b.activity && ACT_STATE[b.activity.kind]) return ACT_STATE[b.activity.kind];
+    return 'working';
+  }
+
+  const liveAvatars = new Set();
+  // Draws a bot character into `el`. live=true mounts an animated controller.
+  function paintAvatar(el, look, size, { live = false, state = 'idle', interactive = false, badge = null } = {}) {
+    if (el._av) {
+      try {
+        el._av.destroy();
+      } catch {}
+      el._av = null;
+      liveAvatars.delete(el);
+    }
+    el.textContent = '';
+    el._look = look.shape + '/' + look.color + '/' + (badge || '');
+    el._live = live;
+    const A = OB();
+    const theme = themeName();
+    if (A) {
+      try {
+        if (live && A.mount) {
+          el._av = A.mount(el, Object.assign({ shape: look.shape, color: look.color, size, theme, interactive, state }, badge ? { badge } : {}));
+          el._state = state;
+          if (state !== 'idle') setAvatarState(el, state, true);
+          liveAvatars.add(el);
+          return;
+        }
+        el.innerHTML = A.svg(Object.assign({ shape: look.shape, color: look.color, size, theme }, badge ? { badge } : {}));
+        return;
+      } catch (e) {
+        console.warn('avatar failed', e);
+        el.textContent = '';
+      }
+    }
+    el.append(h('span', { class: 'av-fallback', style: { display: 'block', width: '100%', height: '100%', background: inkOf(look.color) } }));
+  }
+  function avatar(bot, size = 36, opts = {}) {
+    const el = h('span', { class: 'av', style: { width: size + 'px', height: size + 'px' } });
+    el._size = size;
+    paintAvatar(el, lookOf(bot), size, opts);
+    return el;
+  }
+  function setAvatarState(el, state, force) {
+    if (!el || !el._av || (!force && el._state === state)) return;
+    el._state = state;
+    try {
+      if (el._av.set) el._av.set({ state });
+    } catch {}
+  }
+  function pokeAvatar(el) {
+    try {
+      if (el && el._av && el._av.poke) el._av.poke();
+    } catch {}
+  }
+  // keep a mounted avatar in sync with a bot (repaint only when the look changes)
+  function syncAvatar(el, bot, size, opts = {}) {
+    const look = lookOf(bot);
+    if (el._look !== look.shape + '/' + look.color + '/' + (opts.badge || '') || !!el._live !== !!opts.live) paintAvatar(el, look, size, opts);
+    else if (opts.live) setAvatarState(el, opts.state || 'idle');
+  }
+  const sweepAvatars = debounce(() => {
+    for (const el of liveAvatars) {
+      if (!el.isConnected) {
+        try {
+          el._av && el._av.destroy();
+        } catch {}
+        el._av = null;
+        liveAvatars.delete(el);
+      }
+    }
+  }, 500);
+
+  // ───────────────────────────── bot colour tint (shell.md 1.1c) ─────────────────────────────
+  // light: fill / user-bubble (hover shade) / text · dark: fill (= user bubble) / bright / text
+  const HUES = {
+    red: ['#e72e3b', '#c82532', '#cd2834', '#cf2b35', '#fc2c3e', '#ff6463'],
+    orange: ['#ee620d', '#d2550a', '#c14c00', '#cd5309', '#f9670e', '#fe6600'],
+    yellow: ['#da830e', '#c2730b', '#aa6300', '#c8770c', '#f69412', '#e28600'],
+    green: ['#10ab61', '#0d9655', '#00854a', '#0e9f5a', '#14c370', '#00ba69'],
+    cyan: ['#10a693', '#0d9381', '#008273', '#0e9886', '#13b8a3', '#00b7a2'],
+    blue: ['#1680f3', '#126fd4', '#0b6dd3', '#116dd2', '#1884fc', '#4d9bff'],
+    purple: ['#8351e4', '#7442d1', '#7547d0', '#7845d7', '#905afb', '#a582ff'],
+    magenta: ['#e52f8b', '#c82779', '#c62378', '#cf297e', '#fb3499', '#ff55a4'],
+    brown: ['#9d6937', '#86592e', '#996b42', '#8c5d31', '#a16b39', '#c59e7d'],
+  };
+  const hueOf = (colorId) => (!colorId || colorId === 'black' || colorId === 'gray' ? null : colorId === 'violet' ? 'purple' : HUES[colorId] ? colorId : null);
+  function hueText(colorId) {
+    const hu = HUES[hueOf(colorId)];
+    if (!hu) return 'var(--text-2)';
+    return themeName() === 'light' ? hu[2] : hu[5];
+  }
+  function applyTint() {
+    const pref = S.prefs.accent || 'bot';
+    let colorId = null;
+    if (pref === 'bot') colorId = curBot() ? lookOf(curBot()).color : null;
+    else if (pref !== 'none') colorId = colorIdOf(pref);
+    const hu = HUES[hueOf(colorId)];
+    const st = document.documentElement.style;
+    const props = ['--tint-bubble', '--tint-bubble-text', '--tint-cta', '--tint-cta-hover', '--tint-cta-text'];
+    if (!hu) {
+      props.forEach((p) => st.removeProperty(p));
+      return;
+    }
+    const light = themeName() === 'light';
+    st.setProperty('--tint-bubble', light ? hu[1] : hu[3]);
+    st.setProperty('--tint-bubble-text', light ? '#ffffff' : '#f5f5f5');
+    st.setProperty('--tint-cta', light ? hu[0] : hu[3]);
+    st.setProperty('--tint-cta-hover', light ? hu[1] : hu[4]);
+    st.setProperty('--tint-cta-text', light ? '#ffffff' : '#f5f5f5');
+  }
+
+  // ───────────────────────────── constants ─────────────────────────────
+  const MODELS = [
+    ['', 'Default'],
+    ['opus', 'Opus'],
+    ['sonnet', 'Sonnet'],
+    ['haiku', 'Haiku'],
+  ];
+  const TEMPLATES = [
+    {
+      name: 'General Bot',
+      color: 'magenta',
+      shape: 'blob',
+      blurb: 'Everyday help: questions, writing, and small tasks on the computer.',
+      instructions:
+        'You are a friendly, capable general assistant. Keep replies short and clear. When asked to do something on this computer, do it and report back briefly.',
+    },
+    {
+      name: 'Research Assistant',
+      color: 'blue',
+      shape: 'sparkle',
+      blurb: 'Digs through the web and answers with a summary and sources.',
+      instructions:
+        'You research topics thoroughly on the web, compare several sources, and answer with a short summary followed by the links you used.',
+    },
+    {
+      name: 'Coding Helper',
+      color: 'green',
+      shape: 'square',
+      blurb: 'Writes, fixes, and explains code in its folder.',
+      instructions:
+        'You are a careful senior software engineer. Explain changes in plain language, run tests when possible, and never delete work without asking first.',
+    },
+    {
+      name: 'Daily Planner',
+      color: 'orange',
+      shape: 'flower',
+      blurb: 'Turns messy to-dos into a clear plan for your day or week.',
+      instructions:
+        'You help plan days and weeks. Turn messy notes into prioritized task lists and short schedules. Be encouraging and concise.',
+    },
+  ];
+  const WORK_PHRASES = ['Getting it done', 'Making progress', 'Working on it', 'Handling it', 'Chipping away'];
+  const PERMISSION_MODES = [
+    ['ask', 'Ask every time', 'Bots ask you before running commands, editing files, or using the web. Approve each action in the chat.'],
+    ['auto', 'Let Claude decide', 'A safety check approves routine actions automatically and asks you about risky ones.'],
+    ['accept_edits', 'Auto-approve file edits', 'Bots edit files without asking. They still ask before running other commands.'],
+    ['allow_all', 'Allow everything', 'Bots never ask. They can run any command on the computer.', 'Only use this on a computer you’re comfortable letting bots fully control.'],
+  ];
+  const SB_MIN = 240;
+  const SB_MAX = 400;
+  const SB_DEFAULT = 280;
+  const RAIL = 88;
+  const CHAT_MIN = 424;
+  const PANEL_W = 320;
+
+  // ───────────────────────────── state ─────────────────────────────
+  const S = {
+    homeToken: null,
+    apiBase: location.origin,
+    apiToken: null,
+    conn: { mode: 'local', url: '', token: '' },
+    prefs: {},
+    bots: new Map(),
+    settings: null,
+    computer: null,
+    usage: null,
+    version: '',
+    current: null,
+    msgs: new Map(),
+    hasMore: new Map(),
+    loading: new Set(),
+    nodes: new Map(), // message id → {el, sig}
+    seps: new Map(), // key → separator element
+    expanded: new Set(),
+    drafts: new Map(),
+    pending: [],
+    ws: null,
+    wsGen: 0,
+    wsOk: false,
+    wsEverOpened: false,
+    wsRetry: 1000,
+    bannerTimer: null,
+    settingsUI: null,
+    connDraft: null,
+    booted: false,
+    panelOpen: false,
+    hiddenOpen: false,
+    runStart: new Map(),
+    newDiv: null, // {botId, msgId}
+    pinned: true,
+    newCount: 0,
+    notified: new Set(),
+    lastNotify: new Map(),
+    composerExpanded: false,
+    initialRender: true,
+  };
+  const curBot = () => (S.current ? S.bots.get(S.current) : null);
+
+  // ───────────────────────────── network ─────────────────────────────
+  async function req(base, token, path, { method = 'GET', body, form } = {}) {
+    const headers = {};
+    if (token) headers.Authorization = 'Bearer ' + token;
+    let payload;
+    if (form) payload = form;
+    else if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      payload = JSON.stringify(body);
+    }
+    let res;
+    try {
+      res = await fetch(base + path, { method, headers, body: payload });
+    } catch (e) {
+      const err = new Error(`Can’t reach ${hostOf(base)}`);
+      err.network = true;
+      throw err;
+    }
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
+    }
+    if (!res.ok) {
+      const err = new Error((data && data.error) || (typeof data === 'string' && data) || `Request failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+  const home = (p, o) => req(location.origin, S.homeToken, p, o);
+  const api = (p, o) => req(S.apiBase, S.apiToken, p, o);
+  function fileUrl(rel) {
+    if (!rel) return '';
+    if (/^(blob:|data:)/.test(rel)) return rel;
+    const abs = /^https?:/.test(rel) ? rel : S.apiBase + rel;
+    return abs + (abs.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(S.apiToken || '');
+  }
+
+  function initToken() {
+    const u = new URL(location.href);
+    const t = u.searchParams.get('token');
+    if (t) {
+      try {
+        sessionStorage.setItem('openbot.token', t);
+      } catch {}
+      u.searchParams.delete('token');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+      S.homeToken = t;
+      return;
+    }
+    try {
+      S.homeToken = sessionStorage.getItem('openbot.token') || localStorage.getItem('openbot.token');
+    } catch {}
+  }
+
+  const savePrefs = debounce(() => {
+    home('/api/prefs', { method: 'PUT', body: S.prefs }).catch(() => {});
+  }, 400);
+
+  // ───────────────────────────── desktop bridge (Tauri) ─────────────────────────────
+  const TAURI = window.__TAURI_INTERNALS__;
+  async function invoke(cmd, args) {
+    if (!TAURI || typeof TAURI.invoke !== 'function') return null;
+    try {
+      return await TAURI.invoke(cmd, args || {});
+    } catch {
+      return null;
+    }
+  }
+  let lastBadge = -1;
+  function updateBadge() {
+    if (!TAURI) return;
+    let n = 0;
+    for (const b of S.bots.values()) if (!b.hidden && b.unread > 0) n += b.unread;
+    if (n === lastBadge) return;
+    lastBadge = n;
+    invoke('set_badge', { count: n });
+  }
+  // kind: 'done' (bot finished / sent something) or 'needs' (approval / question)
+  async function maybeNotify(bot, kind, body, key) {
+    if (!TAURI || !bot || bot.hidden || bot.notifications === false) return;
+    if (key) {
+      if (S.notified.has(key)) return;
+      S.notified.add(key);
+    }
+    const focused = await invoke('is_focused');
+    if (focused && S.current === bot.id) return;
+    if (kind === 'done') {
+      const last = S.lastNotify.get(bot.id) || 0;
+      if (Date.now() - last < 5000) return;
+    }
+    S.lastNotify.set(bot.id, Date.now());
+    let text = String(body || '').replace(/\s+/g, ' ').trim();
+    if (text.length > 140) text = text.slice(0, 139) + '…';
+    if (kind === 'done') invoke('notify', { title: bot.name, body: text || 'Open openbot to see what it did' });
+    else invoke('notify', { title: `${bot.name} is waiting for you`, body: text || 'Waiting for you' });
+  }
+
+  // ───────────────────────────── toasts + tooltips ─────────────────────────────
+  function toast(msg, kind = '') {
+    const t = h('div', { class: 'toast ' + kind, role: 'status' }, kind === 'error' ? icon('alert', 16) : null, h('span', null, msg));
+    $('#toasts').append(t);
+    requestAnimationFrame(() => t.classList.add('show'));
+    setTimeout(() => {
+      t.classList.remove('show');
+      setTimeout(() => t.remove(), 250);
+    }, kind === 'error' ? 5200 : 2400);
+  }
+  const fail = (e) => toast(e && e.message ? e.message : String(e), 'error');
+
+  let tipTimer = null;
+  let tipFor = null;
+  function hideTip() {
+    clearTimeout(tipTimer);
+    tipFor = null;
+    $('#tip').hidden = true;
+  }
+  document.addEventListener('mouseover', (e) => {
+    const t = e.target.closest && e.target.closest('[data-tip]');
+    if (t === tipFor) return;
+    hideTip();
+    if (!t) return;
+    tipFor = t;
+    tipTimer = setTimeout(() => {
+      if (!t.isConnected || tipFor !== t) return;
+      const tip = $('#tip');
+      tip.textContent = t.dataset.tip;
+      if (t.dataset.kbd) tip.append(h('kbd', null, t.dataset.kbd));
+      tip.hidden = false;
+      const r = t.getBoundingClientRect();
+      const tr = tip.getBoundingClientRect();
+      let top = r.bottom + 6;
+      if (top + tr.height > innerHeight - 4) top = r.top - tr.height - 6;
+      tip.style.top = top + 'px';
+      tip.style.left = clamp(r.left + r.width / 2 - tr.width / 2, 4, innerWidth - tr.width - 4) + 'px';
+    }, 550);
+  });
+  document.addEventListener('mousedown', hideTip, true);
+
+  // ───────────────────────────── modals / menus ─────────────────────────────
+  const modalStack = [];
+  function openModal(content, { cls = '', onClose, dismissable = true } = {}) {
+    const overlay = h('div', { class: 'overlay ' + cls });
+    overlay.append(content);
+    overlay.addEventListener('mousedown', (e) => {
+      if (e.target === overlay && entry.dismissable) close();
+    });
+    $('#layer').append(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+    let closed = false;
+    const entry = { close: () => close(), dismissable, overlay };
+    function close() {
+      if (closed) return;
+      closed = true;
+      const i = modalStack.indexOf(entry);
+      if (i >= 0) modalStack.splice(i, 1);
+      overlay.classList.remove('open');
+      setTimeout(() => {
+        overlay.remove();
+        sweepAvatars();
+      }, 180);
+      if (onClose) onClose();
+    }
+    modalStack.push(entry);
+    hideTip();
+    return close;
+  }
+
+  function confirmDialog({ title, body, confirmText = 'Confirm', danger = false }) {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        resolve(v);
+        close();
+      };
+      const okBtn = h('button', { class: 'btn ' + (danger ? 'danger-fill' : 'primary'), onclick: () => finish(true) }, confirmText);
+      const box = h(
+        'div',
+        { class: 'dialog confirm', role: 'dialog', 'aria-modal': 'true' },
+        h('h2', { class: 'dialog-title' }, title),
+        body && h('p', { class: 'dialog-body' }, body),
+        h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => finish(false) }, 'Cancel'), okBtn)
+      );
+      const close = openModal(box, { onClose: () => finish(false) });
+      setTimeout(() => okBtn.focus(), 30);
+    });
+  }
+
+  let openMenuEl = null;
+  function closeMenu() {
+    if (openMenuEl) {
+      openMenuEl.remove();
+      openMenuEl = null;
+    }
+  }
+  // items: {label, icon, action, danger, kbd, checked} | '-'
+  function buildMenu(items) {
+    const m = h('div', { class: 'menu', role: 'menu' });
+    for (const it of items) {
+      if (!it) continue;
+      if (it === '-') {
+        if (m.lastElementChild && !m.lastElementChild.classList.contains('menu-sep')) m.append(h('div', { class: 'menu-sep' }));
+        continue;
+      }
+      m.append(
+        h(
+          'button',
+          {
+            class: 'menu-item' + (it.danger ? ' danger' : ''),
+            role: 'menuitem',
+            onclick: () => {
+              closeMenu();
+              it.action();
+            },
+          },
+          it.icon ? icon(it.icon, 16) : null,
+          h('span', null, it.label),
+          it.checked ? h('span', { class: 'kbd' }, icon('check', 14)) : it.kbd ? h('span', { class: 'kbd' }, it.kbd) : null
+        )
+      );
+      if (it.disabled) m.lastElementChild.disabled = true;
+    }
+    while (m.lastElementChild && m.lastElementChild.classList.contains('menu-sep')) m.lastElementChild.remove();
+    return m;
+  }
+  function showMenu(items, x, y) {
+    closeMenu();
+    const m = buildMenu(items);
+    document.body.append(m);
+    const r = m.getBoundingClientRect();
+    m.style.left = clamp(x, 8, innerWidth - r.width - 8) + 'px';
+    m.style.top = clamp(y, 8, innerHeight - r.height - 8) + 'px';
+    openMenuEl = m;
+    hideTip();
+  }
+  // placement: 'top-start' (above, left-aligned) or 'bottom-start'
+  function menuAt(anchor, items, placement = 'bottom-start') {
+    closeMenu();
+    const m = buildMenu(items);
+    document.body.append(m);
+    const a = anchor.getBoundingClientRect();
+    const r = m.getBoundingClientRect();
+    const top = placement === 'top-start' ? a.top - r.height - 6 : a.bottom + 6;
+    m.style.left = clamp(a.left, 8, innerWidth - r.width - 8) + 'px';
+    m.style.top = clamp(top, 8, innerHeight - r.height - 8) + 'px';
+    openMenuEl = m;
+    hideTip();
+  }
+  document.addEventListener('mousedown', (e) => {
+    if (openMenuEl && !openMenuEl.contains(e.target)) closeMenu();
+  });
+  window.addEventListener('blur', closeMenu);
+
+  // ───────────────────────────── theme ─────────────────────────────
+  const mqLight = window.matchMedia('(prefers-color-scheme: light)');
+  function applyTheme() {
+    const t = S.prefs.theme || 'system';
+    const resolved = t === 'system' ? (mqLight.matches ? 'light' : 'dark') : t;
+    const changed = document.documentElement.dataset.theme !== resolved;
+    document.documentElement.dataset.theme = resolved;
+    applyTint();
+    if (changed && S.booted) {
+      // avatars are painted per theme
+      for (const el of liveAvatars) {
+        try {
+          el._av && el._av.set && el._av.set({ theme: resolved });
+        } catch {}
+      }
+      for (const el of $$('.av')) if (!el._live && el._look) {
+        const [shape, color, badge] = el._look.split('/');
+        paintAvatar(el, { shape, color }, el._size || el.offsetWidth || 36, { badge: badge || null });
+      }
+    }
+  }
+  mqLight.addEventListener ? mqLight.addEventListener('change', applyTheme) : mqLight.addListener(applyTheme);
+
+  // ───────────────────────────── screens (token / offline / boot) ─────────────────────────────
+  function showScreen(content) {
+    const s = $('#screen');
+    s.textContent = '';
+    s.append(content);
+    s.hidden = false;
+  }
+  function hideScreen() {
+    $('#screen').hidden = true;
+    $('#screen').textContent = '';
+    sweepAvatars();
+  }
+  function bootScreen() {
+    showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, 'Starting openbot…')));
+  }
+  function tokenScreen(msg) {
+    const input = h('input', { class: 'field', type: 'password', placeholder: 'Paste your openbot token', autocomplete: 'off' });
+    const go = () => {
+      const v = input.value.trim();
+      if (!v) return input.focus();
+      S.homeToken = v;
+      try {
+        sessionStorage.setItem('openbot.token', v);
+        localStorage.setItem('openbot.token', v);
+      } catch {}
+      boot();
+    };
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && go());
+    showScreen(
+      h(
+        'div',
+        { class: 'screen-card' },
+        h('div', { class: 'screen-art' }, avatar({ id: 'openbot', shape: 'blob', color: 'magenta' }, 72, { live: true })),
+        h('h1', { class: 'screen-title' }, 'Welcome to openbot'),
+        h(
+          'p',
+          { class: 'screen-sub' },
+          msg || 'This page needs your openbot token. Open openbot from the app, or paste the token that openbot-server printed when it started.'
+        ),
+        h('div', { class: 'screen-form' }, input, h('button', { class: 'btn primary', onclick: go }, 'Continue'))
+      )
+    );
+    setTimeout(() => input.focus(), 50);
+  }
+  function offlineScreen(err) {
+    const remote = S.conn.mode === 'remote';
+    const where = remote ? hostOf(S.conn.url) : 'this computer';
+    const unauthorized = err && err.status === 401;
+    showScreen(
+      h(
+        'div',
+        { class: 'screen-card' },
+        h('div', { class: 'screen-art' }, avatar({ id: 'offline', shape: 'teardrop', color: 'gray' }, 72, { live: true, state: 'sleeping' })),
+        h('h1', { class: 'screen-title' }, unauthorized ? 'The token was rejected' : 'Can’t reach your computer'),
+        h(
+          'p',
+          { class: 'screen-sub' },
+          unauthorized
+            ? `${where} didn’t accept the saved token. Check the token that openbot-server printed and connect again.`
+            : remote
+              ? `openbot couldn’t connect to ${where}. Make sure the PC is on, openbot-server is running there, and both computers are on the same network (or Tailscale).`
+              : `openbot couldn’t start its local service. ${err && err.message ? err.message : ''}`
+        ),
+        h(
+          'div',
+          { class: 'screen-actions' },
+          h('button', { class: 'btn primary', onclick: () => boot() }, icon('refresh', 15), 'Try again'),
+          remote &&
+            h(
+              'button',
+              {
+                class: 'btn',
+                onclick: async () => {
+                  try {
+                    S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
+                    boot();
+                  } catch (e) {
+                    fail(e);
+                  }
+                },
+              },
+              'Use this computer instead'
+            ),
+          remote && h('button', { class: 'btn', onclick: () => openSettings('computer') }, 'Computer settings')
+        )
+      )
+    );
+  }
+
+  // ───────────────────────────── boot ─────────────────────────────
+  async function boot() {
+    closeWS();
+    clearTimeout(boot.t);
+    if (!S.booted) boot.t = setTimeout(() => !S.booted && $('#screen').hidden && bootScreen(), 400);
+    if (!S.homeToken) return tokenScreen();
+    try {
+      const c = await home('/api/connection');
+      S.conn = Object.assign({ mode: 'local', url: '', token: '' }, c || {});
+    } catch (e) {
+      if (e.status === 401) return tokenScreen('That token didn’t work. Paste the token printed by openbot-server.');
+      if (e.network) return offlineScreen(e);
+      S.conn = { mode: 'local', url: '', token: '' };
+    }
+    try {
+      S.prefs = (await home('/api/prefs')) || {};
+      if (typeof S.prefs !== 'object') S.prefs = {};
+    } catch {
+      S.prefs = S.prefs || {};
+    }
+    applyTheme();
+    layoutShell();
+    if (S.conn.mode === 'remote' && S.conn.url) {
+      S.apiBase = S.conn.url.replace(/\/+$/, '');
+      S.apiToken = S.conn.token;
+    } else {
+      S.apiBase = location.origin;
+      S.apiToken = S.homeToken;
+    }
+    let b;
+    try {
+      b = await api('/api/bootstrap');
+    } catch (e) {
+      return offlineScreen(e);
+    }
+    S.msgs.clear();
+    S.hasMore.clear();
+    S.nodes.clear();
+    S.seps.clear();
+    applyBootstrap(b);
+    hideScreen();
+    S.booted = true;
+    $('#app').classList.remove('booting');
+    renderMe();
+    renderSidebar();
+    const want = S.current && S.bots.has(S.current) ? S.current : S.prefs.lastBotId;
+    const first = (want && S.bots.has(want) && want) || (orderedBots()[0] || {}).id;
+    if (first) selectBot(first, { focus: true });
+    else {
+      S.current = null;
+      renderChat();
+    }
+    connectWS();
+    if (S.settingsUI) rerenderSettings(true);
+  }
+  function applyBootstrap(b) {
+    S.bots.clear();
+    for (const bot of (b && b.bots) || []) {
+      S.bots.set(bot.id, bot);
+      trackRun(bot);
+    }
+    S.settings = (b && b.settings) || S.settings;
+    S.computer = (b && b.computer) || S.computer;
+    S.usage = (b && b.usage) || S.usage;
+    S.version = (b && b.version) || S.version;
+    migratePins();
+    renderUsageBanner();
+  }
+  function trackRun(bot, prev) {
+    if (bot.running && !(prev && prev.running)) {
+      if (!S.runStart.has(bot.id)) S.runStart.set(bot.id, Date.now());
+    } else if (!bot.running) S.runStart.delete(bot.id);
+  }
+
+  // ───────────────────────────── websocket ─────────────────────────────
+  function closeWS() {
+    S.wsGen++;
+    if (S.ws) {
+      try {
+        S.ws.close();
+      } catch {}
+    }
+    S.ws = null;
+    S.wsOk = false;
+    S.wsEverOpened = false;
+    S.wsRetry = 1000;
+    setConnBanner(false);
+  }
+  function connectWS() {
+    const gen = ++S.wsGen;
+    let u;
+    try {
+      u = new URL(S.apiBase);
+    } catch {
+      return;
+    }
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    u.pathname = '/api/events';
+    u.search = '?token=' + encodeURIComponent(S.apiToken || '');
+    let ws;
+    try {
+      ws = new WebSocket(u.toString());
+    } catch {
+      return scheduleReconnect(gen);
+    }
+    S.ws = ws;
+    ws.onopen = () => {
+      if (gen !== S.wsGen) return;
+      const reconnected = S.wsEverOpened;
+      S.wsOk = true;
+      S.wsEverOpened = true;
+      S.wsRetry = 1000;
+      setConnBanner(false);
+      if (reconnected) resync();
+      if (S.settingsUI) rerenderSettings();
+    };
+    ws.onmessage = (ev) => {
+      if (gen !== S.wsGen) return;
+      let e;
+      try {
+        e = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      try {
+        onEvent(e);
+      } catch (err) {
+        console.error('event error', err, e);
+      }
+    };
+    ws.onclose = () => {
+      if (gen !== S.wsGen) return;
+      S.wsOk = false;
+      setConnBanner(true);
+      scheduleReconnect(gen);
+      if (S.settingsUI) rerenderSettings();
+    };
+    ws.onerror = () => {};
+  }
+  function scheduleReconnect(gen) {
+    setTimeout(() => {
+      if (gen === S.wsGen) connectWS();
+    }, S.wsRetry);
+    S.wsRetry = Math.min(S.wsRetry * 2, 10000);
+  }
+  function setConnBanner(show) {
+    clearTimeout(S.bannerTimer);
+    const el = $('#connBanner');
+    if (!show) {
+      el.hidden = true;
+      return;
+    }
+    S.bannerTimer = setTimeout(() => {
+      if (S.wsOk) return;
+      el.textContent = '';
+      el.append(spinner('xs'), h('span', null, `Reconnecting to ${S.conn.mode === 'remote' ? hostOf(S.apiBase) : 'openbot'}…`));
+      el.hidden = false;
+    }, 1500);
+  }
+  async function resync() {
+    try {
+      const b = await api('/api/bootstrap');
+      applyBootstrap(b);
+      const keep = S.current;
+      S.msgs.clear();
+      S.hasMore.clear();
+      renderSidebar();
+      if (keep && S.bots.has(keep)) {
+        await loadMessages(keep);
+        if (S.current === keep) renderMessages(true);
+      } else renderChat();
+      if (S.panelOpen) renderPanel();
+    } catch (e) {
+      console.warn('resync failed', e);
+    }
+  }
+
+  function onEvent(e) {
+    switch (e.type) {
+      case 'hello':
+        if (e.version) S.version = e.version;
+        break;
+      case 'resync':
+        resync();
+        break;
+      case 'bot.created':
+      case 'bot.updated': {
+        if (!e.bot) break;
+        const prev = S.bots.get(e.bot.id);
+        S.bots.set(e.bot.id, e.bot);
+        trackRun(e.bot, prev);
+        renderSidebar();
+        if (e.bot.id === S.current) {
+          renderChatHeader();
+          applyTint();
+          updateComposer();
+          scheduleRender();
+          if (e.bot.unread > 0) markReadSoon();
+          if (S.panelOpen) refreshPanelBot();
+        }
+        break;
+      }
+      case 'bot.deleted': {
+        S.bots.delete(e.bot_id);
+        S.msgs.delete(e.bot_id);
+        if (S.prefs.pinned) S.prefs.pinned = S.prefs.pinned.filter((x) => x !== e.bot_id);
+        renderSidebar();
+        if (S.current === e.bot_id) {
+          const next = orderedBots()[0];
+          if (next) selectBot(next.id);
+          else {
+            S.current = null;
+            setPanel(false);
+            renderChat();
+          }
+        }
+        break;
+      }
+      case 'message.created':
+      case 'message.updated':
+        if (e.message) upsertMessage(e.message, e.type === 'message.created');
+        break;
+      case 'messages.cleared':
+        if (S.msgs.has(e.bot_id)) S.msgs.set(e.bot_id, []);
+        S.hasMore.set(e.bot_id, false);
+        if (e.bot_id === S.current) renderMessages(true);
+        break;
+      case 'usage.updated':
+        S.usage = e.usage;
+        if (S.settingsUI && S.settingsUI.tab === 'usage') rerenderSettings();
+        break;
+      case 'settings.updated':
+        S.settings = e.settings;
+        if (S.settingsUI) rerenderSettings();
+        break;
+      case 'routines.updated':
+        if (S.panelOpen && (!e.bot_id || e.bot_id === S.current)) loadPanelLists('routines');
+        break;
+      case 'memories.updated':
+        if (S.panelOpen && (!e.bot_id || e.bot_id === S.current)) loadPanelLists('memories');
+        break;
+      default:
+        break;
+    }
+  }
+
+  // ───────────────────────────── shell layout (sidebar width, rail, panel) ─────────────────────────────
+  const app = $('#app');
+  const isPhone = () => innerWidth <= 520;
+  function sidebarWidth() {
+    return clamp(Number(S.prefs.sidebarWidth) || SB_DEFAULT, SB_MIN, SB_MAX);
+  }
+  function layoutShell() {
+    const w = sidebarWidth();
+    const rail = !isPhone() && (!!S.prefs.sidebarCollapsed || innerWidth < w + CHAT_MIN);
+    app.classList.toggle('rail', rail);
+    app.style.setProperty('--sbw', (rail ? RAIL : w) + 'px');
+    const sb = rail ? RAIL : w;
+    app.classList.toggle('panel-float', S.panelOpen && !isPhone() && innerWidth - sb - PANEL_W < CHAT_MIN);
+  }
+  function animateShell(fn) {
+    app.classList.add('sb-anim');
+    fn();
+    clearTimeout(animateShell.t);
+    animateShell.t = setTimeout(() => app.classList.remove('sb-anim'), 260);
+  }
+  function toggleRail() {
+    if (isPhone()) {
+      app.classList.toggle('sidebar-open');
+      return;
+    }
+    const w = sidebarWidth();
+    const autoRail = innerWidth < w + CHAT_MIN;
+    if (autoRail && !S.prefs.sidebarCollapsed) {
+      toast('Make the window wider to show the full sidebar');
+      return;
+    }
+    animateShell(() => {
+      S.prefs.sidebarCollapsed = !S.prefs.sidebarCollapsed;
+      savePrefs();
+      layoutShell();
+    });
+  }
+  window.addEventListener('resize', () => {
+    layoutShell();
+    closeMenu();
+    layoutComposer();
+  });
+  // drag the sidebar edge: 240–400px; below 210px it snaps to the 88px rail, re-expands past 220px
+  (() => {
+    const handle = $('#sbResize');
+    let drag = null;
+    handle.addEventListener('pointerdown', (e) => {
+      if (isPhone()) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      drag = { id: e.pointerId };
+      document.body.classList.add('resizing');
+    });
+    handle.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const x = e.clientX;
+      if (S.prefs.sidebarCollapsed) {
+        if (x > 220) {
+          S.prefs.sidebarCollapsed = false;
+          S.prefs.sidebarWidth = clamp(x, SB_MIN, SB_MAX);
+        }
+      } else if (x < 210) S.prefs.sidebarCollapsed = true;
+      else S.prefs.sidebarWidth = clamp(x, SB_MIN, SB_MAX);
+      layoutShell();
+    });
+    const end = () => {
+      if (!drag) return;
+      drag = null;
+      document.body.classList.remove('resizing');
+      savePrefs();
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+    handle.addEventListener('dblclick', () => {
+      S.prefs.sidebarWidth = SB_DEFAULT;
+      S.prefs.sidebarCollapsed = false;
+      savePrefs();
+      animateShell(layoutShell);
+    });
+  })();
+
+  // ───────────────────────────── sidebar ─────────────────────────────
+  const sortedBots = () => [...S.bots.values()].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+  const pinnedIds = () => {
+    const order = Array.isArray(S.prefs.pinOrder) ? S.prefs.pinOrder : [];
+    const rank = (b) => {
+      const i = order.indexOf(b.id);
+      return i < 0 ? 1e6 + (b.created_at || 0) / 1e13 : i;
+    };
+    return [...S.bots.values()].filter((b) => b.pinned && !b.hidden).sort((a, b) => rank(a) - rank(b)).map((b) => b.id);
+  };
+  // order used by ⌘1…⌘9, ⌥↑/↓ and "first bot": pinned tiles, then rows
+  function orderedBots() {
+    const pins = pinnedIds();
+    const rest = sortedBots().filter((b) => !b.hidden && !pins.includes(b.id));
+    return [...pins.map((id) => S.bots.get(id)), ...rest];
+  }
+  function renderMe() {
+    const name = (S.prefs.userName || 'You').trim() || 'You';
+    $('#meCircle').textContent = name[0].toUpperCase();
+    $('#meName').textContent = name;
+  }
+  function isWaiting(b) {
+    return !!(b.running && ((b.activity && b.activity.kind === 'waiting_for_you') || /^Needs your OK: /.test(b.last_preview || '')));
+  }
+  function previewOf(b) {
+    if (isWaiting(b)) {
+      const reason = /^Needs your OK: /.test(b.last_preview || '') ? b.last_preview.replace(/^Needs your OK: /, '') : (b.activity && b.activity.label) || '';
+      return { warn: true, text: 'Waiting for you' + (reason && reason !== 'Waiting for you' ? ': ' + reason : '') };
+    }
+    const d = b.id !== S.current && S.drafts.get(b.id);
+    if (d && d.text && d.text.trim()) return { draft: d.text.trim().split('\n')[0] };
+    const firstLine = (b.last_preview || '').split('\n').find((l) => l.trim()) || '';
+    return { text: firstLine.trim() || 'No messages yet' };
+  }
+
+  const rowCache = new Map(); // key → {el, parts}
+  function botRowEl(b, layout) {
+    const key = layout + ':' + b.id;
+    let c = rowCache.get(key);
+    if (!c) {
+      const av = h('span', { class: 'av', style: { width: (layout === 'tile' ? 60 : 36) + 'px', height: (layout === 'tile' ? 60 : 36) + 'px' } });
+      av._size = layout === 'tile' ? 60 : 36;
+      const badge = h('span', { class: 'av-badge' });
+      let el;
+      const parts = { av, badge };
+      const handlers = {
+        onclick: (e) => {
+          if (e.detail > 1) return;
+          selectBot(b.id);
+        },
+        ondblclick: () => startRename(b.id, parts),
+        oncontextmenu: (e) => {
+          e.preventDefault();
+          botMenu(S.bots.get(b.id), e.clientX, e.clientY);
+        },
+        onkeydown: (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            selectBot(b.id);
+          }
+        },
+        onpointermove: (e) => {
+          if (av._av && av._av.lookAt) {
+            const r = av.getBoundingClientRect();
+            if (!r.width) return;
+            const nx = clamp((e.clientX - (r.left + r.width / 2)) / (r.width * 2), -1, 1);
+            const ny = clamp((e.clientY - (r.top + r.height / 2)) / (r.height * 2), -1, 1);
+            try {
+              av._av.lookAt(nx, ny);
+            } catch {}
+          }
+        },
+        onpointerleave: () => {
+          if (av._av && av._av.lookAt) {
+            try {
+              av._av.lookAt(null);
+            } catch {}
+          }
+        },
+      };
+      if (layout === 'tile') {
+        parts.name = h('span', { class: 'tile-name' });
+        el = h('div', Object.assign({ class: 'tile', role: 'listitem', tabindex: '-1' }, handlers), h('span', { class: 'tile-av' }, av, badge), parts.name);
+      } else {
+        parts.name = h('span', { class: 'row-name' });
+        parts.preview = h('span', { class: 'row-preview' });
+        parts.dot = h('span', { class: 'row-dot' });
+        parts.kbd = h('span', { class: 'row-kbd' });
+        el = h(
+          'div',
+          Object.assign({ class: 'row-item', role: 'listitem', tabindex: '-1' }, handlers),
+          h('span', { class: 'row-av' }, av, badge),
+          h('span', { class: 'row-body' }, parts.name, parts.preview),
+          parts.dot,
+          parts.kbd
+        );
+      }
+      c = { el, parts, layout };
+      rowCache.set(key, c);
+    }
+    updateRowEl(c, b);
+    return c.el;
+  }
+  function updateRowEl(c, b) {
+    const { el, parts, layout } = c;
+    const active = b.id === S.current;
+    const waiting = isWaiting(b);
+    const unread = !active && b.unread > 0;
+    el.classList.toggle('active', active);
+    el.setAttribute('aria-current', active ? 'page' : 'false');
+    el.setAttribute('aria-label', b.name + (b.main ? ', Main Bot' : '') + (b.running ? ', Working' : '') + (unread ? ', Unread activity' : ''));
+    el.tabIndex = active ? 0 : -1;
+    el.classList.toggle('has-dot', unread || waiting);
+    parts.badge.classList.toggle('warn', waiting);
+    parts.badge.hidden = !(unread || waiting);
+    if (!parts.renaming && parts.name.textContent !== b.name) parts.name.textContent = b.name;
+    el.title = layout === 'tile' || app.classList.contains('rail') ? b.name : '';
+    syncAvatar(parts.av, b, layout === 'tile' ? 60 : 36, { live: true, state: botState(b), badge: b.main ? 'main' : null });
+    if (layout === 'row') {
+      const p = previewOf(b);
+      parts.preview.textContent = '';
+      parts.preview.classList.toggle('warn', !!p.warn);
+      if (p.draft != null) parts.preview.append(h('span', { class: 'draft-label' }, 'Draft:'), ' ' + p.draft);
+      else parts.preview.textContent = p.text;
+      parts.dot.hidden = !(unread || waiting);
+      parts.dot.classList.toggle('warn', waiting);
+      parts.dot.setAttribute('aria-label', waiting ? 'Needs attention' : 'Unread activity');
+    }
+  }
+  function reconcile(parent, want) {
+    want.forEach((el, i) => {
+      if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
+    });
+    while (parent.children.length > want.length) parent.lastElementChild.remove();
+  }
+  let tilesEl = null;
+  let pinDivider = null;
+  let hiddenHead = null;
+  function renderSidebar() {
+    const list = $('#botList');
+    const all = sortedBots();
+    const pins = pinnedIds();
+    const vis = all.filter((b) => !b.hidden && !pins.includes(b.id));
+    const hid = all.filter((b) => b.hidden);
+    const want = [];
+    const used = new Set();
+    if (pins.length) {
+      if (!tilesEl) tilesEl = h('div', { class: 'tiles', role: 'list', 'aria-label': 'Pinned' });
+      const tiles = pins.map((id) => {
+        used.add('tile:' + id);
+        return botRowEl(S.bots.get(id), 'tile');
+      });
+      reconcile(tilesEl, tiles);
+      // cap the tile row so few tiles stay centred (shell.md 3.3.1)
+      tilesEl.style.maxWidth = pins.length < 3 ? pins.length * 99 - 4 + 'px' : '';
+      want.push(tilesEl);
+      if (!pinDivider) pinDivider = h('div', { class: 'pinned-divider' });
+      want.push(pinDivider);
+    }
+    if (!all.length) want.push(h('div', { class: 'sb-empty' }, 'No saved Bots yet'));
+    vis.forEach((b, i) => {
+      used.add('row:' + b.id);
+      const el = botRowEl(b, 'row');
+      const c = rowCache.get('row:' + b.id);
+      const n = pins.length + i + 1;
+      c.parts.kbd.textContent = n <= 9 ? MOD + n : '';
+      want.push(el);
+    });
+    if (hid.length) {
+      if (!hiddenHead) {
+        hiddenHead = h('button', {
+          class: 'sec-head',
+          onclick: () => {
+            S.hiddenOpen = !S.hiddenOpen;
+            renderSidebar();
+          },
+        });
+      }
+      hiddenHead.textContent = '';
+      hiddenHead.classList.toggle('open', S.hiddenOpen);
+      hiddenHead.setAttribute('aria-expanded', S.hiddenOpen ? 'true' : 'false');
+      hiddenHead.append(h('span', null, 'Hidden Bots'), h('span', { class: 'sec-count' }, h('span', { class: 'num' }, String(hid.length)), icon('chevronRight', 12, '', 2.2)));
+      want.push(hiddenHead);
+      if (S.hiddenOpen) {
+        for (const b of hid) {
+          used.add('row:' + b.id);
+          const el = botRowEl(b, 'row');
+          rowCache.get('row:' + b.id).parts.kbd.textContent = '';
+          want.push(el);
+        }
+      }
+    }
+    reconcile(list, want);
+    for (const [k] of rowCache) if (!used.has(k)) rowCache.delete(k);
+    updateBadge();
+    sweepAvatars();
+  }
+  function startRename(id, parts) {
+    const b = S.bots.get(id);
+    if (!b || parts.renaming) return;
+    parts.renaming = true;
+    const inp = h('input', { class: 'rename-input', value: b.name, maxlength: '60', 'aria-label': 'Rename Bot' });
+    parts.name.textContent = '';
+    parts.name.append(inp);
+    inp.focus();
+    inp.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      parts.renaming = false;
+      const v = inp.value.trim();
+      parts.name.textContent = b.name;
+      if (save && v && v !== b.name) await patchBot(b.id, { name: v });
+      renderSidebar();
+    };
+    inp.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') finish(true);
+      else if (e.key === 'Escape') finish(false);
+    });
+    inp.addEventListener('blur', () => finish(true));
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    inp.addEventListener('dblclick', (e) => e.stopPropagation());
+  }
+  function botMenu(b, x, y) {
+    if (!b) return;
+    const pinned = pinnedIds().includes(b.id);
+    showMenu(
+      [
+        !b.hidden && { label: pinned ? 'Unpin' : 'Pin', icon: pinned ? 'pinOff' : 'pin', action: () => togglePin(b) },
+        b.unread > 0 && { label: 'Mark as Read', icon: 'bell', action: () => markRead(b) },
+        !b.unread && b.id !== S.current && { label: 'Mark as Unread', icon: 'bell', action: () => markUnread(b) },
+        '-',
+        {
+          label: 'Rename Bot',
+          icon: 'pencil',
+          action: () => {
+            const c = rowCache.get((pinned ? 'tile:' : 'row:') + b.id);
+            if (c && c.layout === 'row' && !app.classList.contains('rail')) startRename(b.id, c.parts);
+            else {
+              selectBot(b.id);
+              setPanel(true, { focusName: true });
+            }
+          },
+        },
+        { label: 'Edit avatar', icon: 'sparkle', action: () => openAvatarEditor(b) },
+        {
+          label: 'Bot settings',
+          icon: 'gear',
+          kbd: isMac ? '⌘⇧,' : 'Ctrl+Shift+,',
+          action: () => {
+            selectBot(b.id);
+            setPanel(true);
+          },
+        },
+        '-',
+        { label: b.hidden ? 'Show in sidebar' : 'Hide from sidebar', icon: b.hidden ? 'eye' : 'eyeOff', action: () => setHidden(b, !b.hidden) },
+        { label: 'Reset conversation', icon: 'reset', action: () => resetBot(b) },
+        { label: 'Delete', icon: 'trash', danger: true, action: () => deleteBot(b) },
+      ],
+      x,
+      y
+    );
+  }
+  async function togglePin(b) {
+    const pin = !b.pinned;
+    const order = (Array.isArray(S.prefs.pinOrder) ? S.prefs.pinOrder : []).filter((id) => id !== b.id && S.bots.has(id));
+    if (pin) order.push(b.id);
+    S.prefs.pinOrder = order;
+    savePrefs();
+    b.pinned = pin;
+    renderSidebar();
+    const nb = await patchBot(b.id, { pinned: pin });
+    if (!nb) {
+      b.pinned = !pin;
+      renderSidebar();
+    }
+  }
+  // one-time move of pins kept in prefs (older builds) onto the bots themselves
+  function migratePins() {
+    const old = Array.isArray(S.prefs.pinned) ? S.prefs.pinned : null;
+    if (!old) return;
+    delete S.prefs.pinned;
+    S.prefs.pinOrder = old.filter((id) => S.bots.has(id));
+    savePrefs();
+    for (const id of S.prefs.pinOrder) {
+      const b = S.bots.get(id);
+      if (b && !b.pinned) {
+        b.pinned = true;
+        api(`/api/bots/${id}`, { method: 'PATCH', body: { pinned: true } }).catch(() => {});
+      }
+    }
+  }
+  async function markRead(b) {
+    b.unread = 0;
+    renderSidebar();
+    api(`/api/bots/${b.id}/read`, { method: 'POST' }).catch(() => {});
+  }
+  async function markUnread(b) {
+    b.unread = 1;
+    renderSidebar();
+    api(`/api/bots/${b.id}/unread`, { method: 'POST' }).catch(() => {});
+  }
+  async function patchBot(id, body) {
+    try {
+      const nb = await api(`/api/bots/${id}`, { method: 'PATCH', body });
+      if (nb && nb.id) {
+        const prev = S.bots.get(nb.id);
+        S.bots.set(nb.id, nb);
+        trackRun(nb, prev);
+        renderSidebar();
+        if (nb.id === S.current) {
+          renderChatHeader();
+          applyTint();
+          updateComposer();
+          scheduleRender();
+          if (S.panelOpen) refreshPanelBot();
+        }
+      }
+      return nb;
+    } catch (e) {
+      fail(e);
+      return null;
+    }
+  }
+  async function setHidden(b, hidden) {
+    const nb = await patchBot(b.id, { hidden });
+    if (nb) toast(hidden ? `${b.name} is hidden` : `${b.name} is back in your sidebar`);
+  }
+  async function resetBot(b) {
+    const ok = await confirmDialog({
+      title: 'Reset this conversation?',
+      body: `This clears the chat and starts a fresh conversation with ${b.name}. Files in its folder stay where they are.`,
+      confirmText: 'Reset',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/bots/${b.id}/reset`, { method: 'POST' });
+      S.msgs.set(b.id, []);
+      S.hasMore.set(b.id, false);
+      if (S.current === b.id) renderMessages(true);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  async function deleteBot(b) {
+    const ok = await confirmDialog({
+      title: `Delete ${b.name}?`,
+      body: 'This permanently deletes the Bot and its chat history. This can’t be undone. Files in its folder on the computer are kept.',
+      confirmText: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/bots/${b.id}`, { method: 'DELETE' });
+      onEvent({ type: 'bot.deleted', bot_id: b.id });
+    } catch (e) {
+      fail(e);
+    }
+  }
+  // sidebar list fade: no top fade while scrolled to the top
+  $('#sbScroll').addEventListener('scroll', (e) => e.currentTarget.classList.toggle('at-top', e.currentTarget.scrollTop < 2));
+  $('#sbScroll').classList.add('at-top');
+
+  // ───────────────────────────── chat: selection, loading ─────────────────────────────
+  function loadDraftStore() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('openbot.drafts') || '{}');
+      for (const k in raw) if (raw[k]) S.drafts.set(k, { text: raw[k], pending: [] });
+    } catch {}
+  }
+  const persistDrafts = debounce(() => {
+    const o = {};
+    for (const [k, v] of S.drafts) if (v.text) o[k] = v.text;
+    try {
+      localStorage.setItem('openbot.drafts', JSON.stringify(o));
+    } catch {}
+  }, 500);
+  function saveDraft() {
+    const b = curBot();
+    if (!b) return;
+    if (input.value || S.pending.length) S.drafts.set(b.id, { text: input.value, pending: S.pending });
+    else S.drafts.delete(b.id);
+    persistDrafts();
+  }
+  function restoreDraft() {
+    const d = S.current && S.drafts.get(S.current);
+    input.value = d ? d.text : '';
+    S.pending = d ? d.pending || [] : [];
+    S.composerExpanded = false;
+    renderAttachRow();
+    updateComposer();
+  }
+  async function selectBot(id, { focus = true } = {}) {
+    if (!S.bots.has(id)) return;
+    if (S.current !== id) {
+      saveDraft();
+      if (rec) rec.stop();
+      S.current = id;
+      S.prefs.lastBotId = id;
+      savePrefs();
+      restoreDraft();
+      S.nodes.clear();
+      S.seps.clear();
+      S.newCount = 0;
+      S.newDiv = null;
+      S.initialRender = true;
+      const b = S.bots.get(id);
+      if (b.unread > 0) S.newDiv = { botId: id, unread: b.unread, msgId: null };
+    }
+    renderSidebar();
+    applyTint();
+    renderChat();
+    if (S.panelOpen) renderPanel();
+    app.classList.remove('sidebar-open');
+    if (focus && !isPhone()) input.focus({ preventScroll: true });
+    if (!S.msgs.has(id)) {
+      await loadMessages(id);
+      if (S.current === id) renderMessages(true);
+    }
+    markReadSoon();
+  }
+  async function loadMessages(id, before) {
+    if (S.loading.has(id)) return;
+    S.loading.add(id);
+    try {
+      const limit = 200;
+      const list = (await api(`/api/bots/${id}/messages?limit=${limit}${before ? '&before=' + before : ''}`)) || [];
+      const cur = S.msgs.get(id);
+      if (before && cur) {
+        const ids = new Set(cur.map((m) => m.id));
+        S.msgs.set(id, [...list.filter((m) => !ids.has(m.id)), ...cur]);
+      } else if (cur && cur.length) {
+        const ids = new Set(list.map((m) => m.id));
+        S.msgs.set(id, [...list, ...cur.filter((m) => !ids.has(m.id) && !m._tmp)]);
+      } else S.msgs.set(id, list);
+      S.hasMore.set(id, list.length >= limit);
+    } catch (e) {
+      if (!S.msgs.has(id)) S.msgs.set(id, []);
+      fail(e);
+    } finally {
+      S.loading.delete(id);
+    }
+  }
+
+  function renderChat() {
+    renderChatHeader();
+    renderMessages(true);
+    updateComposer();
+  }
+  let islandAv = null;
+  function renderChatHeader() {
+    const pill = $('#island');
+    const b = curBot();
+    if (!b) {
+      pill.hidden = true;
+      return;
+    }
+    pill.hidden = false;
+    if (!islandAv) {
+      islandAv = h('span', { class: 'av', style: { width: '24px', height: '24px' } });
+      islandAv._size = 24;
+      pill.append(islandAv, h('span', { class: 'island-name' }), h('span', { class: 'island-chev' }, icon('chevronRight', 12, '', 2.6)));
+    }
+    syncAvatar(islandAv, b, 24);
+    const nm = $('.island-name', pill);
+    nm.textContent = b.name;
+    pill.title = b.name;
+    pill.setAttribute('aria-expanded', S.panelOpen ? 'true' : 'false');
+    pill.dataset.tip = 'Bot settings';
+    pill.dataset.kbd = isMac ? '⌘⇧,' : 'Ctrl+Shift+,';
+  }
+
+  // ───────────────────────────── chat: transcript ─────────────────────────────
+  const msgsEl = $('#messages');
+  const colEl = $('#msgInner');
+  const distFromBottom = () => msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight;
+  function scrollBottom(smooth) {
+    msgsEl.scrollTo({ top: msgsEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+    S.pinned = true;
+    S.newCount = 0;
+    updateJump();
+  }
+  function updateJump() {
+    const d = distFromBottom();
+    const pill = $('#newPill');
+    const btn = $('#toBottom');
+    if (d < 8) {
+      S.newCount = 0;
+    }
+    pill.hidden = !(S.newCount > 0);
+    if (!pill.hidden) {
+      pill.textContent = '';
+      pill.append(icon('arrowDown', 20), h('span', null, S.newCount === 1 ? 'New message' : `${S.newCount} new messages`));
+      pill.append(
+        h(
+          'button',
+          {
+            class: 'x',
+            'aria-label': 'Dismiss new messages',
+            onclick: (e) => {
+              e.stopPropagation();
+              S.newCount = 0;
+              updateJump();
+            },
+          },
+          icon('x', 12, '', 2.4)
+        )
+      );
+    }
+    btn.hidden = !pill.hidden || d <= 80 || !curBot();
+  }
+  // keep the view pinned to the bottom when the column changes size (panel, sidebar, window)
+  new ResizeObserver(() => {
+    if (S.pinned) msgsEl.scrollTop = msgsEl.scrollHeight;
+  }).observe(msgsEl);
+  let lastBox = '';
+  msgsEl.addEventListener('scroll', () => {
+    const box = msgsEl.clientWidth + 'x' + msgsEl.clientHeight;
+    if (box === lastBox) S.pinned = distFromBottom() < 8;
+    else if (S.pinned) msgsEl.scrollTop = msgsEl.scrollHeight;
+    lastBox = box;
+    updateJump();
+    maybeLoadOlder();
+  });
+  const maybeLoadOlder = debounce(async () => {
+    const b = curBot();
+    if (!b || msgsEl.scrollTop > 120 || !S.hasMore.get(b.id) || S.loading.has(b.id)) return;
+    const list = S.msgs.get(b.id) || [];
+    const oldest = list.find((m) => !m._tmp);
+    if (!oldest) return;
+    const prevH = msgsEl.scrollHeight;
+    const prevTop = msgsEl.scrollTop;
+    renderMessages(false);
+    await loadMessages(b.id, oldest.created_at);
+    if (S.current !== b.id) return;
+    renderMessages(false);
+    msgsEl.scrollTop = msgsEl.scrollHeight - prevH + prevTop;
+  }, 120);
+
+  const isShown = (m) => {
+    if (m.role === 'tool') return S.prefs.showTools === true;
+    return true;
+  };
+  const speakerOf = (role) => (role === 'user' ? 'user' : role === 'event' || role === 'system' ? 'center' : 'bot');
+  // a widget is "open" when it has no answer yet
+  const openWidget = (list) => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const m = list[i];
+      if (m.role === 'widget') return m.meta && m.meta.answer == null && m.status !== 'answered' ? m : null;
+      if (m.role === 'user') return null;
+    }
+    return null;
+  };
+  function sigOf(m) {
+    const meta = m.meta || {};
+    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, m.role === 'tool' && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? approvalAnswers.get(meta.approval_id) || '' : ''].join('|');
+  }
+
+  let renderQueued = false;
+  function scheduleRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      renderMessages(false);
+    });
+  }
+
+  let emptyEl = null;
+  function renderMessages(toBottom) {
+    const b = curBot();
+    const wasPinned = S.pinned || distFromBottom() < 8;
+    if (!b) {
+      colEl.textContent = '';
+      S.nodes.clear();
+      colEl.append(noBotState());
+      updateJump();
+      return;
+    }
+    const list = S.msgs.get(b.id);
+    if (!list) {
+      reconcile(colEl, [h('div', { class: 'tx-spacer' }), h('div', { class: 'load-older' }, spinner('sm'))]);
+      return;
+    }
+    const shown = list.filter(isShown);
+    const want = [h('div', { class: 'tx-spacer' })];
+    want[0] = colEl.firstElementChild && colEl.firstElementChild.classList.contains('tx-spacer') ? colEl.firstElementChild : want[0];
+    const act = activityFor(b, list);
+    if (!shown.length && !act) {
+      if (!emptyEl || emptyEl._bot !== b.id) emptyEl = emptyChat(b);
+      reconcile(colEl, [emptyEl]);
+      S.nodes.clear();
+      updateJump();
+      sweepAvatars();
+      return;
+    }
+    if (S.hasMore.get(b.id)) {
+      want.push(h('div', { class: 'load-older' }, S.loading.has(b.id) ? spinner('sm') : ''));
+    }
+    // NEW divider: before the first unread message (counted from the end)
+    if (S.newDiv && S.newDiv.botId === b.id && !S.newDiv.msgId && S.newDiv.unread > 0) {
+      let n = 0;
+      for (let i = shown.length - 1; i >= 0; i--) {
+        if (shown[i].role === 'user') break;
+        n++;
+        if (n >= S.newDiv.unread) {
+          S.newDiv.msgId = shown[i].id;
+          break;
+        }
+      }
+      if (!S.newDiv.msgId && n > 0) S.newDiv.msgId = shown[shown.length - n].id;
+    }
+    const seen = new Set();
+    let prev = null;
+    for (const m of shown) {
+      if (!prev || m.created_at - prev.created_at >= 15 * 60 * 1000 || !sameDay(prev.created_at, m.created_at)) {
+        const key = 't:' + m.id;
+        let sep = S.seps.get(key);
+        if (!sep) {
+          sep = h('div', { class: 'tsep', role: 'separator' }, timeLabel(m.created_at));
+          S.seps.set(key, sep);
+        }
+        want.push(sep);
+      }
+      if (S.newDiv && S.newDiv.botId === b.id && S.newDiv.msgId === m.id) {
+        let nd = S.seps.get('new');
+        if (!nd) {
+          nd = h('div', { class: 'newdiv', role: 'separator', 'aria-label': 'New messages' }, h('span', null, 'New'));
+          S.seps.set('new', nd);
+        }
+        want.push(nd);
+      }
+      want.push(rowFor(m));
+      seen.add(m.id);
+      prev = m;
+    }
+    if (act) want.push(act);
+    reconcile(colEl, want);
+    for (const id of [...S.nodes.keys()]) if (!seen.has(id)) S.nodes.delete(id);
+    regroup();
+    S.initialRender = false;
+    if (toBottom || wasPinned) {
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      S.pinned = true;
+      if (toBottom) requestAnimationFrame(() => (msgsEl.scrollTop = msgsEl.scrollHeight));
+    }
+    updateJump();
+    sweepAvatars();
+  }
+  function rowFor(m) {
+    const sig = sigOf(m);
+    const c = S.nodes.get(m.id);
+    if (c && c.sig === sig) return c.el;
+    if (c && m.role === 'bot' && c.role === 'bot') {
+      const bubble = $('.bubble', c.el);
+      if (bubble) {
+        fillBotBubble(bubble, m);
+        c.sig = sig;
+        return c.el;
+      }
+    }
+    const el = msgNode(m);
+    if (!c && !S.initialRender) el.classList.add('enter');
+    if (c) el.className = el.className + (c.el.classList.contains('gs') ? ' gs' : '');
+    S.nodes.set(m.id, { el, sig, role: m.role });
+    return el;
+  }
+  // group spacing (12px at a speaker change, 4px inside a run) and touching corners (6px)
+  function regroup() {
+    const rows = Array.from(colEl.children);
+    for (let i = 0; i < rows.length; i++) {
+      const n = rows[i];
+      const sp = n.dataset.speaker;
+      if (!sp) continue;
+      const p = rows[i - 1];
+      const nx = rows[i + 1];
+      const pSp = p && p.dataset.speaker;
+      const nSp = nx && nx.dataset.speaker;
+      n.classList.toggle('gs', !!(pSp && pSp !== sp && sp !== 'center'));
+      const bubble = n.querySelector(':scope > .stack > .bwrap:last-child > .bubble');
+      const firstBubble = n.querySelector(':scope > .stack > .bwrap:first-child > .bubble');
+      if (firstBubble) firstBubble.classList.toggle('cp', !!(pSp === sp && sp !== 'center' && p.dataset.bubbleEnd === '1'));
+      if (bubble) bubble.classList.toggle('cn', !!(nSp === sp && sp !== 'center' && nx.dataset.bubbleStart === '1'));
+    }
+  }
+
+  // working indicator: animated 28px mark + shimmering activity phrase + elapsed time (shell.md 4.7)
+  let actEl = null;
+  function activityFor(b, list) {
+    if (!b.running) return null;
+    const last = list[list.length - 1];
+    if (last && last.role === 'bot' && last.status === 'streaming') return null;
+    if (last && last.role === 'approval' && last.status === 'pending') return null;
+    if (last && last.role === 'widget' && openWidget(list)) return null;
+    if (!actEl) {
+      const av = h('span', { class: 'av', style: { width: '28px', height: '28px' } });
+      av._size = 28;
+      av.addEventListener('click', () => pokeAvatar(av));
+      const phrase = h('span', { class: 'act-phrase shimmer' });
+      const elapsed = h('span', { class: 'act-elapsed' });
+      actEl = h(
+        'div',
+        { class: 'row bot', 'data-speaker': 'bot', 'data-bubble-start': '1', role: 'status' },
+        h('div', { class: 'activity' }, av, h('span', { class: 'act-text' }, phrase, elapsed))
+      );
+      actEl._parts = { av, phrase, elapsed };
+    }
+    const { av, phrase } = actEl._parts;
+    if (av._bot !== b.id) {
+      av._bot = b.id;
+      av._look = null;
+    }
+    syncAvatar(av, b, 28, { live: true, state: botState(b) });
+    const start = S.runStart.get(b.id) || Date.now();
+    const text = (b.activity && b.activity.label) || WORK_PHRASES[Math.floor(start / 1000) % WORK_PHRASES.length];
+    if (phrase.textContent !== text) {
+      const had = !!phrase.textContent;
+      phrase.textContent = text;
+      if (had) {
+        phrase.classList.remove('swap');
+        void phrase.offsetWidth;
+        phrase.classList.add('swap');
+      }
+    }
+    tickActivity();
+    return actEl;
+  }
+  function tickActivity() {
+    if (!actEl || !actEl.isConnected) return;
+    const b = curBot();
+    if (!b) return;
+    const start = S.runStart.get(b.id);
+    const ms = start ? Date.now() - start : 0;
+    actEl._parts.elapsed.textContent = ms >= 5000 ? ` · ${fmtElapsed(ms)}` : '';
+  }
+  setInterval(tickActivity, 1000);
+
+  function noBotState() {
+    return h(
+      'div',
+      { class: 'empty-chat' },
+      avatar({ id: 'new', shape: 'blob', color: 'magenta' }, 72, { live: true }),
+      h('div', { class: 'empty-name' }, 'Create your first Bot'),
+      h('div', { class: 'empty-sub' }, 'Bots are Claude-powered helpers that work on your computer. Each one gets its own folder and remembers your chat.'),
+      h('div', { class: 'empty-actions' }, h('button', { class: 'btn primary', onclick: () => openNewBot() }, icon('plus', 15, '', 2), 'New Bot'), h('button', { class: 'btn', onclick: () => openTemplates() }, 'Browse templates'))
+    );
+  }
+  function emptyChat(b) {
+    const av = avatar(b, 72, { live: true, interactive: true });
+    av.addEventListener('click', () => pokeAvatar(av));
+    const el = h('div', { class: 'empty-chat', role: 'note' }, av, h('div', { class: 'empty-name' }, b.name), h('div', { class: 'empty-sub' }, 'No messages yet'));
+    el._bot = b.id;
+    return el;
+  }
+
+  // ── message rows
+  const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}(?:️|\p{Emoji_Modifier}|‍\p{Extended_Pictographic})*\s*){1,3}$/u;
+  function msgNode(m) {
+    const sp = speakerOf(m.role);
+    const wrap = h('div', { class: 'row ' + sp, 'data-speaker': sp, 'data-id': m.id, 'data-role': m.role });
+    const stack = h('div', { class: 'stack' });
+    wrap.append(stack);
+    let bubbleStart = false;
+    let bubbleEnd = false;
+    const title = m.created_at ? fmtTime(m.created_at) : null;
+    switch (m.role) {
+      case 'user': {
+        const atts = (m.meta && m.meta.attachments) || [];
+        const imgs = atts.filter(isImage);
+        const files = atts.filter((a) => !isImage(a));
+        if (imgs.length) stack.append(imageRow(imgs));
+        for (const f of files) stack.append(fileCard(f));
+        if (m.text) {
+          const t = m.text;
+          const emoji = EMOJI_ONLY.test(t.trim());
+          const bubble = h('div', { class: 'bubble user' + (m._tmp ? ' sending' : '') + (emoji ? ' emoji' : !emoji && [...t.trim()].length <= 2 ? ' glyph' : ''), title }, t);
+          stack.append(bwrap(bubble, t));
+          bubbleEnd = true;
+          bubbleStart = !imgs.length && !files.length;
+        }
+        break;
+      }
+      case 'bot': {
+        const emoji = !m.html && EMOJI_ONLY.test((m.text || '').trim());
+        const bubble = h('div', { class: 'bubble agent' + (emoji ? ' emoji' : ''), title });
+        fillBotBubble(bubble, m);
+        stack.append(bwrap(bubble, null, m));
+        bubbleStart = bubbleEnd = true;
+        break;
+      }
+      case 'attachment':
+        stack.append(...attachmentMsg(m));
+        if (m.text) {
+          stack.append(bwrap(h('div', { class: 'bubble agent', title }, m.text), m.text));
+          bubbleEnd = true;
+        }
+        break;
+      case 'widget':
+        stack.append(widgetCard(m));
+        break;
+      case 'visualization':
+        stack.append(vizCard(m));
+        break;
+      case 'approval':
+        stack.append(approvalCard(m));
+        break;
+      case 'tool':
+        stack.append(toolView(m));
+        break;
+      case 'error':
+        stack.append(h('div', { class: 'bwrap' }, h('div', { class: 'bubble err', role: 'alert' }, icon('alert', 15), h('span', null, m.text || 'Something went wrong.'))));
+        break;
+      case 'event':
+        stack.append(eventLine(m));
+        break;
+      default:
+        stack.append(h('div', { class: 'event-line', title }, m.text));
+    }
+    if (bubbleStart) wrap.dataset.bubbleStart = '1';
+    if (bubbleEnd) wrap.dataset.bubbleEnd = '1';
+    return wrap;
+  }
+  function bwrap(bubble, copyText, m) {
+    const w = h('div', { class: 'bwrap' }, bubble);
+    const bar = h(
+      'div',
+      { class: 'hover-bar', role: 'toolbar', 'aria-label': 'Message actions' },
+      h(
+        'button',
+        {
+          class: 'hb-btn',
+          'aria-label': 'Copy',
+          'data-tip': 'Copy',
+          onclick: () => {
+            const txt = copyText != null ? copyText : (m && m.text) || bubble.innerText;
+            navigator.clipboard.writeText(txt).then(() => toast('Copied'), () => toast('Couldn’t copy', 'error'));
+          },
+        },
+        icon('copy', 15)
+      )
+    );
+    w.append(bar);
+    return w;
+  }
+  function fillBotBubble(bubble, m) {
+    bubble.classList.toggle('streaming', m.status === 'streaming');
+    if (!m.text && !m.html && m.status === 'streaming') {
+      bubble.textContent = '';
+      bubble.append(h('span', { class: 'dots', 'aria-label': 'Typing' }, h('i'), h('i'), h('i')));
+      return;
+    }
+    if (bubble.classList.contains('emoji')) {
+      bubble.textContent = m.text;
+      return;
+    }
+    const md = h('div', { class: 'md' });
+    if (m.html) md.innerHTML = m.html;
+    else md.append(h('p', null, m.text || ''));
+    for (const a of md.querySelectorAll('a[href]')) {
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+    }
+    for (const pre of md.querySelectorAll('pre')) {
+      const fig = h('div', { class: 'code-fig' });
+      pre.replaceWith(fig);
+      const copyBtn = h(
+        'button',
+        {
+          class: 'code-copy',
+          'aria-label': 'Copy code',
+          'data-tip': 'Copy code',
+          onclick: () => navigator.clipboard.writeText(pre.innerText).then(() => toast('Copied'), () => toast('Couldn’t copy', 'error')),
+        },
+        icon('copy', 14)
+      );
+      fig.append(pre, copyBtn);
+    }
+    bubble.textContent = '';
+    bubble.append(md);
+  }
+  function isImage(a) {
+    return (a.mime && a.mime.startsWith('image/')) || /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif)$/i.test(a.name || a.path || '');
+  }
+  // up to 3 tiles per row; extras collapse into "+N" on the last tile (shell.md 4.4.3)
+  function imageRow(imgs) {
+    const urls = imgs.map((a) => ({ url: a.localUrl || fileUrl(a.url), name: a.name || 'image' }));
+    const showN = Math.min(3, urls.length);
+    const row = h('div', { class: 'img-row' });
+    for (let i = 0; i < showN; i++) {
+      const u = urls[i];
+      const extra = i === showN - 1 ? urls.length - showN : 0;
+      const img = h('img', {
+        src: u.url,
+        alt: u.name,
+        loading: 'lazy',
+        onload: () => {
+          tile.classList.remove('loading');
+          if (S.pinned) msgsEl.scrollTop = msgsEl.scrollHeight;
+        },
+        onerror: () => tile.classList.remove('loading'),
+      });
+      const tile = h(
+        'button',
+        { class: 'img-tile loading', 'aria-label': extra ? `Open the remaining ${extra} images full screen` : u.name, onclick: () => openLightbox(urls, extra ? showN : i) },
+        img,
+        extra ? h('span', { class: 'img-more' }, '+' + extra) : null
+      );
+      row.append(tile);
+    }
+    return row;
+  }
+  function extOf(name) {
+    const m = /\.([a-z0-9]{1,5})$/i.exec(name || '');
+    return m ? m[1].toUpperCase() : 'FILE';
+  }
+  function fileCard(a) {
+    const url = a.localUrl || fileUrl(a.url);
+    const meta = [extOf(a.name || a.path), a.size ? fmtBytes(a.size) : ''].filter(Boolean).join(' · ');
+    return h(
+      'a',
+      { class: 'file-card', href: url, target: '_blank', rel: 'noopener', title: `Open ${a.name || a.path}` },
+      h('span', { class: 'fc-icon' }, extOf(a.name || a.path).slice(0, 4)),
+      h('span', { class: 'fc-text' }, h('span', { class: 'fc-name' }, a.name || a.path), h('span', { class: 'fc-meta' }, meta)),
+      h(
+        'span',
+        {
+          class: 'fc-save',
+          role: 'button',
+          'aria-label': `Save ${a.name || 'file'}`,
+          'data-tip': 'Save',
+          onclick: (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const link = h('a', { href: url, download: a.name || '' });
+            document.body.append(link);
+            link.click();
+            link.remove();
+          },
+        },
+        icon('download', 16)
+      )
+    );
+  }
+  function attachmentMsg(m) {
+    const a = Object.assign({}, m.meta || {});
+    if (!a.name && a.path) a.name = a.path.split(/[\\/]/).pop();
+    if (isImage(a)) return [imageRow([a])];
+    return [fileCard(a)];
+  }
+  function openLightbox(items, start = 0) {
+    let i = start;
+    const img = h('img', { alt: '' });
+    const name = h('div', { class: 'lightbox-name' });
+    const paint = () => {
+      img.src = items[i].url;
+      img.alt = items[i].name;
+      name.textContent = items.length > 1 ? `${items[i].name} · Image ${i + 1} of ${items.length}` : items[i].name;
+    };
+    const box = h('div', { class: 'lightbox', onclick: () => close() }, img, name);
+    const onKey = (e) => {
+      if (items.length < 2) return;
+      if (e.key === 'ArrowRight') i = (i + 1) % items.length;
+      else if (e.key === 'ArrowLeft') i = (i - 1 + items.length) % items.length;
+      else return;
+      paint();
+    };
+    document.addEventListener('keydown', onKey);
+    const close = openModal(box, { cls: 'dark-overlay', onClose: () => document.removeEventListener('keydown', onKey) });
+    paint();
+  }
+
+  // ── widget (question with quick replies)
+  function widgetCard(m) {
+    const meta = m.meta || {};
+    const opts = Array.isArray(meta.options) ? meta.options : [];
+    const answered = meta.answer != null;
+    const card = h('div', { class: 'card widget' + (answered ? ' answered' : ''), role: 'group', 'aria-label': meta.question || 'Question' });
+    card.append(h('div', { class: 'card-title' }, meta.question || m.text || 'Question'));
+    const list = h('div', { class: 'opts' });
+    const buttons = [];
+    let busy = false;
+    const answer = async (value) => {
+      if (busy || answered) return;
+      busy = true;
+      buttons.forEach((x) => (x.disabled = true));
+      try {
+        const um = await api(`/api/messages/${encodeURIComponent(m.id)}/answer`, { method: 'POST', body: { value } });
+        const nm = Object.assign({}, m, { meta: Object.assign({}, meta, { answer: value }) });
+        upsertMessage(nm);
+        if (um && um.id) upsertMessage(um);
+        S.newDiv = null;
+      } catch (e) {
+        busy = false;
+        buttons.forEach((x) => (x.disabled = false));
+        fail(e);
+      }
+    };
+    opts.forEach((o, i) => {
+      const chosen = answered && String(meta.answer) === String(o);
+      const b = h(
+        'button',
+        { class: 'opt' + (chosen ? ' chosen' : ''), disabled: answered, onclick: () => answer(o), 'data-opt': String(i) },
+        h('span', { class: 'opt-key' }, chosen ? icon('check', 13, '', 2.4) : String.fromCharCode(65 + i)),
+        h('span', null, o)
+      );
+      buttons.push(b);
+      list.append(b);
+    });
+    if (meta.allow_custom && !answered) {
+      const other = h(
+        'button',
+        {
+          class: 'opt',
+          onclick: () => {
+            other.hidden = true;
+            customRow.hidden = false;
+            field.focus();
+          },
+        },
+        h('span', { class: 'opt-key' }, icon('pencil', 12, '', 2)),
+        h('span', null, 'Something else')
+      );
+      buttons.push(other);
+      const field = h('input', { placeholder: 'Type your answer', 'aria-label': 'Your answer', maxlength: '500' });
+      const go = h('button', { class: 'c-send', 'data-mode': 'send', type: 'button', 'aria-label': 'Send answer' }, icon('arrowUp', 16, 'g-send', 2.2));
+      const submit = () => {
+        const v = field.value.trim();
+        if (v) answer(v);
+      };
+      go.addEventListener('click', submit);
+      field.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') submit();
+        if (e.key === 'Escape') {
+          customRow.hidden = true;
+          other.hidden = false;
+        }
+      });
+      const customRow = h('div', { class: 'custom-row', hidden: true }, field, go);
+      buttons.push(go);
+      list.append(other, customRow);
+    }
+    card.append(list);
+    if (answered && !opts.some((o) => String(o) === String(meta.answer))) card.append(h('div', { class: 'answer-note' }, `You answered: ${meta.answer}`));
+    card._answer = answer;
+    card._opts = opts;
+    return card;
+  }
+
+  // ── visualization (sandboxed page made by a bot)
+  function vizCard(m) {
+    const meta = m.meta || {};
+    const src = meta.url ? (/^https?:/.test(meta.url) ? meta.url : S.apiBase + meta.url) : '';
+    const frame = h('iframe', { class: 'viz-frame', src, sandbox: 'allow-scripts allow-popups', loading: 'lazy', title: meta.title || 'Visualization', referrerpolicy: 'no-referrer' });
+    return h(
+      'div',
+      { class: 'card viz' },
+      h(
+        'div',
+        { class: 'viz-head' },
+        icon('chart', 16, '', 1.8),
+        h('span', { class: 'viz-title' }, meta.title || m.text || 'Page'),
+        h('button', { class: 'ghost-btn', 'aria-label': 'Open in a new window', 'data-tip': 'Open in a new window', onclick: () => window.open(src, '_blank', 'noopener') }, icon('external', 16))
+      ),
+      frame
+    );
+  }
+  // pages can report their height: parent.postMessage({type:'openbot:height', height}, '*')
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || typeof d !== 'object' || !(d.type === 'openbot:height' || d.type === 'resize') || typeof d.height !== 'number') return;
+    for (const f of $$('.viz-frame')) {
+      if (f.contentWindow === e.source) {
+        const pin = S.pinned;
+        f.style.height = clamp(Math.ceil(d.height), 120, 600) + 'px';
+        if (pin) msgsEl.scrollTop = msgsEl.scrollHeight;
+      }
+    }
+  });
+
+  // ── approval card (Allow / Always allow / Deny)
+  const APPROVAL_VERB = {
+    Bash: ['terminal', 'Terminal', 'run a command'],
+    PowerShell: ['terminal', 'Terminal', 'run a command'],
+    Write: ['file', 'Files', 'create a file'],
+    Edit: ['pencil', 'Files', 'edit a file'],
+    MultiEdit: ['pencil', 'Files', 'edit a file'],
+    NotebookEdit: ['pencil', 'Files', 'edit a notebook'],
+    Read: ['file', 'Files', 'read a file'],
+    WebFetch: ['globe', 'Web', 'open a web page'],
+    WebSearch: ['globe', 'Web', 'search the web'],
+  };
+  function approvalCard(m) {
+    const meta = m.meta || {};
+    const b = S.bots.get(m.bot_id);
+    const tool = meta.tool_name || '';
+    const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(tool);
+    const [ic, src, verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', mcp[1].replace(/[_-]/g, ' '), `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', tool || 'Tool', `use ${tool || 'a tool'}`]);
+    const input = meta.input && typeof meta.input === 'object' ? meta.input : null;
+    let well = null;
+    if (input) {
+      const v = input.command || input.file_path || input.notebook_path || input.url || input.query || input.pattern || null;
+      if (typeof v === 'string') well = h('div', { class: 'card-well mono' }, v);
+    }
+    if (!well && (meta.summary || m.text)) well = h('div', { class: 'card-well' }, meta.summary || m.text);
+    const card = h(
+      'div',
+      { class: 'card approval ' + m.status },
+      h('div', { class: 'card-src' }, icon(ic, 14), h('span', null, src)),
+      h('div', { class: 'card-title' }, `${b ? b.name : 'Your Bot'} wants to ${verb}`),
+      well,
+      input && Object.keys(input).length > 1 ? h('details', null, h('summary', null, 'Details'), h('pre', null, JSON.stringify(input, null, 2))) : null
+    );
+    if (m.status === 'pending') {
+      const buttons = [];
+      const decide = async (decision) => {
+        buttons.forEach((x) => (x.disabled = true));
+        try {
+          await api(`/api/approvals/${encodeURIComponent(meta.approval_id)}`, { method: 'POST', body: { decision } });
+          upsertMessage(Object.assign({}, m, { status: decision === 'deny' ? 'denied' : 'allowed' }));
+        } catch (e) {
+          buttons.forEach((x) => (x.disabled = false));
+          fail(e);
+        }
+      };
+      buttons.push(
+        h('button', { class: 'btn primary', onclick: () => decide('allow') }, 'Allow'),
+        h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'),
+        h('button', { class: 'btn ghost', onclick: () => decide('deny') }, 'Deny')
+      );
+      card.append(h('div', { class: 'card-actions' }, buttons));
+    } else {
+      const ok = m.status !== 'denied';
+      card.append(h('div', { class: 'card-settled ' + (ok ? 'ok' : 'no') }, icon(ok ? 'check' : 'x', 14, '', 2.2), ok ? 'Approved' : 'Denied'));
+    }
+    return card;
+  }
+
+  function eventLine(m) {
+    const meta = m.meta || {};
+    const ic = /routine/.test(meta.kind || '') ? 'clock' : 'bolt';
+    const el = h('div', { class: 'event-line', title: m.created_at ? fmtTime(m.created_at) : null }, icon(ic, 13), h('span', null, m.text || (meta.kind || 'Event').replace(/-/g, ' ')));
+    return el;
+  }
+  function toolIconName(name = '') {
+    const n = name.toLowerCase();
+    if (n === 'bash' || n.includes('shell') || n.includes('powershell') || n.includes('terminal')) return 'terminal';
+    if (['read', 'glob', 'grep', 'ls', 'notebookread'].includes(n)) return 'file';
+    if (['edit', 'write', 'multiedit', 'notebookedit'].includes(n)) return 'pencil';
+    if (n.startsWith('web')) return 'globe';
+    return 'bolt';
+  }
+  function toolView(m) {
+    const meta = m.meta || {};
+    const open = S.expanded.has(m.id);
+    const hasOut = !!(meta.output && String(meta.output).trim());
+    const box = h('div', { class: 'tool-row' + (open ? ' open' : '') + (m.status === 'failed' ? ' failed' : '') });
+    box.append(
+      h(
+        'button',
+        {
+          class: 'tool-line',
+          disabled: !hasOut,
+          onclick: () => {
+            if (S.expanded.has(m.id)) S.expanded.delete(m.id);
+            else S.expanded.add(m.id);
+            box.classList.toggle('open');
+          },
+        },
+        m.status === 'running' ? spinner('xs') : icon(toolIconName(meta.name), 14),
+        h('span', { class: 'tool-sum' }, meta.summary || m.text || meta.name || 'Tool'),
+        hasOut ? icon('chevronRight', 12, 'chev', 2.2) : null
+      )
+    );
+    if (hasOut) box.append(h('pre', { class: 'tool-out' }, String(meta.output)));
+    return box;
+  }
+
+  // ── incoming messages
+  function upsertMessage(m, created) {
+    noteForNotify(m, created);
+    const list = S.msgs.get(m.bot_id);
+    if (!list) return;
+    let idx = list.findIndex((x) => x.id === m.id);
+    if (idx < 0 && m.role === 'user') {
+      const t = list.findIndex((x) => x._tmp && x.text === m.text);
+      if (t >= 0) {
+        list.splice(t, 1);
+        idx = -1;
+      }
+    }
+    idx = list.findIndex((x) => x.id === m.id);
+    const isNew = idx < 0;
+    if (isNew) {
+      // keep the list sorted by time
+      let at = list.length;
+      while (at > 0 && list[at - 1].created_at > m.created_at && !list[at - 1]._tmp) at--;
+      list.splice(at, 0, m);
+    } else list[idx] = m;
+    if (m.bot_id !== S.current) return;
+    if (m.role === 'user' && !m._tmp && S.newDiv) S.newDiv = null;
+    if (isNew && m.role !== 'user' && isShown(m) && !S.pinned) {
+      S.newCount++;
+    }
+    if (m.role === 'user' && isNew) S.pinned = true;
+    scheduleRender();
+  }
+  function removeMessage(botId, id) {
+    const list = S.msgs.get(botId);
+    if (!list) return;
+    const i = list.findIndex((x) => x.id === id);
+    if (i >= 0) list.splice(i, 1);
+    if (botId === S.current) scheduleRender();
+  }
+  function noteForNotify(m, created) {
+    const b = S.bots.get(m.bot_id);
+    if (!b || !TAURI) return;
+    if (m.role === 'bot' && m.status === 'done' && (m.text || '').trim()) maybeNotify(b, 'done', m.text, 'd:' + m.id);
+    else if (m.role === 'attachment' && created) maybeNotify(b, 'done', m.text || `Sent ${(m.meta && m.meta.name) || 'a file'}`, 'd:' + m.id);
+    else if (m.role === 'visualization' && created) maybeNotify(b, 'done', (m.meta && m.meta.title) || 'Made a page', 'd:' + m.id);
+    else if (m.role === 'approval' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.summary) || m.text, 'a:' + m.id);
+    else if (m.role === 'widget' && m.meta && m.meta.answer == null) maybeNotify(b, 'needs', m.meta.question || m.text, 'w:' + m.id);
+  }
+
+  // ───────────────────────────── mark read ─────────────────────────────
+  const markReadSoon = debounce(() => {
+    const b = curBot();
+    if (!b || !(b.unread > 0) || document.hidden || !document.hasFocus()) return;
+    b.unread = 0;
+    renderSidebar();
+    api(`/api/bots/${b.id}/read`, { method: 'POST' }).catch(() => {});
+  }, 300);
+  window.addEventListener('focus', markReadSoon);
+  document.addEventListener('visibilitychange', markReadSoon);
+
+  // ───────────────────────────── composer ─────────────────────────────
+  const input = $('#input');
+  const composerEl = $('#composer');
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  let notice = null; // {text, err}
+  function setNotice(text, err) {
+    notice = text ? { text, err } : null;
+    const n = $('#cNotice');
+    n.hidden = !notice;
+    n.textContent = notice ? notice.text : '';
+    n.classList.toggle('err', !!(notice && notice.err));
+    layoutComposer();
+    if (notice) {
+      clearTimeout(setNotice.t);
+      setNotice.t = setTimeout(() => setNotice(null), 6000);
+    }
+  }
+  // 44px pill ↔ expanded box (shell.md 6.2/6.3)
+  function layoutComposer() {
+    const hasText = input.value.length > 0;
+    let exp = (S.composerExpanded && hasText) || input.value.includes('\n') || S.pending.length > 0 || !!notice;
+    if (!exp && hasText) {
+      composerEl.classList.remove('expanded');
+      input.style.height = 'auto';
+      if (input.scrollHeight >= 39) exp = true;
+    }
+    S.composerExpanded = exp;
+    composerEl.classList.toggle('expanded', exp);
+    input.style.height = 'auto';
+    const sh = input.scrollHeight;
+    input.style.height = clamp(sh, 20, 120) + 'px';
+    input.classList.toggle('scrolls', sh > 120);
+    const H = exp ? $('#cContent').offsetHeight : 44;
+    composerEl.style.height = H + 'px';
+    const dock = $('#dock');
+    dock.style.setProperty('--composer-h', H + 'px');
+    $('#chat').style.setProperty('--dock-h', H + 16 + 'px');
+  }
+  function placeholderFor(b) {
+    if (rec) return 'Listening…';
+    if (!b) return 'Ask anything, or drop a file';
+    if (S.pending.length && !input.value) return 'Add a message, or hit send';
+    const list = S.msgs.get(b.id) || [];
+    if (openWidget(list)) return 'Type your answer, or talk about something else';
+    return `Message ${b.name}`;
+  }
+  function updateComposer() {
+    const b = curBot();
+    input.placeholder = placeholderFor(b);
+    input.disabled = !b;
+    input.spellcheck = S.prefs.spellcheck !== false;
+    $('#attachBtn').disabled = !b || S.pending.length >= 6;
+    const hasText = input.value.trim().length > 0;
+    const ready = S.pending.some((p) => !p.uploading && !p.error);
+    const btn = $('#sendBtn');
+    let mode;
+    if (b && (hasText || ready)) mode = 'send';
+    else if (b && b.running) mode = 'stop';
+    else if (b && SR && !rec) mode = 'dictate';
+    else mode = 'disabled';
+    btn.dataset.mode = mode;
+    btn.disabled = mode === 'disabled';
+    const labels = { send: 'Send message', stop: 'Stop', dictate: 'Start voice input', disabled: 'Send message' };
+    btn.setAttribute('aria-label', labels[mode]);
+    if (mode === 'stop' || mode === 'dictate') {
+      btn.dataset.tip = mode === 'stop' ? `Stop ${b.name}` : 'Start voice input';
+    } else delete btn.dataset.tip;
+    const mic = $('#micBtn');
+    mic.hidden = !SR;
+    mic.classList.toggle('collapsed', mode === 'dictate');
+    mic.classList.toggle('listening', !!rec);
+    mic.setAttribute('aria-label', rec ? 'Stop dictation' : 'Dictate');
+    mic.dataset.tip = rec ? 'Stop dictation' : 'Dictate';
+    composerEl.classList.toggle('disabled', !b);
+    layoutComposer();
+  }
+  input.addEventListener('input', () => {
+    updateComposer();
+    saveDraftSoon();
+  });
+  const saveDraftSoon = debounce(() => {
+    saveDraft();
+    const b = curBot();
+    if (b) {
+      const c = rowCache.get('row:' + b.id);
+      if (c) updateRowEl(c, b);
+    }
+  }, 500);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
+      e.preventDefault();
+      if (rec) {
+        rec.stop();
+        setTimeout(send, 250);
+      } else send();
+    } else if (e.key === 'Escape') {
+      if (rec) {
+        rec.abort ? rec.abort() : rec.stop();
+        e.stopPropagation();
+      } else input.blur();
+    }
+  });
+  input.addEventListener('paste', (e) => {
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+    if (files.length) {
+      e.preventDefault();
+      uploadFiles(files);
+    }
+  });
+  composerEl.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const mode = $('#sendBtn').dataset.mode;
+    if (mode === 'send') send();
+    else if (mode === 'stop') stopBot();
+    else if (mode === 'dictate') toggleDictation();
+  });
+  composerEl.addEventListener('mousedown', (e) => {
+    if (e.target === composerEl || e.target.id === 'cContent') {
+      e.preventDefault();
+      input.focus();
+    }
+  });
+  async function stopBot() {
+    const b = curBot();
+    if (!b) return;
+    try {
+      await api(`/api/bots/${b.id}/stop`, { method: 'POST' });
+    } catch (e) {
+      fail(e);
+    }
+  }
+  async function send() {
+    const b = curBot();
+    if (!b) return;
+    if (S.pending.some((p) => p.uploading)) return setNotice('Wait for files to finish uploading');
+    const text = input.value.trim();
+    const atts = S.pending.filter((p) => !p.error && p.path).map(({ name, path, mime, url }) => ({ name, path, mime, url }));
+    if (!text && !atts.length) return;
+    const pendingCopy = S.pending;
+    input.value = '';
+    S.pending = [];
+    S.composerExpanded = false;
+    S.drafts.delete(b.id);
+    persistDrafts();
+    S.newDiv = null;
+    renderAttachRow();
+    updateComposer();
+    const tmp = {
+      id: 'tmp-' + Date.now() + Math.random().toString(36).slice(2, 6),
+      bot_id: b.id,
+      role: 'user',
+      text,
+      html: '',
+      status: 'done',
+      meta: { attachments: atts.map((a) => Object.assign({}, a, { localUrl: (pendingCopy.find((p) => p.path === a.path) || {}).localUrl })) },
+      created_at: Date.now(),
+      _tmp: true,
+    };
+    if (!S.msgs.has(b.id)) S.msgs.set(b.id, []);
+    S.pinned = true;
+    upsertMessage(tmp, true);
+    try {
+      const m = await api(`/api/bots/${b.id}/messages`, { method: 'POST', body: { text, attachments: atts } });
+      const list = S.msgs.get(b.id) || [];
+      const i = list.findIndex((x) => x.id === tmp.id);
+      if (i >= 0) list.splice(i, 1);
+      if (m && m.id) upsertMessage(m, true);
+      else scheduleRender();
+    } catch (e) {
+      removeMessage(b.id, tmp.id);
+      if (S.current === b.id && !input.value) {
+        input.value = text;
+        S.pending = pendingCopy;
+        renderAttachRow();
+        updateComposer();
+      }
+      setNotice('Couldn’t send your message. ' + (e && e.message ? e.message : ''), true);
+    }
+  }
+
+  // attachments (max 6 per message, 25 MB each; shell.md 6.6)
+  const MAX_FILES = 6;
+  const MAX_BYTES = 25 * 1024 * 1024;
+  $('#attachBtn').addEventListener('click', () => $('#fileInput').click());
+  $('#fileInput').addEventListener('change', (e) => {
+    uploadFiles(Array.from(e.target.files || []));
+    e.target.value = '';
+  });
+  function uploadFiles(files) {
+    const b = curBot();
+    if (!b || !files.length) return;
+    let skipped = 0;
+    for (const f of files) {
+      if (S.pending.length >= MAX_FILES) {
+        skipped++;
+        continue;
+      }
+      if (f.size === 0) {
+        setNotice(`“${f.name}” is empty, so it wasn’t attached`);
+        continue;
+      }
+      if (f.size > MAX_BYTES) {
+        setNotice(`“${f.name}” is too large to attach (max 25 MB)`);
+        continue;
+      }
+      const item = {
+        key: Math.random().toString(36).slice(2),
+        name: f.name || 'pasted-file',
+        mime: f.type,
+        size: f.size,
+        uploading: true,
+        localUrl: f.type && f.type.startsWith('image/') ? URL.createObjectURL(f) : null,
+      };
+      S.pending.push(item);
+      const fd = new FormData();
+      fd.append('file', f, item.name);
+      api(`/api/bots/${b.id}/upload`, { method: 'POST', form: fd })
+        .then((res) => {
+          const r = Array.isArray(res) ? res[0] : res;
+          Object.assign(item, r || {}, { uploading: false });
+        })
+        .catch((e) => {
+          item.uploading = false;
+          item.error = true;
+          setNotice(`Couldn’t attach “${item.name}”`, true);
+          console.warn(e);
+          const arr = S.current === b.id ? S.pending : (S.drafts.get(b.id) || {}).pending || [];
+          const i = arr.indexOf(item);
+          if (i >= 0) arr.splice(i, 1);
+        })
+        .finally(() => {
+          renderAttachRow();
+          updateComposer();
+        });
+    }
+    if (skipped) setNotice(`Only ${MAX_FILES} attachments allowed — ${skipped} wasn’t added`);
+    renderAttachRow();
+    updateComposer();
+    input.focus();
+  }
+  function renderAttachRow() {
+    const row = $('#attachRow');
+    row.textContent = '';
+    for (const p of S.pending) {
+      const remove = h(
+        'button',
+        {
+          class: 'pend-x',
+          type: 'button',
+          'aria-label': `Remove ${p.name}`,
+          onclick: () => {
+            S.pending = S.pending.filter((x) => x !== p);
+            renderAttachRow();
+            updateComposer();
+          },
+        },
+        icon('x', 10, '', 2.6)
+      );
+      row.append(
+        h(
+          'div',
+          { class: 'pend' + (p.uploading ? ' uploading' : ''), role: 'listitem', title: p.name },
+          p.localUrl
+            ? h('img', { class: 'pend-thumb', src: p.localUrl, alt: p.name })
+            : h('div', { class: 'pend-file' }, h('span', { class: 'fc-icon' }, extOf(p.name).slice(0, 4)), h('span', { class: 'fc-text' }, h('span', { class: 'fc-name' }, p.name), h('span', { class: 'fc-meta' }, p.size ? fmtBytes(p.size) : ''))),
+          p.uploading ? h('span', { class: 'pend-spin' }, spinner('xs')) : null,
+          remove
+        )
+      );
+    }
+    row.hidden = !S.pending.length;
+  }
+
+  // drag & drop onto the chat
+  let dragDepth = 0;
+  const chatEl = $('#chat');
+  const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  chatEl.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e) || !curBot()) return;
+    e.preventDefault();
+    dragDepth++;
+    chatEl.classList.add('dragging');
+    composerEl.classList.add('dragover');
+  });
+  chatEl.addEventListener('dragover', (e) => {
+    if (hasFiles(e)) e.preventDefault();
+  });
+  chatEl.addEventListener('dragleave', () => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) {
+      chatEl.classList.remove('dragging');
+      composerEl.classList.remove('dragover');
+    }
+  });
+  chatEl.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    chatEl.classList.remove('dragging');
+    composerEl.classList.remove('dragover');
+    uploadFiles(Array.from(e.dataTransfer.files || []));
+  });
+  // paste files anywhere (when focus isn't in another field)
+  document.addEventListener('paste', (e) => {
+    if (isEditable(document.activeElement) || !curBot() || modalStack.length) return;
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+    if (files.length) {
+      e.preventDefault();
+      uploadFiles(files);
+    }
+  });
+
+  // dictation (Web Speech API when the webview has it)
+  function toggleDictation() {
+    if (!SR) return;
+    if (rec) {
+      rec.stop();
+      return;
+    }
+    try {
+      rec = new SR();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = navigator.language || 'en-US';
+      const base = input.value ? input.value.replace(/\s*$/, ' ') : '';
+      rec.onresult = (e) => {
+        let t = '';
+        for (const r of e.results) t += r[0].transcript;
+        input.value = base + t;
+        updateComposer();
+      };
+      rec.onerror = (e) => {
+        if (e.error && e.error !== 'no-speech' && e.error !== 'aborted') setNotice('The microphone is unavailable: ' + e.error, true);
+      };
+      rec.onend = () => {
+        rec = null;
+        updateComposer();
+      };
+      rec.start();
+      updateComposer();
+      input.focus();
+    } catch (e) {
+      rec = null;
+      setNotice('The microphone is unavailable', true);
+      updateComposer();
+    }
+  }
+  $('#micBtn').addEventListener('click', toggleDictation);
+
+  // ───────────────────────────── bot settings panel (header pill, ⌘⇧,) ─────────────────────────────
+  const panelEl = $('#panel');
+  let P = null; // {botId, els...}
+  function setPanel(open, opts = {}) {
+    const b = curBot();
+    open = !!open && !!b;
+    if (S.panelOpen === open && !opts.focusName) return;
+    S.panelOpen = open;
+    panelEl.hidden = !open;
+    layoutShell();
+    $('#island').setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      renderPanel();
+      if (opts.focusName && P) setTimeout(() => P.name.focus(), 30);
+    } else {
+      panelEl.textContent = '';
+      P = null;
+      sweepAvatars();
+    }
+  }
+  function renderPanel() {
+    const b = curBot();
+    if (!b || !S.panelOpen) return;
+    panelEl.textContent = '';
+    const av = avatar(b, 72, { live: true, state: botState(b), interactive: true });
+    av.addEventListener('click', () => pokeAvatar(av));
+    av.setAttribute('aria-label', 'Poke ' + b.name);
+    const name = h('input', { class: 'p-name', value: b.name, maxlength: '60', 'aria-label': 'Bot name', spellcheck: 'false' });
+    const commitName = () => {
+      const v = name.value.trim();
+      const cur = S.bots.get(b.id);
+      if (!cur) return;
+      if (!v) name.value = cur.name;
+      else if (v !== cur.name) patchBot(b.id, { name: v });
+    };
+    name.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') name.blur();
+      if (e.key === 'Escape') {
+        name.value = (S.bots.get(b.id) || b).name;
+        name.blur();
+        e.stopPropagation();
+      }
+    });
+    name.addEventListener('blur', commitName);
+    const about = h('textarea', { class: 'p-text', placeholder: 'What should this Bot do? It follows these instructions in every conversation.', 'aria-label': 'Instructions' });
+    about.value = b.instructions || '';
+    const growAbout = () => {
+      about.style.height = 'auto';
+      about.style.height = clamp(about.scrollHeight, 84, 260) + 'px';
+    };
+    about.addEventListener('input', growAbout);
+    about.addEventListener('blur', () => {
+      const cur = S.bots.get(b.id);
+      if (cur && about.value.trim() !== (cur.instructions || '').trim()) patchBot(b.id, { instructions: about.value.trim() }).then((nb) => nb && toast('Instructions saved'));
+    });
+    const routines = h('div', { class: 'panel-card' }, h('div', { class: 'p-empty' }, spinner('xs')));
+    const memories = h('div', { class: 'panel-card' }, h('div', { class: 'p-empty' }, spinner('xs')));
+    const model = selectEl(b.model || '', MODELS, (v) => patchBot(b.id, { model: v }));
+    model.classList.add('p-select');
+    const local = S.conn.mode !== 'remote';
+    const hideBtn = h('button', { class: 'p-action', onclick: () => setHidden(S.bots.get(b.id), !S.bots.get(b.id).hidden) });
+    panelEl.append(
+      h(
+        'div',
+        { class: 'panel-head' },
+        h('span', { class: 'panel-head-title' }, 'Bot settings'),
+        h('button', { class: 'ghost-btn', 'aria-label': 'Close', 'data-tip': 'Close', 'data-kbd': 'Esc', onclick: () => setPanel(false) }, icon('x', 16))
+      ),
+      h(
+        'div',
+        { class: 'panel-body' },
+        h(
+          'div',
+          { class: 'p-hero' },
+          h('div', { class: 'p-avatar' }, av, h('button', { class: 'p-avatar-edit', 'aria-label': 'Edit avatar', 'data-tip': 'Edit avatar', onclick: () => openAvatarEditor(S.bots.get(b.id)) }, icon('pencil', 13, '', 2))),
+          name,
+          h('div', { class: 'p-sub' }, b.running ? (b.activity && b.activity.label) || 'Working' : `Created ${new Date(b.created_at || Date.now()).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`)
+        ),
+        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'About'), h('div', { class: 'panel-card' }, about), h('div', { class: 'p-hint' }, 'Standing instructions. Saved when you click away.')),
+        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Routines')), routines),
+        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Memories')), memories),
+        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'Model'), model),
+        b.workdir &&
+          h(
+            'div',
+            { class: 'p-sec' },
+            h('div', { class: 'p-label' }, 'Folder'),
+            h(
+              'div',
+              { class: 'panel-card' },
+              h(
+                'div',
+                { class: 'p-row' },
+                icon('folder', 16),
+                h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-sub mono', title: b.workdir, style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left' }, b.workdir)),
+                local && h('button', { class: 'btn small', onclick: () => api('/api/open-folder', { method: 'POST', body: { path: b.workdir } }).catch(fail) }, 'Open')
+              )
+            )
+          ),
+        h(
+          'div',
+          { class: 'p-actions' },
+          hideBtn,
+          h('button', { class: 'p-action', onclick: () => resetBot(S.bots.get(b.id)) }, icon('reset', 16), 'Reset conversation'),
+          h('button', { class: 'p-action danger', onclick: () => deleteBot(S.bots.get(b.id)) }, icon('trash', 16), 'Delete Bot')
+        )
+      )
+    );
+    P = { botId: b.id, av, name, about, routines, memories, model, hideBtn };
+    paintHideBtn(b);
+    requestAnimationFrame(growAbout);
+    loadPanelLists();
+    renderChatHeader();
+  }
+  function paintHideBtn(b) {
+    if (!P) return;
+    P.hideBtn.textContent = '';
+    P.hideBtn.append(icon(b.hidden ? 'eye' : 'eyeOff', 16), b.hidden ? 'Show in sidebar' : 'Hide from sidebar');
+  }
+  function refreshPanelBot() {
+    const b = curBot();
+    if (!P || !b) return;
+    if (P.botId !== b.id) return renderPanel();
+    syncAvatar(P.av, b, 72, { live: true, state: botState(b) });
+    if (document.activeElement !== P.name) P.name.value = b.name;
+    if (document.activeElement !== P.about) P.about.value = b.instructions || '';
+    if (document.activeElement !== P.model) P.model.value = b.model || '';
+    paintHideBtn(b);
+  }
+  async function loadPanelLists(which) {
+    if (!P) return;
+    const id = P.botId;
+    if (!which || which === 'routines') {
+      api(`/api/bots/${id}/routines`)
+        .then((r) => P && P.botId === id && paintRoutines(Array.isArray(r) ? r : []))
+        .catch(() => P && P.botId === id && paintRoutines(null));
+    }
+    if (!which || which === 'memories') {
+      api(`/api/bots/${id}/memories`)
+        .then((r) => P && P.botId === id && paintMemories(Array.isArray(r) ? r : []))
+        .catch(() => P && P.botId === id && paintMemories(null));
+    }
+  }
+  function paintRoutines(list) {
+    const box = P.routines;
+    box.textContent = '';
+    const b = curBot();
+    if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load routines.'));
+    if (!list.length) return box.append(h('div', { class: 'p-empty' }, `No routines yet. Ask ${b ? b.name : 'this Bot'} to do something on a schedule, like “every weekday at 8, summarize my inbox.”`));
+    for (const r of list) {
+      const sub = [r.schedule_text || '', r.paused_for_unread ? 'Paused until you read new messages' : r.enabled && r.next_run_at ? `Next ${timeLabel(r.next_run_at)}` : ''].filter(Boolean).join(' · ');
+      const sw = toggleEl(!!r.enabled, async (v) => {
+        try {
+          await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body: { enabled: v } });
+        } catch (e) {
+          sw.checked = !v;
+          fail(e);
+        }
+      });
+      sw.classList.add('sm');
+      sw.setAttribute('aria-label', (r.enabled ? 'Turn off ' : 'Turn on ') + (r.name || 'routine'));
+      box.append(
+        h(
+          'div',
+          { class: 'p-row' },
+          h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, r.name || r.prompt || 'Routine'), sub && h('div', { class: 'p-row-sub' }, sub)),
+          sw,
+          h(
+            'button',
+            {
+              class: 'ghost-btn danger',
+              'aria-label': 'Delete routine',
+              'data-tip': 'Delete',
+              onclick: async () => {
+                const ok = await confirmDialog({ title: `Delete “${r.name || 'this routine'}”?`, body: 'The Bot stops running it. You can ask for a new one any time.', confirmText: 'Delete', danger: true });
+                if (!ok) return;
+                try {
+                  await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'DELETE' });
+                  loadPanelLists('routines');
+                } catch (e) {
+                  fail(e);
+                }
+              },
+            },
+            icon('trash', 15)
+          )
+        )
+      );
+    }
+  }
+  function paintMemories(list) {
+    const box = P.memories;
+    box.textContent = '';
+    if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load memories.'));
+    if (!list.length) return box.append(h('div', { class: 'p-empty' }, 'Nothing remembered yet. Say “remember that…” and it shows up here.'));
+    for (const mm of list) {
+      box.append(
+        h(
+          'div',
+          { class: 'p-row' },
+          h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, mm.text), h('div', { class: 'p-row-sub' }, mm.bot_id ? `Saved ${timeLabel(mm.created_at || Date.now())}` : 'About you · shared with all Bots')),
+          h(
+            'button',
+            {
+              class: 'ghost-btn danger',
+              'aria-label': 'Forget this',
+              'data-tip': 'Forget',
+              onclick: async () => {
+                try {
+                  await api(`/api/memories/${encodeURIComponent(mm.id)}`, { method: 'DELETE' });
+                  loadPanelLists('memories');
+                } catch (e) {
+                  fail(e);
+                }
+              },
+            },
+            icon('trash', 15)
+          )
+        )
+      );
+    }
+  }
+
+  // ───────────────────────────── avatar picker (shape grid + colour swatches) ─────────────────────────────
+  // st = {shape, color}; onChange(next) is called on every pick
+  function avatarPicker(st, onChange) {
+    const grid = h('div', { class: 'shape-grid', role: 'radiogroup', 'aria-label': 'Character shape' });
+    const sw = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Character color' });
+    function paint() {
+      grid.textContent = '';
+      const shapes = pickerShapes().slice();
+      if (st.shape && !shapes.includes(st.shape)) shapes.push(st.shape);
+      for (const s of shapes) {
+        const cell = h(
+          'button',
+          {
+            class: 'shape-cell' + (st.shape === s ? ' on' : ''),
+            role: 'radio',
+            'aria-checked': st.shape === s ? 'true' : 'false',
+            'aria-label': `${s} character shape`,
+            'data-tip': s[0].toUpperCase() + s.slice(1),
+            onclick: () => {
+              st.shape = s;
+              paint();
+              onChange(Object.assign({}, st));
+            },
+          },
+          avatar({ shape: s, color: st.color }, 36)
+        );
+        grid.append(cell);
+      }
+      sw.textContent = '';
+      for (const c of colorList()) {
+        sw.append(
+          h('button', {
+            class: 'swatch' + (st.color === c ? ' on' : ''),
+            role: 'radio',
+            'aria-checked': st.color === c ? 'true' : 'false',
+            'aria-label': COLOR_LABELS[c] || c,
+            'data-tip': COLOR_LABELS[c] || c,
+            style: { '--sw': inkOf(c) },
+            onclick: () => {
+              st.color = c;
+              paint();
+              onChange(Object.assign({}, st));
+            },
+          })
+        );
+      }
+    }
+    paint();
+    return { grid, sw, paint };
+  }
+  function openAvatarEditor(b) {
+    if (!b) return;
+    const st = lookOf(b);
+    const prev = h('span', { class: 'av', style: { width: '96px', height: '96px' } });
+    prev._size = 96;
+    paintAvatar(prev, st, 96, { live: true, interactive: true });
+    prev.addEventListener('click', () => pokeAvatar(prev));
+    const save = debounce((next) => patchBot(b.id, { shape: next.shape, color: next.color }), 250);
+    const picker = avatarPicker(st, (next) => {
+      paintAvatar(prev, next, 96, { live: true, interactive: true });
+      pokeAvatar(prev);
+      save(next);
+      resetLink.hidden = false;
+    });
+    const resetLink = h(
+      'button',
+      {
+        class: 'link-btn',
+        hidden: !(b.shape || b.color),
+        onclick: async () => {
+          const nb = await patchBot(b.id, { shape: '', color: '' });
+          if (nb) {
+            const d = lookOf(nb);
+            st.shape = d.shape;
+            st.color = d.color;
+            picker.paint();
+            paintAvatar(prev, d, 96, { live: true, interactive: true });
+            resetLink.hidden = true;
+          }
+        },
+      },
+      'Reset character to default'
+    );
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Avatar editor' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, b.name),
+      h('div', { class: 'ne-preview' }, prev),
+      h('label', { class: 'f-label' }, 'Character shape'),
+      picker.grid,
+      h('label', { class: 'f-label' }, 'Character color'),
+      picker.sw,
+      h('div', { class: 'dialog-actions', style: 'justify-content:space-between;align-items:center' }, resetLink, h('span', { style: 'flex:1' }), h('button', { class: 'btn primary', onclick: () => close() }, 'Done'))
+    );
+    const close = openModal(box);
+  }
+
+  // ───────────────────────────── new Bot (name + character; instructions folded away) ─────────────────────────────
+  function openNewBot(preset) {
+    const d = defaultsFor('new-' + Math.random());
+    const used = new Set([...S.bots.values()].map((b) => lookOf(b).color));
+    const freeColor = colorList().filter((c) => c !== 'black' && c !== 'gray').find((c) => !used.has(c));
+    const st = {
+      shape: preset ? preset.shape : d.shape,
+      color: preset ? preset.color : used.has(d.color) && freeColor ? freeColor : d.color,
+    };
+    const prev = h('span', { class: 'av', style: { width: '96px', height: '96px' } });
+    prev._size = 96;
+    paintAvatar(prev, st, 96, { live: true, interactive: true });
+    prev.addEventListener('click', () => pokeAvatar(prev));
+    const picker = avatarPicker(st, (next) => {
+      paintAvatar(prev, next, 96, { live: true, interactive: true });
+      pokeAvatar(prev);
+    });
+    const nameIn = h('input', { class: 'field ne-name', value: preset ? preset.name : '', placeholder: 'Name your Bot', maxlength: '60', 'aria-label': 'Name' });
+    const instrIn = h('textarea', { class: 'field', rows: '4', placeholder: 'What should this Bot do? For example: “You help me plan my week and keep my to-do list tidy.”' });
+    instrIn.value = preset ? preset.instructions || '' : '';
+    let model = '';
+    const modelSel = selectEl('', MODELS, (v) => (model = v));
+    const foldBody = h('div', { hidden: !instrIn.value }, instrIn, h('div', { class: 'f-hint' }, 'Optional. The Bot follows these in every conversation. You can also just tell it in the chat.'), h('div', { class: 'f-inline' }, h('label', { class: 'f-label inline' }, 'Model'), modelSel));
+    const foldBtn = h(
+      'button',
+      {
+        class: 'fold-btn' + (instrIn.value ? ' open' : ''),
+        type: 'button',
+        onclick: () => {
+          foldBody.hidden = !foldBody.hidden;
+          foldBtn.classList.toggle('open', !foldBody.hidden);
+          if (!foldBody.hidden) instrIn.focus();
+        },
+      },
+      icon('chevronRight', 12, '', 2.4),
+      'Instructions'
+    );
+    const createBtn = h('button', { class: 'btn primary', onclick: create }, 'Create Bot');
+    async function create() {
+      const name = nameIn.value.trim();
+      if (!name) {
+        nameIn.classList.add('invalid');
+        nameIn.focus();
+        return;
+      }
+      createBtn.disabled = true;
+      try {
+        const nb = await api('/api/bots', { method: 'POST', body: { name, color: st.color, shape: st.shape, instructions: instrIn.value.trim(), model } });
+        close();
+        if (nb && nb.id) {
+          S.bots.set(nb.id, nb);
+          S.msgs.set(nb.id, []);
+          renderSidebar();
+          selectBot(nb.id);
+        }
+      } catch (e) {
+        createBtn.disabled = false;
+        fail(e);
+      }
+    }
+    nameIn.addEventListener('keydown', (e) => {
+      nameIn.classList.remove('invalid');
+      if (e.key === 'Enter') create();
+    });
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New Bot' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'New Bot'),
+      h('div', { class: 'ne-preview' }, prev),
+      nameIn,
+      h('label', { class: 'f-label' }, 'Character shape'),
+      picker.grid,
+      h('label', { class: 'f-label' }, 'Character color'),
+      picker.sw,
+      foldBtn,
+      foldBody,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => openTemplatesFrom(close) }, 'Templates'), h('span', { style: 'flex:1' }), h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), createBtn)
+    );
+    const close = openModal(box);
+    setTimeout(() => nameIn.focus(), 40);
+  }
+  function openTemplatesFrom(closePrev) {
+    closePrev();
+    openTemplates();
+  }
+  function templateCard(t, onclick) {
+    return h('button', { class: 'template-card', onclick }, avatar({ shape: t.shape, color: t.color }, 40), h('span', { class: 'tc-name' }, t.name), h('span', { class: 'tc-blurb' }, t.blurb));
+  }
+  function openTemplates() {
+    const close = openModal(
+      h(
+        'div',
+        { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bot templates' },
+        h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+        h('h2', { class: 'dialog-title' }, 'Bot templates'),
+        h('p', { class: 'dialog-body' }, 'Start from a template or make your own. You can change everything later.'),
+        h(
+          'div',
+          { class: 'template-grid' },
+          TEMPLATES.map((t) =>
+            templateCard(t, () => {
+              close();
+              openNewBot(t);
+            })
+          ),
+          h(
+            'button',
+            {
+              class: 'template-card',
+              onclick: () => {
+                close();
+                openNewBot();
+              },
+            },
+            h('span', { class: 'blank-plus' }, icon('plus', 18)),
+            h('span', { class: 'tc-name' }, 'Start from scratch'),
+            h('span', { class: 'tc-blurb' }, 'Pick a name and a character.')
+          )
+        )
+      )
+    );
+  }
+
+  // ───────────────────────────── search / command palette (⌘K) ─────────────────────────────
+  function paletteCommands() {
+    const th = S.prefs.theme || 'system';
+    const setTheme = (v) => {
+      S.prefs.theme = v;
+      savePrefs();
+      applyTheme();
+    };
+    return [
+      { title: 'New Bot', icon: 'plus', type: 'Action', run: () => openNewBot() },
+      { title: 'Bot templates', icon: 'gridPlus', type: 'Action', run: () => openTemplates() },
+      curBot() && { title: 'Bot settings', sub: curBot().name, icon: 'gear', type: 'Action', run: () => setPanel(true) },
+      { title: 'Toggle compact sidebar', icon: 'sidebar', type: 'Action', sub: MOD + 'B', run: () => toggleRail() },
+      { title: 'Keyboard shortcuts', icon: 'keyboard', type: 'Action', sub: 'Help', run: () => openShortcuts() },
+      ...TABS.map(([key, label, ic]) => ({ title: `Settings: ${label}`, icon: ic, type: 'Action', sub: 'Settings', run: () => openSettings(key) })),
+      { title: 'Theme: System', icon: 'display', type: 'Action', sub: 'Settings · Appearance', checked: th === 'system', keep: true, run: () => setTheme('system') },
+      { title: 'Theme: Light', icon: 'sun', type: 'Action', sub: 'Settings · Appearance', checked: th === 'light', keep: true, run: () => setTheme('light') },
+      { title: 'Theme: Dark', icon: 'moon', type: 'Action', sub: 'Settings · Appearance', checked: th === 'dark', keep: true, run: () => setTheme('dark') },
+    ].filter(Boolean);
+  }
+  function openSearch(initial = '') {
+    if (S.paletteClose) return S.paletteClose();
+    const inputEl = h('input', { class: 'search-input', placeholder: 'Search', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Search' });
+    inputEl.value = initial;
+    const results = h('div', { class: 'search-results', role: 'listbox' });
+    let items = [];
+    let sel = 0;
+    let seq = 0;
+    let msgResults = [];
+    let msgLoading = false;
+    function go(item) {
+      if (item.keep) {
+        item.run();
+        paint();
+        return;
+      }
+      close();
+      item.run();
+    }
+    const hl = (text, q) => {
+      const span = h('span', { class: 'sr-title' });
+      const i = q ? text.toLowerCase().indexOf(q) : -1;
+      if (i < 0) span.textContent = text;
+      else span.append(text.slice(0, i), h('mark', null, text.slice(i, i + q.length)), text.slice(i + q.length));
+      return span;
+    };
+    const match = (s, q) => q.split(/\s+/).every((w) => s.toLowerCase().includes(w));
+    function add(it, q) {
+      it.el = h(
+        'button',
+        { class: 'sr-item', role: 'option', onclick: () => go(it), onmousemove: () => setSel(items.indexOf(it)), onmousedown: (e) => e.preventDefault() },
+        h('span', { class: 'sr-lead' }, it.bot ? avatar(it.bot, 24) : icon(it.icon || 'bolt', 18)),
+        h('span', { class: 'sr-main' }, hl(it.title, q), it.sub ? h('span', { class: 'sr-sub' }, it.sub) : null),
+        it.tag ? h('span', { class: 'sr-tag' }, it.tag) : null,
+        it.checked ? h('span', { class: 'sr-type' }, icon('check', 14)) : h('span', { class: 'sr-type' }, it.type || '')
+      );
+      items.push(it);
+      results.append(it.el);
+    }
+    function paint() {
+      const q = inputEl.value.trim().toLowerCase();
+      results.textContent = '';
+      items = [];
+      const bots = sortedBots().filter((b) => !q || match(b.name + ' ' + (b.instructions || ''), q));
+      const visible = bots.filter((b) => !b.hidden);
+      const hidden = bots.filter((b) => b.hidden);
+      for (const b of visible) add({ bot: b, title: b.name, sub: (b.last_preview || '').split('\n')[0], type: 'Bot', run: () => selectBot(b.id) }, q);
+      const cmds = paletteCommands().filter((c) => !q || match(c.title + ' ' + (c.sub || ''), q));
+      for (const c of cmds) add(c, q);
+      if (q) {
+        for (const b of hidden) add({ bot: b, title: b.name, sub: (b.last_preview || '').split('\n')[0], type: 'Bot', tag: 'Hidden', run: () => selectBot(b.id) }, q);
+        for (const m of msgResults.slice(0, 12)) {
+          const b = S.bots.get(m.bot_id);
+          add({ bot: b || {}, title: snippet(m.text, q), sub: m.role === 'user' ? `You to ${b ? b.name : 'a Bot'}` : `${b ? b.name : 'A Bot'} to you`, type: 'Message', run: () => jumpTo(m) }, q);
+        }
+      }
+      if (!items.length) {
+        results.append(
+          msgLoading
+            ? h('div', { class: 'sr-empty' }, spinner('sm'))
+            : h('div', { class: 'sr-empty' }, icon('search', 28), q ? 'No results' : 'No Bots yet')
+        );
+      }
+      setSel(clamp(sel, 0, Math.max(0, items.length - 1)));
+    }
+    function setSel(i) {
+      sel = i;
+      items.forEach((it, k) => it.el.classList.toggle('sel', k === i));
+      const it = items[i];
+      if (it) it.el.scrollIntoView({ block: 'nearest' });
+    }
+    const fetchMsgs = debounce(async () => {
+      const q = inputEl.value.trim();
+      const my = ++seq;
+      if (!q) {
+        msgResults = [];
+        msgLoading = false;
+        return paint();
+      }
+      try {
+        const r = await api('/api/search?q=' + encodeURIComponent(q));
+        if (my !== seq) return;
+        msgResults = (r && r.messages) || [];
+      } catch {
+        if (my !== seq) return;
+        msgResults = [];
+      }
+      msgLoading = false;
+      paint();
+    }, 220);
+    inputEl.addEventListener('input', () => {
+      sel = 0;
+      msgLoading = !!inputEl.value.trim();
+      paint();
+      fetchMsgs();
+    });
+    inputEl.addEventListener('keydown', (e) => {
+      const down = e.key === 'ArrowDown' || (isMac && e.ctrlKey && e.key === 'n');
+      const up = e.key === 'ArrowUp' || (isMac && e.ctrlKey && e.key === 'p');
+      if (down) {
+        e.preventDefault();
+        setSel(items.length ? (sel + 1) % items.length : 0);
+      } else if (up) {
+        e.preventDefault();
+        setSel(items.length ? (sel - 1 + items.length) % items.length : 0);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (items[sel]) go(items[sel]);
+      } else if (modKey(e) && /^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        const it = items[Number(e.key) - 1];
+        if (it) go(it);
+      }
+    });
+    const box = h('div', { class: 'palette', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Jump to' }, h('div', { class: 'pal-head' }, icon('search', 18), inputEl), results);
+    const close = openModal(box, { cls: 'top', onClose: () => (S.paletteClose = null) });
+    S.paletteClose = close;
+    paint();
+    if (initial) {
+      msgLoading = true;
+      fetchMsgs();
+    }
+    setTimeout(() => {
+      inputEl.focus();
+      inputEl.setSelectionRange(inputEl.value.length, inputEl.value.length);
+    }, 20);
+  }
+  function snippet(text, q) {
+    text = (text || '').replace(/\s+/g, ' ');
+    const i = text.toLowerCase().indexOf(q);
+    if (i < 0) return text.slice(0, 90);
+    const start = Math.max(0, i - 30);
+    return (start ? '…' : '') + text.slice(start, start + 100);
+  }
+  async function jumpTo(m) {
+    await selectBot(m.bot_id);
+    const c = S.nodes.get(m.id);
+    if (c) {
+      c.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      c.el.classList.remove('flash');
+      void c.el.offsetWidth;
+      c.el.classList.add('flash');
+      setTimeout(() => c.el.classList.remove('flash'), 2600);
+    }
+  }
+
+  // ───────────────────────────── account menu + shortcuts sheet ─────────────────────────────
+  function accountMenu() {
+    menuAt(
+      $('#meBtn'),
+      [
+        { label: 'Settings', icon: 'gear', kbd: MOD + ',', action: () => openSettings('general') },
+        { label: 'Computer', icon: 'monitor', action: () => openSettings('computer') },
+        { label: 'Usage & Billing', icon: 'bars', action: () => openSettings('usage') },
+        '-',
+        { label: 'Bot templates', icon: 'gridPlus', action: () => openTemplates() },
+        { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: MOD + '/', action: () => openShortcuts() },
+      ],
+      'top-start'
+    );
+  }
+  function openShortcuts() {
+    const rows = [
+      ['Jump to / search', MOD + 'K'],
+      ['New Bot', MOD + 'N'],
+      ['Send', '↵'],
+      ['New line', '⇧↵'],
+      ['Go to Bot 1–9', MOD + '1…9'],
+      ['Previous / next Bot', '⌥↑ / ⌥↓'],
+      ['Compact sidebar', MOD + 'B'],
+      ['Bot settings', isMac ? '⌘⇧,' : 'Ctrl+Shift+,'],
+      ['Settings', MOD + ','],
+      ['Focus chat', MOD + 'I'],
+      ['Close panel or dialog', 'Esc'],
+    ];
+    const close = openModal(
+      h(
+        'div',
+        { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Keyboard shortcuts' },
+        h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+        h('h2', { class: 'dialog-title' }, 'Keyboard shortcuts'),
+        h('div', { class: 'kbd-grid' }, rows.map(([a, b]) => [h('span', null, a), h('span', null, b)]))
+      )
+    );
+  }
+  // ───────────────────────────── settings ─────────────────────────────
+  const TABS = [
+    ['general', 'General', 'gear'],
+    ['computer', 'Computer', 'monitor'],
+    ['permissions', 'Permissions', 'shield'],
+    ['vault', 'Vault', 'vault'],
+    ['account', 'Claude Account', 'bars'],
+    ['updates', 'Updates', 'updates'],
+  ];
+  function openSettings(tab) {
+    if (S.settingsUI) {
+      if (tab) S.settingsUI.tab = tab;
+      rerenderSettings(true);
+      return;
+    }
+    const nav = h('nav', { class: 'set-nav' });
+    const body = h('div', { class: 'set-body' });
+    const main = h('div', { class: 'set-main' }, body);
+    const box = h(
+      'div',
+      { class: 'settings', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Settings' },
+      nav,
+      main,
+      h('button', { class: 'icon-btn set-close', onclick: () => close(), 'aria-label': 'Close settings' }, icon('x', 20))
+    );
+    const close = openModal(box, {
+      cls: 'settings-overlay',
+      onClose: () => {
+        S.settingsUI = null;
+        S.connDraft = null;
+      },
+    });
+    S.settingsUI = { tab: tab || 'general', nav, body, main, close };
+    S.connDraft = null;
+    rerenderSettings(true);
+    refreshSettingsData();
+  }
+  async function refreshSettingsData() {
+    const jobs = [
+      home('/api/connection').then((c) => (S.conn = Object.assign({ mode: 'local', url: '', token: '' }, c || {}))),
+    ];
+    if (S.booted) {
+      jobs.push(
+        api('/api/computer').then((c) => (S.computer = c)),
+        api('/api/usage').then((u) => (S.usage = u)),
+        api('/api/settings').then((s) => (S.settings = s))
+      );
+    }
+    await Promise.allSettled(jobs);
+    if (S.settingsUI) rerenderSettings();
+  }
+  function rerenderSettings(force) {
+    const ui = S.settingsUI;
+    if (!ui) return;
+    const ae = document.activeElement;
+    if (!force && ae && ui.body.contains(ae) && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return;
+    ui.nav.textContent = '';
+    for (const [key, label, ic] of TABS) {
+      ui.nav.append(
+        h(
+          'button',
+          {
+            class: 'set-nav-item' + (ui.tab === key ? ' active' : ''),
+            onclick: () => {
+              if (ui.tab === key) return;
+              ui.tab = key;
+              ui.main.scrollTop = 0;
+              rerenderSettings(true);
+            },
+          },
+          icon(ic, 20),
+          h('span', null, label)
+        )
+      );
+    }
+    const st = ui.main.scrollTop;
+    ui.body.textContent = '';
+    const tabDef = TABS.find((t) => t[0] === ui.tab) || TABS[0];
+    ui.body.append(h('h1', { class: 'set-title' }, tabDef[1]));
+    const render = { general: tabGeneral, computer: tabComputer, permissions: tabPermissions, vault: tabVault, account: tabAccount, updates: tabUpdates }[ui.tab];
+    try {
+      ui.body.append(render());
+    } catch (e) {
+      console.error(e);
+      ui.body.append(h('div', { class: 'set-note' }, 'Couldn’t show this page: ' + e.message));
+    }
+    ui.main.scrollTop = st;
+  }
+
+  // settings building blocks
+  const section = (label, ...kids) => h('div', { class: 'set-section' }, label ? h('div', { class: 'set-label' }, label) : null, ...kids);
+  const card = (...rows) => h('div', { class: 'set-card' }, ...rows);
+  const note = (...kids) => h('div', { class: 'set-note' }, ...kids);
+  function row(title, control, sub, cls = '') {
+    return h(
+      'div',
+      { class: 'set-row ' + cls },
+      h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-title' }, title), sub ? h('div', { class: 'set-row-sub' }, sub) : null),
+      control ? h('div', { class: 'set-row-ctl' }, control) : null
+    );
+  }
+  function toggleEl(checked, onchange) {
+    const i = h('input', { type: 'checkbox', class: 'toggle', role: 'switch' });
+    i.checked = !!checked;
+    i.addEventListener('change', () => onchange(i.checked));
+    return i;
+  }
+  function selectEl(value, options, onchange) {
+    const s = h(
+      'select',
+      { class: 'pill-select' },
+      options.map(([v, l]) => h('option', { value: v }, l))
+    );
+    s.value = value == null ? '' : value;
+    s.addEventListener('change', () => onchange(s.value));
+    return s;
+  }
+  const btn = (label, onclick, cls = '') => h('button', { class: 'btn ' + cls, onclick }, label);
+  async function putSettings(patch, okMsg) {
+    try {
+      const s = await api('/api/settings', { method: 'PUT', body: patch });
+      if (s) S.settings = s;
+      if (okMsg) toast(okMsg);
+    } catch (e) {
+      fail(e);
+    }
+    rerenderSettings(true);
+  }
+  const notConnected = () => note('Not connected to a computer right now. Check the Computer page.');
+
+
+  function tabGeneral() {
+    const name = (S.prefs.userName || '').trim();
+    const nameIn = h('input', { class: 'field inline-field', value: name, placeholder: 'Your name', maxlength: '40' });
+    const commitName = () => {
+      const v = nameIn.value.trim();
+      if (v === (S.prefs.userName || '')) return;
+      S.prefs.userName = v;
+      savePrefs();
+      renderMe();
+    };
+    nameIn.addEventListener('blur', commitName);
+    nameIn.addEventListener('keydown', (e) => e.key === 'Enter' && nameIn.blur());
+    const claude = (S.computer && S.computer.claude) || {};
+    const accentOpts = [['bot', 'Bot color'], ['none', 'None'], ...COLOR_IDS.filter((c) => hueOf(c)).map((c) => [c, COLOR_LABELS[c]])];
+    const accentVal = S.prefs.accent && S.prefs.accent !== 'bot' && S.prefs.accent !== 'none' ? colorIdOf(S.prefs.accent) || 'bot' : S.prefs.accent || 'bot';
+    return h(
+      'div',
+      null,
+      section(
+        'Account',
+        card(
+          h(
+            'div',
+            { class: 'set-row account-row' },
+            h('span', { class: 'acct-circle' }, ((name || 'You')[0] || 'Y').toUpperCase()),
+            h(
+              'div',
+              { class: 'set-row-text' },
+              nameIn,
+              h('div', { class: 'set-row-sub' }, claude.logged_in && claude.email ? `Claude: ${claude.email}` : 'Your name appears in the sidebar.')
+            )
+          )
+        )
+      ),
+      section(
+        'Appearance',
+        card(
+          row(
+            'Theme',
+            selectEl(S.prefs.theme || 'system', [['system', 'Follow System'], ['dark', 'Dark'], ['light', 'Light']], (v) => {
+              S.prefs.theme = v;
+              savePrefs();
+              applyTheme();
+            })
+          ),
+          row(
+            'Accent',
+            selectEl(accentVal, accentOpts, (v) => {
+              S.prefs.accent = v;
+              savePrefs();
+              applyTint();
+            }),
+            'Tints your messages and the send button. “Bot color” uses each Bot’s color.'
+          ),
+          row('Language', selectEl('en', [['en', 'Follow System']], () => {})),
+          row(
+            'Check Spelling While Typing',
+            toggleEl(S.prefs.spellcheck !== false, (v) => {
+              S.prefs.spellcheck = v;
+              savePrefs();
+              updateComposer();
+            })
+          ),
+          row(
+            'Show Tool Activity',
+            toggleEl(S.prefs.showTools === true, (v) => {
+              S.prefs.showTools = v;
+              savePrefs();
+              renderMessages(false);
+            }),
+            'Show each command and file edit as its own line in the chat. When off, the live status line under the last message shows what the Bot is doing.'
+          )
+        )
+      ),
+      section(
+        'Bot',
+        card(
+          S.settings
+            ? row(
+                'Default Model',
+                selectEl(S.settings.default_model || '', MODELS, (v) => putSettings({ default_model: v })),
+                'Used by bots whose model is set to Default.'
+              )
+            : row('Default Model', null, 'Connect to a computer to change this.')
+        )
+      )
+    );
+  }
+
+  function tabComputer() {
+    const c = S.computer;
+    const conn = S.conn;
+    if (!S.connDraft) S.connDraft = { mode: conn.mode === 'remote' ? 'remote' : 'local', url: conn.url || '', token: conn.token || '', result: null, busy: false };
+    const d = S.connDraft;
+    const out = h('div');
+
+    // where bots run
+    const seg = h(
+      'div',
+      { class: 'segmented' },
+      [
+        ['local', 'This computer'],
+        ['remote', 'Remote computer'],
+      ].map(([v, l]) =>
+        h(
+          'button',
+          {
+            class: d.mode === v ? 'on' : '',
+            onclick: () => {
+              d.mode = v;
+              d.result = null;
+              rerenderSettings(true);
+            },
+          },
+          l
+        )
+      )
+    );
+    const runsOn = card(
+      row(
+        'Bots run on',
+        seg,
+        conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : 'Bots are using this computer.'
+      )
+    );
+    if (d.mode === 'remote') {
+      const urlIn = h('input', { class: 'field', placeholder: 'http://my-pc:7777', value: d.url, spellcheck: 'false', autocomplete: 'off' });
+      const tokIn = h('input', { class: 'field', type: 'password', placeholder: 'Pairing token', value: d.token, autocomplete: 'off' });
+      urlIn.addEventListener('input', () => (d.url = urlIn.value));
+      tokIn.addEventListener('input', () => (d.token = tokIn.value));
+      const eye = h(
+        'button',
+        {
+          class: 'icon-btn field-eye',
+          title: 'Show token',
+          onclick: () => {
+            tokIn.type = tokIn.type === 'password' ? 'text' : 'password';
+          },
+        },
+        icon('eye', 16)
+      );
+      const resultEl = d.result
+        ? h(
+            'div',
+            { class: 'conn-result ' + (d.result.ok ? 'ok' : 'bad') },
+            d.result.ok ? icon('check', 15) : icon('alert', 15),
+            h('span', null, d.result.text)
+          )
+        : null;
+      const test = async () => {
+        const url = normalizeUrl(d.url);
+        if (!url) return urlIn.focus();
+        d.busy = true;
+        d.result = null;
+        rerenderSettings(true);
+        try {
+          const r = await home('/api/connection/test', { method: 'POST', body: { url, token: d.token.trim() } });
+          d.result =
+            r && r.ok
+              ? { ok: true, text: `Connected to ${(r.computer && r.computer.hostname) || hostOf(url)}${r.computer ? ` (${r.computer.os || ''})` : ''}` }
+              : { ok: false, text: (r && r.error) || 'Couldn’t connect' };
+        } catch (e) {
+          d.result = { ok: false, text: e.message };
+        }
+        d.busy = false;
+        rerenderSettings(true);
+      };
+      const connect = async () => {
+        const url = normalizeUrl(d.url);
+        if (!url) return urlIn.focus();
+        if (!d.token.trim()) return tokIn.focus();
+        d.busy = true;
+        rerenderSettings(true);
+        try {
+          S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'remote', url, token: d.token.trim() } });
+          S.connDraft = null;
+          S.current = null;
+          await boot();
+          toast(`Connected to ${hostOf(url)}`);
+        } catch (e) {
+          d.busy = false;
+          d.result = { ok: false, text: e.message };
+          rerenderSettings(true);
+        }
+      };
+      runsOn.append(
+        h(
+          'div',
+          { class: 'set-row stack' },
+          h('label', { class: 'f-label' }, 'Address'),
+          urlIn,
+          h('label', { class: 'f-label' }, 'Token'),
+          h('div', { class: 'field-wrap' }, tokIn, eye),
+          resultEl,
+          h(
+            'div',
+            { class: 'row-actions' },
+            btn(d.busy ? 'Working…' : 'Test connection', test),
+            btn(conn.mode === 'remote' && normalizeUrl(d.url) === conn.url && d.token === conn.token ? 'Reconnect' : 'Connect', connect, 'primary')
+          )
+        )
+      );
+    } else if (conn.mode === 'remote') {
+      runsOn.append(
+        h(
+          'div',
+          { class: 'set-row' },
+          h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-sub' }, `Switch back so bots run on this computer instead of ${hostOf(conn.url)}.`)),
+          h(
+            'div',
+            { class: 'set-row-ctl' },
+            btn(
+              'Use this computer',
+              async () => {
+                try {
+                  S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
+                  S.connDraft = null;
+                  S.current = null;
+                  await boot();
+                  toast('Bots now run on this computer');
+                } catch (e) {
+                  fail(e);
+                }
+              },
+              'primary'
+            )
+          )
+        )
+      );
+    }
+    out.append(section('Where bots run', runsOn));
+
+    // status card
+    if (c) {
+      const claude = c.claude || {};
+      const memPct = c.mem_total ? clamp((c.mem_used / c.mem_total) * 100, 0, 100) : 0;
+      out.append(
+        section(
+          'Status',
+          card(
+            row(
+              'Status',
+              h('span', { class: 'status-pill ' + (S.wsOk ? 'on' : 'off') }, h('i'), S.wsOk ? 'Online' : 'Offline'),
+              conn.mode === 'remote' ? hostOf(S.apiBase) : 'This computer'
+            ),
+            row('Name', h('span', { class: 'val' }, c.hostname || '—')),
+            row('System', h('span', { class: 'val' }, [c.os, c.os_version].filter(Boolean).join(' ') + (c.arch ? ` · ${c.arch}` : ''))),
+            row('Up for', h('span', { class: 'val' }, fmtDuration(c.uptime_secs))),
+            row('Processor', h('span', { class: 'val' }, c.cpu_count ? `${c.cpu_count} cores` : '—')),
+            h(
+              'div',
+              { class: 'set-row' },
+              h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-title' }, 'Memory')),
+              h(
+                'div',
+                { class: 'set-row-ctl mem' },
+                h('div', { class: 'meter' }, h('div', { class: 'meter-fill', style: { width: memPct + '%' } })),
+                h('span', { class: 'val small' }, `${fmtBytes(c.mem_used)} of ${fmtBytes(c.mem_total)}`)
+              )
+            ),
+            row(
+              'Claude Code',
+              h(
+                'span',
+                { class: 'val' },
+                claude.installed ? `v${(claude.version || '').replace(/^v/, '').split(' ')[0] || '?'}` : 'Not installed'
+              ),
+              claude.installed
+                ? claude.logged_in
+                  ? `Signed in as ${claude.email || 'your Claude account'}`
+                  : 'Not signed in. Open a terminal on that computer and run: claude'
+                : 'Install Claude Code on that computer, then run: claude'
+            ),
+            row('Listening on', h('span', { class: 'val mono' }, c.listen || '—'), c.is_remote_capable ? 'Other computers on your network can connect.' : 'Only this computer can connect.'),
+            row('Data folder', h('span', { class: 'val mono ellipsis', title: c.data_dir || '' }, c.data_dir || '—'))
+          )
+        )
+      );
+    } else {
+      out.append(section('Status', card(row('Status', h('span', { class: 'status-pill off' }, h('i'), 'Offline'), 'Not connected'))));
+    }
+
+    // workspace folder
+    if (S.settings) {
+      const wsIn = h('input', { class: 'field mono', value: S.settings.workspace_root || '', spellcheck: 'false' });
+      out.append(
+        section(
+          'Workspace',
+          card(
+            h(
+              'div',
+              { class: 'set-row stack' },
+              h('div', { class: 'set-row-title' }, 'Bot folders'),
+              h('div', { class: 'set-row-sub' }, 'Each bot gets its own folder inside this one, where it keeps files it makes.'),
+              h(
+                'div',
+                { class: 'inline-form' },
+                wsIn,
+                btn('Save', () => putSettings({ workspace_root: wsIn.value.trim() }, 'Workspace folder saved')),
+                S.conn.mode !== 'remote' &&
+                  btn('Open', () => api('/api/open-folder', { method: 'POST', body: { path: S.settings.workspace_root } }).catch(fail))
+              )
+            )
+          )
+        )
+      );
+    }
+
+    // help
+    out.append(
+      section(
+        'Run openbot 24/7 on another PC',
+        card(
+          h(
+            'div',
+            { class: 'set-row stack help' },
+            h(
+              'ol',
+              { class: 'steps' },
+              h('li', null, 'On the other PC (for example your Windows PC), install Claude Code and sign in by running ', h('code', null, 'claude'), ' once.'),
+              h('li', null, 'Start the host there: ', h('code', null, 'openbot-server --host 0.0.0.0 --port 7777'), '. It prints a pairing token.'),
+              h('li', null, 'Choose “Remote computer” above, enter ', h('code', null, 'http://<pc-name>:7777'), ' and the token, then press Connect.')
+            ),
+            h(
+              'div',
+              { class: 'set-row-sub' },
+              'Tip: install Tailscale on both computers to reach the PC securely from anywhere, and set the PC to never sleep so your bots stay online.'
+            )
+          )
+        )
+      )
+    );
+    return out;
+  }
+  function normalizeUrl(u) {
+    u = (u || '').trim();
+    if (!u) return '';
+    if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
+    return u.replace(/\/+$/, '');
+  }
+
+  function tabPermissions() {
+    const s = S.settings;
+    if (!s) return notConnected();
+    const out = h('div');
+    const modes = card(
+      ...PERMISSION_MODES.map(([key, title, desc, warn]) =>
+        h(
+          'label',
+          { class: 'set-row radio-row' + (s.permission_mode === key ? ' on' : '') },
+          h('input', {
+            type: 'radio',
+            name: 'perm',
+            checked: s.permission_mode === key,
+            onchange: () => putSettings({ permission_mode: key }),
+          }),
+          h('span', { class: 'radio-dot' }),
+          h(
+            'div',
+            { class: 'set-row-text' },
+            h('div', { class: 'set-row-title' }, title),
+            h('div', { class: 'set-row-sub' }, desc),
+            warn ? h('div', { class: 'set-row-warn' }, icon('alert', 14), warn) : null
+          )
+        )
+      )
+    );
+    out.append(section('When bots want to take an action', modes));
+
+    const rules = s.allow_rules || [];
+    const ruleIn = h('input', { class: 'field mono', placeholder: 'e.g. Bash(git status) or WebFetch', spellcheck: 'false' });
+    const add = () => {
+      const v = ruleIn.value.trim();
+      if (!v) return ruleIn.focus();
+      if (rules.includes(v)) return toast('That rule is already in the list');
+      putSettings({ allow_rules: [...rules, v] });
+    };
+    ruleIn.addEventListener('keydown', (e) => e.key === 'Enter' && add());
+    out.append(
+      section(
+        'Always allowed',
+        card(
+          rules.length
+            ? rules.map((r) =>
+                row(
+                  h('span', { class: 'mono' }, r),
+                  h(
+                    'button',
+                    { class: 'icon-btn', title: 'Remove', onclick: () => putSettings({ allow_rules: rules.filter((x) => x !== r) }) },
+                    icon('trash', 16)
+                  )
+                )
+              )
+            : row('No rules yet', null, 'Choose “Always allow” on an approval in the chat, or add a rule below.'),
+          h('div', { class: 'set-row' }, h('div', { class: 'inline-form grow' }, ruleIn, btn('Add', add)))
+        ),
+        note('Rules use Claude Code’s permission format. For example, ', h('code', null, 'Bash(npm test)'), ' allows that exact command and ', h('code', null, 'Bash(git *)'), ' allows any git command.')
+      )
+    );
+    return out;
+  }
+
+  function tabVault() {
+    const s = S.settings;
+    if (!s) return notConnected();
+    const vault = s.vault || [];
+    const nameIn = h('input', { class: 'field mono', placeholder: 'NAME (e.g. GITHUB_TOKEN)', spellcheck: 'false', autocomplete: 'off' });
+    const valIn = h('input', { class: 'field', type: 'password', placeholder: 'Secret value', autocomplete: 'new-password' });
+    nameIn.addEventListener('input', () => {
+      const p = nameIn.selectionStart;
+      nameIn.value = nameIn.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+      nameIn.setSelectionRange(p, p);
+    });
+    const save = async () => {
+      const name = nameIn.value.trim();
+      const value = valIn.value;
+      if (!name) return nameIn.focus();
+      if (!value) return valIn.focus();
+      try {
+        S.settings = await api('/api/vault', { method: 'POST', body: { name, value } });
+        toast(`Saved ${name}`);
+      } catch (e) {
+        fail(e);
+      }
+      rerenderSettings(true);
+    };
+    valIn.addEventListener('keydown', (e) => e.key === 'Enter' && save());
+    const remove = async (name) => {
+      const ok = await confirmDialog({ title: `Delete ${name}?`, body: 'Bots will no longer be able to use this secret.', confirmText: 'Delete', danger: true });
+      if (!ok) return;
+      try {
+        S.settings = await api('/api/vault/' + encodeURIComponent(name), { method: 'DELETE' });
+      } catch (e) {
+        fail(e);
+      }
+      rerenderSettings(true);
+    };
+    return h(
+      'div',
+      null,
+      section(
+        'Secrets',
+        card(
+          vault.length
+            ? vault.map((v) =>
+                row(
+                  h('span', { class: 'secret-name' }, icon('lock', 15), h('span', { class: 'mono' }, v.name)),
+                  h('div', { class: 'secret-ctl' }, h('span', { class: 'val mono dim' }, v.hint || '••••••'), h('button', { class: 'icon-btn', title: 'Delete', onclick: () => remove(v.name) }, icon('trash', 16)))
+                )
+              )
+            : row('Your vault is empty', null, 'Add API keys or passwords your bots need, like a GitHub token.')
+        ),
+        note('Secrets are stored on the computer where bots run and passed to bots as environment variables. They never appear in the chat.')
+      ),
+      section(
+        'Add a secret',
+        card(h('div', { class: 'set-row stack' }, h('div', { class: 'inline-form' }, nameIn, valIn, btn('Save', save, 'primary'))))
+      )
+    );
+  }
+
+  function tabAccount() {
+    const s = S.settings;
+    const u = S.usage;
+    const claude = (S.computer && S.computer.claude) || {};
+    const out = h('div');
+    const rl = u && u.rate_limit;
+    const pct = rl ? Math.round(clamp(rl.utilization || 0, 0, 1) * 100) : null;
+    const windowName = rl && rl.window === 'five_hour' ? '5-hour usage limit' : 'Weekly usage limit';
+    out.append(
+      section(
+        null,
+        h(
+        'div',
+        { class: 'set-card usage-card' },
+        h('div', { class: 'usage-title' }, windowName),
+        pct == null
+          ? h('div', { class: 'usage-big' }, h('span', { class: 'num dim' }, '—'))
+          : h('div', { class: 'usage-big' }, h('span', { class: 'num' }, `${pct}%`), h('span', { class: 'unit' }, 'used')),
+        h('div', { class: 'meter big' + (pct >= 90 ? ' hot' : '') }, h('div', { class: 'meter-fill', style: { width: (pct || 0) + '%' } })),
+        h('div', { class: 'usage-sub' }, rl ? (rl.resets_at ? fmtResetsIn(rl.resets_at) : '') : 'Usage appears after your first message.')
+      ),
+      note(
+        s && s.auth_mode === 'api_key'
+          ? 'Limits shown are for your Claude subscription. With an API key you pay per use instead.'
+          : 'Included usage with your Claude subscription, as reported by Claude Code. It resets automatically.'
+        )
+      )
+    );
+
+    if (s) {
+      const keyIn = h('input', { class: 'field', type: 'password', placeholder: s.api_key_set ? 'Enter a new key to replace it' : 'sk-ant-…', autocomplete: 'off' });
+      const saveKey = () => {
+        const v = keyIn.value.trim();
+        if (!v) return keyIn.focus();
+        putSettings({ api_key: v, auth_mode: 'api_key' }, 'API key saved');
+      };
+      keyIn.addEventListener('keydown', (e) => e.key === 'Enter' && saveKey());
+      const subRow = h(
+        'label',
+        { class: 'set-row radio-row' + (s.auth_mode !== 'api_key' ? ' on' : '') },
+        h('input', { type: 'radio', name: 'auth', checked: s.auth_mode !== 'api_key', onchange: () => putSettings({ auth_mode: 'subscription' }) }),
+        h('span', { class: 'radio-dot' }),
+        h(
+          'div',
+          { class: 'set-row-text' },
+          h('div', { class: 'set-row-title' }, 'Claude subscription'),
+          h(
+            'div',
+            { class: 'set-row-sub' },
+            claude.logged_in
+              ? `Signed in to Claude Code as ${claude.email || 'your account'}${claude.subscription ? ` · ${claude.subscription}` : ''}${claude.auth_method ? ` (${claude.auth_method})` : ''}`
+              : claude.installed
+                ? 'Claude Code isn’t signed in on that computer. Open a terminal there, run claude, and log in.'
+                : 'Install Claude Code on the computer where bots run, then run claude and log in.'
+          )
+        )
+      );
+      const apiRow = h(
+        'label',
+        { class: 'set-row radio-row' + (s.auth_mode === 'api_key' ? ' on' : '') },
+        h('input', {
+          type: 'radio',
+          name: 'auth',
+          checked: s.auth_mode === 'api_key',
+          onchange: () => {
+            if (s.api_key_set) putSettings({ auth_mode: 'api_key' });
+            else {
+              keyIn.focus();
+              toast('Paste your API key and press Save');
+            }
+          },
+        }),
+        h('span', { class: 'radio-dot' }),
+        h(
+          'div',
+          { class: 'set-row-text' },
+          h('div', { class: 'set-row-title' }, 'Anthropic API key'),
+          h('div', { class: 'set-row-sub' }, s.api_key_set ? `Key saved: ${s.api_key_hint || '••••'}` : 'Pay per use with a key from console.anthropic.com.')
+        )
+      );
+      out.append(
+        section(
+          'Sign-in method',
+          card(
+            subRow,
+            apiRow,
+            h(
+              'div',
+              { class: 'set-row' },
+              h(
+                'div',
+                { class: 'inline-form grow' },
+                keyIn,
+                btn('Save', saveKey, 'primary'),
+                s.api_key_set && btn('Remove', () => putSettings({ api_key: '', auth_mode: 'subscription' }, 'API key removed'), 'danger')
+              )
+            )
+          ),
+          note('The key is stored only on the computer where bots run.')
+        )
+      );
+    } else out.append(notConnected());
+
+    if (u) {
+      const per = (u.per_bot || []).slice().sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
+      out.append(
+        section(
+          'Spend',
+          card(
+            row('This week', h('span', { class: 'val' }, fmtUsd(u.week_cost_usd))),
+            row('All time', h('span', { class: 'val' }, fmtUsd(u.total_cost_usd))),
+            per.map((p) => {
+              const b = S.bots.get(p.bot_id);
+              return row(
+                h('span', { class: 'bot-inline' }, avatar(b || {}, 22), h('span', null, b ? b.name : 'Deleted bot')),
+                h('span', { class: 'val' }, fmtUsd(p.cost_usd)),
+                `${p.turns || 0} turn${p.turns === 1 ? '' : 's'}`
+              );
+            })
+          ),
+          note('Estimated by Claude Code. On a subscription you aren’t charged this amount. It shows what the same usage would cost with an API key.')
+        )
+      );
+    }
+    return out;
+  }
+
+  function tabUpdates() {
+    const claude = (S.computer && S.computer.claude) || {};
+    return h(
+      'div',
+      null,
+      section(
+        'openbot',
+        card(
+          row('Version', h('span', { class: 'val mono' }, S.version || '—')),
+          row('Updates', h('span', { class: 'status-pill on' }, h('i'), 'Up to date'), 'openbot updates when you rebuild or reinstall it.')
+        )
+      ),
+      section(
+        'Claude Code',
+        card(
+          row(
+            'Version on the computer',
+            h('span', { class: 'val mono' }, claude.installed ? claude.version || '—' : 'Not installed'),
+            'Claude Code updates itself automatically.'
+          )
+        )
+      )
+    );
+  }
+
+
+  // ───────────────────────────── global wiring ─────────────────────────────
+  $('#searchBtn').append(icon('search', 20));
+  $('#newBotBtn').append(icon('plus', 20));
+  $('#railSearchBtn').append(icon('search', 20));
+  $('#railNewBtn').append(icon('plus', 20));
+  $('#templatesBtn').append(icon('gridPlus', 20));
+  $('#settingsBtn').append(icon('gear', 19));
+  $('#menuBtn').append(icon('menu', 18));
+  $('#attachBtn').append(icon('plus', 16, '', 2.2));
+  $('#micBtn').append(icon('mic', 15, '', 2));
+  $('#sendBtn').append(icon('arrowUp', 16, 'g-send', 2.4), icon('mic', 15, 'g-mic', 2.2), icon('stop', 22, 'g-stop'));
+  $('#toBottom').append(icon('arrowDown', 18, '', 2));
+  $('#searchBtn').dataset.kbd = MOD + 'K';
+  $('#newBotBtn').dataset.kbd = MOD + 'N';
+  $('#railSearchBtn').dataset.kbd = MOD + 'K';
+  $('#railNewBtn').dataset.kbd = MOD + 'N';
+  $('#settingsBtn').dataset.kbd = MOD + ',';
+
+  $('#searchBtn').addEventListener('click', () => S.booted && openSearch());
+  $('#railSearchBtn').addEventListener('click', () => S.booted && openSearch());
+  // typing a letter on the focused Search button opens the palette with it
+  $('#searchBtn').addEventListener('keydown', (e) => {
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && e.key !== ' ') {
+      e.preventDefault();
+      openSearch(e.key);
+    }
+  });
+  $('#newBotBtn').addEventListener('click', () => S.booted && openNewBot());
+  $('#railNewBtn').addEventListener('click', () => S.booted && openNewBot());
+  $('#templatesBtn').addEventListener('click', () => S.booted && openTemplates());
+  $('#settingsBtn').addEventListener('click', () => openSettings('general'));
+  $('#meBtn').addEventListener('click', () => accountMenu());
+  $('#island').addEventListener('click', () => setPanel(!S.panelOpen));
+  $('#menuBtn').addEventListener('click', () => app.classList.toggle('sidebar-open'));
+  $('#scrim').addEventListener('click', () => app.classList.remove('sidebar-open'));
+  $('#toBottom').addEventListener('click', () => scrollBottom(true));
+  $('#newPill').addEventListener('click', () => scrollBottom(true));
+
+  // hold ⌘ for half a second to see ⌘1…⌘9 on the sidebar rows
+  let kbdTimer = null;
+  const hideKbd = () => {
+    clearTimeout(kbdTimer);
+    kbdTimer = null;
+    $('#sidebar').classList.remove('show-kbd');
+  };
+  window.addEventListener('blur', hideKbd);
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'Meta' || e.key === 'Control') hideKbd();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if ((isMac ? e.key === 'Meta' : e.key === 'Control') && !kbdTimer) {
+      kbdTimer = setTimeout(() => $('#sidebar').classList.add('show-kbd'), 500);
+    } else if (kbdTimer && !(e.key === 'Meta' || e.key === 'Control')) hideKbd();
+
+    if (e.key === 'Escape') {
+      if (openMenuEl) return closeMenu();
+      const top = modalStack[modalStack.length - 1];
+      if (top && top.dismissable) {
+        e.preventDefault();
+        top.close();
+        return;
+      }
+      if (rec) {
+        rec.abort ? rec.abort() : rec.stop();
+        return;
+      }
+      if (S.panelOpen && !(document.activeElement && panelEl.contains(document.activeElement) && isEditable(document.activeElement))) {
+        setPanel(false);
+        return;
+      }
+      if (app.classList.contains('sidebar-open')) app.classList.remove('sidebar-open');
+      return;
+    }
+    if (!S.booted) return;
+    const mod = modKey(e);
+    const k = e.key.toLowerCase();
+    if (mod && !e.altKey) {
+      if (k === 'k' && !e.shiftKey) {
+        e.preventDefault();
+        if (S.paletteClose) S.paletteClose();
+        else if (!modalStack.length) openSearch();
+        return;
+      }
+      if (k === 'f' && e.shiftKey) {
+        e.preventDefault();
+        if (!modalStack.length) openSearch();
+        return;
+      }
+      if (modalStack.length) return;
+      if ((e.code === 'Comma' || k === ',' || k === '<') && e.shiftKey) {
+        e.preventDefault();
+        setPanel(!S.panelOpen);
+      } else if (k === ',') {
+        e.preventDefault();
+        openSettings();
+      } else if (k === 'n' && !e.shiftKey) {
+        e.preventDefault();
+        openNewBot();
+      } else if (k === 'b' && !e.shiftKey) {
+        e.preventDefault();
+        toggleRail();
+      } else if (k === 'i' && !e.shiftKey) {
+        e.preventDefault();
+        input.focus();
+      } else if (k === '/' || e.code === 'Slash') {
+        e.preventDefault();
+        openShortcuts();
+      } else if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
+        e.preventDefault();
+        const b = orderedBots()[Number(e.key) - 1];
+        if (b) selectBot(b.id);
+      }
+      return;
+    }
+    if (e.altKey && !mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      if (modalStack.length) return;
+      e.preventDefault();
+      const order = orderedBots();
+      const i = order.findIndex((b) => b.id === S.current);
+      const next = order[clamp(i + (e.key === 'ArrowDown' ? 1 : -1), 0, order.length - 1)];
+      if (next) selectBot(next.id);
+      return;
+    }
+    // quick replies: A, B, C… pick an option of the open question card
+    if (!modalStack.length && !isEditable(document.activeElement) && !e.ctrlKey && !e.metaKey && !e.altKey && /^[a-z]$/i.test(e.key) && !input.value) {
+      const b = curBot();
+      const w = b && openWidget(S.msgs.get(b.id) || []);
+      const c = w && S.nodes.get(w.id);
+      const card = c && $('.card.widget', c.el);
+      const i = e.key.toUpperCase().charCodeAt(0) - 65;
+      if (card && card._opts && i < card._opts.length) {
+        e.preventDefault();
+        card._answer(card._opts[i]);
+        return;
+      }
+    }
+    // type-to-focus: printable keys go to the composer
+    if (!modalStack.length && !isEditable(document.activeElement) && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1 && curBot() && !input.disabled) {
+      if (e.key === ' ' && document.activeElement && document.activeElement.tagName === 'BUTTON') return;
+      input.focus();
+    }
+  });
+
+  // refresh relative things
+  setInterval(() => {
+    if (S.settingsUI && (S.settingsUI.tab === 'usage' || S.settingsUI.tab === 'computer')) rerenderSettings();
+  }, 60000);
+
+  // ───────────────────────────── start ─────────────────────────────
+  initToken();
+  loadDraftStore();
+  applyTheme();
+  layoutShell();
+  renderMe();
+  updateComposer();
+  renderAttachRow();
+  boot();
+})();

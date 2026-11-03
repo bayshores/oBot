@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>openbot</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <div id="app" class="app booting">
+    <aside class="sidebar" id="sidebar" aria-label="Bots">
+      <div class="sb-head" data-tauri-drag-region>
+        <div class="sb-head-btns">
+          <button class="circle-btn" id="searchBtn" aria-label="Search" data-tip="Search"></button>
+          <button class="circle-btn" id="newBotBtn" aria-label="New Bot" data-tip="New Bot"></button>
+        </div>
+      </div>
+      <div class="sb-scroll" id="sbScroll">
+        <div class="sb-list" id="botList" role="list"></div>
+      </div>
+      <div class="sb-rail-actions">
+        <button class="circle-btn" id="railNewBtn" aria-label="New Bot" data-tip="New Bot"></button>
+        <button class="circle-btn" id="railSearchBtn" aria-label="Search" data-tip="Search"></button>
+      </div>
+      <div class="sb-foot">
+        <button class="me" id="meBtn" aria-label="Account">
+          <span class="me-circle" id="meCircle"></span>
+          <span class="me-name" id="meName"></span>
+        </button>
+        <button class="circle-btn foot-btn" id="templatesBtn" aria-label="Bot templates" data-tip="Bot templates"></button>
+        <button class="circle-btn foot-btn" id="settingsBtn" aria-label="Settings" data-tip="Settings"></button>
+      </div>
+      <div class="sb-resize" id="sbResize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <main class="chat" id="chat">
+      <div class="chat-toolbar" id="chatToolbar" data-tauri-drag-region>
+        <div class="tb-start"><button class="circle-btn menu-btn" id="menuBtn" aria-label="Show bots"></button></div>
+        <button class="island" id="island" aria-label="View conversation details" aria-expanded="false" hidden></button>
+        <div class="tb-end"></div>
+      </div>
+      <div class="conn-banner" id="connBanner" hidden></div>
+      <div class="transcript" id="messages" role="log" aria-label="Conversation transcript">
+        <div class="tx-col" id="msgInner"></div>
+      </div>
+      <div class="jump-wrap">
+        <button class="to-bottom" id="toBottom" aria-label="Scroll to bottom" hidden></button>
+        <div class="new-pill" id="newPill" hidden></div>
+      </div>
+      <div class="dock" id="dock">
+        <div class="dock-band"></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <div class="c-content" id="cContent">
+            <div class="c-notice" id="cNotice" hidden></div>
+            <div class="c-attach" id="attachRow" role="list" aria-label="Attachments" hidden></div>
+            <textarea id="input" rows="1" aria-label="Prompt"></textarea>
+          </div>
+          <button type="button" class="c-btn c-plus" id="attachBtn" aria-label="Attach file" data-tip="Attach files"></button>
+          <div class="c-trailing">
+            <button type="button" class="c-btn c-mic" id="micBtn" aria-label="Dictate" data-tip="Dictate"></button>
+            <button type="submit" class="c-send" id="sendBtn" aria-label="Send message"></button>
+          </div>
+        </form>
+        <input type="file" id="fileInput" multiple hidden />
+      </div>
+      <div class="drop-overlay" id="dropOverlay"><div class="drop-badge">Drop files to add to chat</div></div>
+    </main>
+
+    <aside class="panel" id="panel" aria-label="Bot settings" hidden></aside>
+  </div>
+
+  <div id="screen" class="screen" hidden></div>
+  <div id="layer"></div>
+  <div id="tip" class="tip" hidden></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="/avatar.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

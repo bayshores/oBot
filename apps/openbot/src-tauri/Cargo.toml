@@ -1,0 +1,13 @@
+[package]
+name = "openbot"
+version.workspace = true
+edition.workspace = true
+description = "openbot desktop app"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+openbot-core = { path = "../../../crates/openbot-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"

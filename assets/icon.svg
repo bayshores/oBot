@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- openbot app icon: "Ollie", a chat-bubble bot with an antenna spark.
+       Graphic touches: halftone dots, a misprinted (risograph-style) offset shadow,
+       an orbit ring, and little sparkles. -->
+  <defs>
+    <clipPath id="tile">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a1f6e"/>
+      <stop offset="1" stop-color="#120d33"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.47" r="0.5">
+      <stop offset="0" stop-color="#7a5cff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#7a5cff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="body" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#ffb347"/>
+      <stop offset=".55" stop-color="#ff7a3d"/>
+      <stop offset="1" stop-color="#ff4f5e"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <pattern id="dots" width="34" height="34" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <circle cx="17" cy="17" r="5" fill="#b8a6ff"/>
+    </pattern>
+    <linearGradient id="dotfade" x1="1" y1="1" x2="0.3" y2="0.3">
+      <stop offset="0" stop-color="#fff" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="dotmask">
+      <rect x="0" y="0" width="1024" height="1024" fill="url(#dotfade)"/>
+    </mask>
+    <!-- the mascot: a rounded chat bubble with a tail at the bottom left -->
+    <path id="bubble" d="M330 300 H694 A130 130 0 0 1 824 430 V600 A130 130 0 0 1 694 730 H430 L338 800 A14 14 0 0 1 316 788 L328 724 A130 130 0 0 1 200 600 V430 A130 130 0 0 1 330 300 Z"/>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="100" y="100" width="824" height="824" fill="url(#bg)"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#dots)" mask="url(#dotmask)" opacity=".5"/>
+    <circle cx="512" cy="520" r="380" fill="url(#glow)"/>
+
+    <!-- orbit ring (back half) -->
+    <ellipse cx="512" cy="540" rx="372" ry="112" fill="none" stroke="#c6ff4a" stroke-width="10"
+             stroke-dasharray="26 22" stroke-linecap="round" transform="rotate(-14 512 540)" opacity=".95"/>
+
+    <!-- antenna -->
+    <path d="M512 300 V214" stroke="#ffd36b" stroke-width="18" stroke-linecap="round"/>
+    <circle cx="512" cy="196" r="30" fill="#c6ff4a"/>
+    <circle cx="502" cy="186" r="9" fill="#ffffff" opacity=".8"/>
+
+    <!-- risograph offset shadow -->
+    <use href="#bubble" fill="#39d0ff" transform="translate(22 22)"/>
+    <!-- body -->
+    <use href="#bubble" fill="url(#body)"/>
+    <path d="M330 314 H694 A116 116 0 0 1 810 430 V450 H214 V430 A116 116 0 0 1 330 314 Z" fill="url(#shine)"/>
+
+    <!-- face -->
+    <circle cx="420" cy="500" r="52" fill="#1d1440"/>
+    <circle cx="604" cy="500" r="52" fill="#1d1440"/>
+    <circle cx="438" cy="482" r="17" fill="#ffffff"/>
+    <circle cx="622" cy="482" r="17" fill="#ffffff"/>
+    <circle cx="404" cy="520" r="7" fill="#ffffff" opacity=".7"/>
+    <circle cx="588" cy="520" r="7" fill="#ffffff" opacity=".7"/>
+    <path d="M478 602 Q512 636 546 602" fill="none" stroke="#1d1440" stroke-width="16" stroke-linecap="round"/>
+    <ellipse cx="330" cy="590" rx="36" ry="20" fill="#ff3f7f" opacity=".45"/>
+    <ellipse cx="694" cy="590" rx="36" ry="20" fill="#ff3f7f" opacity=".45"/>
+
+
+    <!-- sparkles -->
+    <path d="M792 214 Q800 254 840 262 Q800 270 792 310 Q784 270 744 262 Q784 254 792 214 Z" fill="#c6ff4a"/>
+    <path d="M232 230 Q237 252 259 257 Q237 262 232 284 Q227 262 205 257 Q227 252 232 230 Z" fill="#ffffff" opacity=".85"/>
+    <path d="M806 790 Q810 808 828 812 Q810 816 806 834 Q802 816 784 812 Q802 808 806 790 Z" fill="#39d0ff"/>
+    <circle cx="214" cy="820" r="9" fill="#ffd36b"/>
+    <circle cx="866" cy="380" r="7" fill="#ffffff" opacity=".7"/>
+  </g>
+  <!-- thin inner edge so the tile reads crisply on dark docks -->
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="3"/>
+</svg>

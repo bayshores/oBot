@@ -1,0 +1,5 @@
+/target
+apps/openbot/src-tauri/gen
+.DS_Store
+.playwright-mcp
+docs/private

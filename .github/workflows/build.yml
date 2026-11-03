@@ -1,0 +1,36 @@
+# Builds openbot for Windows and macOS on GitHub's computers.
+# Push this repo to GitHub, open the "Actions" tab, and download the files from the finished run.
+name: build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Build openbot-server
+        run: cargo build --release -p openbot-server
+      - name: Build openbot app
+        working-directory: apps/openbot/src-tauri
+        run: cargo tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openbot-${{ matrix.os }}
+          path: |
+            target/release/openbot-server
+            target/release/openbot-server.exe
+            target/release/bundle/**/*.dmg
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*-setup.exe
+            scripts/windows/install-host.ps1

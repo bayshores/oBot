@@ -1,0 +1,15 @@
+[package]
+name = "openbot-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "openbot-server"
+path = "src/main.rs"
+
+[dependencies]
+openbot-core = { path = "../openbot-core" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sysinfo = "0.33"
