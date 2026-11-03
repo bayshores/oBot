@@ -89,3 +89,55 @@ pub fn lan_ip() -> Option<String> {
     sock.connect("8.8.8.8:80").ok()?;
     Some(sock.local_addr().ok()?.ip().to_string())
 }
+
+// ---------------------------------------------------------------- timezone
+// The user's chosen timezone (Settings › General › Timezone). None = this computer's own timezone.
+static TZ: std::sync::RwLock<Option<chrono_tz::Tz>> = std::sync::RwLock::new(None);
+
+/// Set the timezone by IANA name like "America/Los_Angeles" ("" = auto). Returns false if unknown.
+pub fn set_timezone(name: &str) -> bool {
+    let tz = if name.trim().is_empty() {
+        None
+    } else {
+        match name.trim().parse::<chrono_tz::Tz>() {
+            Ok(t) => Some(t),
+            Err(_) => return false,
+        }
+    };
+    *TZ.write().unwrap_or_else(|e| e.into_inner()) = tz;
+    true
+}
+
+fn tz() -> Option<chrono_tz::Tz> {
+    *TZ.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Wall-clock time (in the user's timezone) for a unix ms timestamp.
+pub fn to_local(ms: i64) -> Option<chrono::NaiveDateTime> {
+    use chrono::TimeZone;
+    match tz() {
+        Some(t) => t.timestamp_millis_opt(ms).single().map(|d| d.naive_local()),
+        None => chrono::Local.timestamp_millis_opt(ms).single().map(|d| d.naive_local()),
+    }
+}
+
+/// Unix ms for a wall-clock time in the user's timezone.
+pub fn from_local(n: chrono::NaiveDateTime) -> Option<i64> {
+    use chrono::TimeZone;
+    match tz() {
+        Some(t) => t.from_local_datetime(&n).earliest().map(|d| d.timestamp_millis()),
+        None => chrono::Local.from_local_datetime(&n).earliest().map(|d| d.timestamp_millis()),
+    }
+}
+
+pub fn now_local() -> chrono::NaiveDateTime {
+    to_local(now_ms()).unwrap_or_else(|| chrono::Local::now().naive_local())
+}
+
+/// e.g. "America/Los_Angeles", or "this computer's timezone".
+pub fn timezone_label() -> String {
+    match tz() {
+        Some(t) => t.name().to_string(),
+        None => "this computer's timezone".into(),
+    }
+}

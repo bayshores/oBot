@@ -53,7 +53,7 @@ Message = {
       | "widget" | "attachment" | "visualization" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
-  status: "streaming" | "done" | "running" | "ok" | "failed" | "pending" | "allowed" | "denied",
+  status: "streaming" | "done" | "running" | "ok" | "failed" | "pending" | "allowed" | "denied" | "expired",  // expired = approval left open when openbot restarted
   meta: object,           // see below
   created_at: number
 }
@@ -82,10 +82,11 @@ Settings = {
   review_ask: string[],   // "Always Ask" plain-language rules (max 20, 1000 chars each; wins over allow)
   review_allow: string[], // "Allow without Asking" rules
   mcp_servers: [{ name, type: "http"|"stdio", url?, headers?, command?, args?, env? }]  // header/env values masked
+  timezone: string,      // IANA name like "America/Los_Angeles"; "" = the computer's timezone. Routine times use it. PUT accepts it.
 }
 // permission_mode values: "ask" (Ask every time; auto-review may wave routine actions through),
 //   "allow_all" (Always allow), "never" (Never allow: anything needing approval is denied), plus legacy "auto", "accept_edits".
-// approval meta also has: proposed_rule (string shown for "Always allow"; saved into review_allow), reason (why it asked).
+// approval meta also has: decision ("allow"|"always"|"deny" once answered), proposed_rule (string shown for "Always allow"; saved into review_allow), reason (why it asked).
 
 Computer = {
   hostname, os, os_version, arch, uptime_secs, cpu_count, mem_total, mem_used,  // numbers in bytes/secs
@@ -153,6 +154,7 @@ Usage = {
 | POST | /api/mcp-servers | `{name, type:"http", url, headers}` or `{name, type:"stdio", command, args[], env}` | `Settings` |
 | DELETE | /api/mcp-servers/:name | – | `Settings` |
 | POST | /api/claude/update | – | `{ok, output}` runs `claude update` |
+| POST | /api/claude/logout | – | `{ok, output}` runs `claude auth logout` (Settings › Sign Out) |
 | POST | /api/open-folder | `{path}` | `{ok}` opens Finder/Explorer on the computer (local only) |
 | GET (ws) | /api/events?token= | – | stream of events |
 

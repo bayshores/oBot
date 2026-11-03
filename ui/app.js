@@ -4231,15 +4231,13 @@
     const accentVal = S.prefs.accent === 'none' ? 'none' : 'bot';
     const s = S.settings;
     const tz = searchSelect({
-      value: S.prefs.timezone || '',
+      value: (s && s.timezone) || '',
       options: timezoneOptions,
       placeholder: 'Search timezone',
       label: 'Timezone',
       closeLabel: 'Close timezone picker',
-      onChange: (v) => {
-        S.prefs.timezone = v;
-        savePrefs();
-      },
+      // Saved on the computer where Bots run: routine times use it.
+      onChange: (v) => putSettings({ timezone: v }),
     });
     return h(
       'div',

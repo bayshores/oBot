@@ -304,7 +304,8 @@ impl Db {
     /// Mark any approval / tool rows left "pending"/"running" (e.g. after a crash) as finished.
     pub fn close_dangling(&self) -> anyhow::Result<()> {
         let c = self.c();
-        c.execute("UPDATE messages SET status='denied' WHERE role='approval' AND status='pending'", [])?;
+        // Approvals still open when openbot stopped can't be answered any more.
+        c.execute("UPDATE messages SET status='expired' WHERE role='approval' AND status='pending'", [])?;
         c.execute("UPDATE messages SET status='failed' WHERE role='tool' AND status='running'", [])?;
         c.execute("UPDATE messages SET status='done' WHERE role='bot' AND status='streaming'", [])?;
         Ok(())

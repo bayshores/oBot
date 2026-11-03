@@ -224,8 +224,9 @@ fn persona(state: &Shared, bot: &Bot) -> String {
          of pasting long content, and when you promise to follow up later, schedule it with check_back_later.\n",
     );
     s.push_str(&format!(
-        "Current local time on this computer: {}.\n",
-        chrono::Local::now().format("%A %Y-%m-%d %H:%M")
+        "Current local time for the user: {} ({}). Routine and check-in times use this timezone.\n",
+        crate::util::now_local().format("%A %Y-%m-%d %H:%M"),
+        crate::util::timezone_label()
     ));
     if let Ok(mems) = state.db.memories_for(&bot.id) {
         if !mems.is_empty() {

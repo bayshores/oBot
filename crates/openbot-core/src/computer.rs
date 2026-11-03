@@ -49,6 +49,13 @@ async fn run_quick(path: &PathBuf, args: &[&str]) -> Option<String> {
 static CLAUDE_CACHE: std::sync::Mutex<Option<(std::time::Instant, String, Value)>> = std::sync::Mutex::new(None);
 
 /// Version + login status of Claude Code on this computer (cached for 30 seconds).
+/// Forget the cached login info (after signing in or out).
+pub fn forget_claude_info() {
+    if let Ok(mut c) = CLAUDE_CACHE.lock() {
+        *c = None;
+    }
+}
+
 pub async fn claude_info(override_path: &str) -> Value {
     if let Ok(c) = CLAUDE_CACHE.lock() {
         if let Some((at, key, v)) = c.as_ref() {

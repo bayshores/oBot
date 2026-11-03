@@ -48,6 +48,9 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     let config = Config::load_or_create(&config_path)?;
     let db = Db::open(&data_dir.join("openbot.db"))?;
     db.close_dangling()?;
+    if !crate::util::set_timezone(&config.timezone) {
+        tracing::warn!("unknown timezone {:?}; using this computer's timezone", config.timezone);
+    }
 
     if db.list_bots()?.is_empty() {
         let b = new_bot(&db, &config, "General Bot", "magenta", "blob", "", "")?;
@@ -134,6 +137,7 @@ fn router(state: Shared) -> Router {
         .route("/api/mcp-servers", post(add_mcp_server))
         .route("/api/mcp-servers/{name}", delete(remove_mcp_server))
         .route("/api/claude/update", post(update_claude))
+        .route("/api/claude/logout", post(logout_claude))
         .route("/api/memories/{id}", delete(delete_memory))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/vault", post(add_secret))
@@ -825,6 +829,10 @@ async fn decide_approval(State(st): State<Shared>, UrlPath(id): UrlPath<String>,
     }
     if let Ok(Some(mut m)) = st.db.get_message(&p.message_id) {
         m.status = if allow { "allowed" } else { "denied" }.into();
+        // "allow" | "always" | "deny", so the card can show "Always allowed" after a reload.
+        if let Some(o) = m.meta.as_object_mut() {
+            o.insert("decision".into(), json!(d.decision));
+        }
         st.db.upsert_message(&m)?;
         st.emit_message(false, &m);
     }
@@ -1164,6 +1172,24 @@ async fn update_claude(State(st): State<Shared>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({ "ok": out.status.success(), "output": crate::util::truncate_chars(text.trim(), 2000) })))
 }
 
+/// Settings › General › Sign Out: signs Claude Code out on this computer.
+async fn logout_claude(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    let path = st.config.read().await.claude_path.clone();
+    let claude = crate::computer::find_claude(&path).ok_or_else(|| bad("Claude Code isn't installed on this computer"))?;
+    let mut cmd = tokio::process::Command::new(claude);
+    cmd.args(["auth", "logout"]).stdin(std::process::Stdio::null()).kill_on_drop(true);
+    crate::util::hide_console(&mut cmd);
+    let out = tokio::time::timeout(Duration::from_secs(30), cmd.output())
+        .await
+        .map_err(|_| bad("Signing out took too long"))??;
+    crate::computer::forget_claude_info();
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if !out.status.success() {
+        return Err(bad(&format!("Couldn't sign out: {}", crate::util::truncate_chars(text.trim(), 300))));
+    }
+    Ok(Json(json!({ "ok": true, "output": crate::util::truncate_chars(text.trim(), 2000) })))
+}
+
 // ---------------------------------------------------------------- settings + vault
 
 async fn get_settings(State(st): State<Shared>) -> Json<Value> {
@@ -1183,6 +1209,7 @@ struct SettingsBody {
     auto_review: Option<bool>,
     review_allow: Option<Vec<String>>,
     review_ask: Option<Vec<String>>,
+    timezone: Option<String>,
 }
 
 fn clean_rules(v: Vec<String>) -> Result<Vec<String>, ApiError> {
@@ -1204,6 +1231,7 @@ fn clean_rules(v: Vec<String>) -> Result<Vec<String>, ApiError> {
 }
 
 async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> ApiResult<Json<Value>> {
+    let mut tz_changed = false;
     {
         let mut cfg = st.config.write().await;
         if let Some(v) = b.auth_mode {
@@ -1256,6 +1284,27 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
         }
         if let Some(v) = b.review_ask {
             cfg.review_ask = clean_rules(v)?;
+        }
+        if let Some(v) = b.timezone {
+            let v = v.trim().to_string();
+            if !crate::util::set_timezone(&v) {
+                return Err(bad("Unknown timezone"));
+            }
+            if v != cfg.timezone {
+                cfg.timezone = v;
+                tz_changed = true;
+            }
+        }
+    }
+    if tz_changed {
+        // Routine times are wall-clock times, so their next run moves with the timezone.
+        let now = now_ms();
+        for mut r in st.db.routines_for(None).unwrap_or_default() {
+            if r.enabled && r.schedule.get("kind").and_then(Value::as_str) != Some("once") {
+                r.next_run_at = crate::routines::next_run(&r.schedule, now);
+                let _ = st.db.upsert_routine(&r);
+                st.emit("routines.updated", json!({ "bot_id": r.bot_id }));
+            }
         }
     }
     st.save_config().await?;

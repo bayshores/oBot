@@ -11,13 +11,13 @@
 
 use std::time::Duration;
 
-use chrono::{Datelike, Local, NaiveTime, TimeZone, Weekday};
+use chrono::{Datelike, NaiveTime, Weekday};
 use serde_json::{json, Value};
 
 use crate::db::Routine;
 use crate::runner;
 use crate::state::Shared;
-use crate::util::now_ms;
+use crate::util::{from_local, now_ms, to_local};
 
 /// After this many runs in a row that nobody looked at, the routine pauses itself.
 pub const MAX_UNREAD_RUNS: i64 = 5;
@@ -46,10 +46,7 @@ fn parse_weekday(v: &Value) -> Option<Weekday> {
 }
 
 fn local_ms(date: chrono::NaiveDate, t: NaiveTime) -> Option<i64> {
-    Local
-        .from_local_datetime(&date.and_time(t))
-        .earliest()
-        .map(|d| d.timestamp_millis())
+    from_local(date.and_time(t))
 }
 
 /// Check a schedule and return a clean copy, or an error message for the bot.
@@ -87,7 +84,7 @@ pub fn validate(s: &Value) -> Result<Value, String> {
 
 /// Next time (unix ms) strictly after `after_ms`, or None if it won't run again.
 pub fn next_run(s: &Value, after_ms: i64) -> Option<i64> {
-    let after = Local.timestamp_millis_opt(after_ms).single()?;
+    let after = to_local(after_ms)?;
     let kind = s.get("kind").and_then(Value::as_str)?;
     match kind {
         "once" => {
@@ -102,7 +99,7 @@ pub fn next_run(s: &Value, after_ms: i64) -> Option<i64> {
             let t = parse_time(s)?;
             let wd = parse_weekday(s);
             let mday = s.get("day").and_then(Value::as_u64).unwrap_or(1) as u32;
-            let mut date = after.date_naive();
+            let mut date = after.date();
             for _ in 0..400 {
                 let ok = match kind {
                     "daily" => true,
@@ -131,7 +128,7 @@ pub fn describe(s: &Value) -> String {
     match s.get("kind").and_then(Value::as_str).unwrap_or("") {
         "once" => {
             let at = s.get("at").and_then(Value::as_i64).unwrap_or(0);
-            match Local.timestamp_millis_opt(at).single() {
+            match to_local(at) {
                 Some(d) => format!("Once, {}", d.format("%b %-d at %H:%M")),
                 None => "Once".into(),
             }

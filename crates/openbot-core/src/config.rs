@@ -60,6 +60,8 @@ pub struct Config {
     pub review_ask: Vec<String>,
     /// Extra MCP servers for every bot: {name, type:"http"|"stdio", url, headers, command, args, env}.
     pub mcp_servers: Vec<Value>,
+    /// IANA timezone for routines, e.g. "America/Los_Angeles". "" = this computer's timezone.
+    pub timezone: String,
 }
 
 impl Default for Config {
@@ -83,6 +85,7 @@ impl Default for Config {
             review_allow: vec![],
             review_ask: vec![],
             mcp_servers: vec![],
+            timezone: String::new(),
         }
     }
 }
@@ -138,6 +141,7 @@ impl Config {
             "review_allow": self.review_allow,
             "review_ask": self.review_ask,
             "mcp_servers": self.mcp_servers.iter().map(mask_mcp).collect::<Vec<_>>(),
+            "timezone": self.timezone,
         })
     }
 }

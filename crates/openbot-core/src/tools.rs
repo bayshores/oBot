@@ -118,14 +118,14 @@ fn s<'a>(args: &'a Value, k: &str) -> &'a str {
 
 /// Parse "2026-11-03T09:00" (local) into unix ms.
 fn parse_local(at: &str) -> Option<i64> {
-    use chrono::{Local, NaiveDateTime, TimeZone};
+    use chrono::NaiveDateTime;
     let at = at.trim();
     if let Ok(d) = chrono::DateTime::parse_from_rfc3339(at) {
         return Some(d.timestamp_millis());
     }
     for f in ["%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
         if let Ok(n) = NaiveDateTime::parse_from_str(at, f) {
-            return Local.from_local_datetime(&n).earliest().map(|d| d.timestamp_millis());
+            return crate::util::from_local(n);
         }
     }
     None
