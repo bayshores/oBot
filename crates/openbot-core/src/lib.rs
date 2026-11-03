@@ -11,6 +11,7 @@ pub mod api;
 pub mod computer;
 pub mod config;
 pub mod db;
+pub mod discover;
 pub mod markdown;
 pub mod mcp;
 pub mod review;

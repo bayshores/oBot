@@ -148,7 +148,10 @@ Usage = {
 | PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, workspace_root}` (`api_key:""` clears it) | `Settings` |
 | POST | /api/vault | `{name,value}` | `Settings` |
 | DELETE | /api/vault/:name | – | `Settings` |
-| GET | /api/computer | – | `Computer` |
+| GET | /api/computer | `?refresh=1` re-checks Claude Code now | `Computer` |
+| GET | /api/hello | – (no token) | `{app:"openbot", version, name}`: lets setup recognize an openbot computer |
+| GET | /api/tailscale | – | home only: `{installed, running, needs_login, state, self:{name,dns,os,online}, peers:[{name,dns,os,online}]}` |
+| POST | /api/discover | – | home only, ~4 s: `{tailscale, found:[{name, dns, os, url, version, computer_name}]}` your Tailscale devices that run openbot |
 | GET | /api/usage | – | `Usage` |
 | GET | /api/search?q= | – | `{bots:[Bot], messages:[Message]}` (max 50) |
 | POST | /api/messages/:id/answer | `{value}` | `Message` (the user's answer, sent as a normal user message) |

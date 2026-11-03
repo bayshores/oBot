@@ -154,6 +154,8 @@ fn router(state: Shared) -> Router {
         .route("/api/devices", get(list_devices))
         .route("/api/devices/{id}", delete(revoke_device))
         .route("/api/connection/pair", post(pair_with_computer))
+        .route("/api/tailscale", get(get_tailscale))
+        .route("/api/discover", post(discover_computers))
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new()
@@ -166,6 +168,8 @@ fn router(state: Shared) -> Router {
         .route("/pages/{id}", get(get_page))
         // No token needed: a new device trades a pairing code for its own token here.
         .route("/api/pair", post(pair_device))
+        // No token needed: lets the setup screen recognize an openbot computer (name + version only).
+        .route("/api/hello", get(hello))
         .merge(api)
         .layer(cors())
         .layer(middleware::from_fn(guard_origin))
@@ -530,6 +534,24 @@ async fn revoke_device(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -
 struct PairWithBody {
     url: String,
     code: String,
+}
+
+async fn hello() -> Json<Value> {
+    Json(json!({
+        "app": "openbot",
+        "version": crate::VERSION,
+        "name": sysinfo::System::host_name().unwrap_or_default(),
+    }))
+}
+
+/// Home server: is Tailscale installed and signed in here, and which of your devices are online.
+async fn get_tailscale() -> Json<Value> {
+    Json(crate::discover::tailscale_status().await)
+}
+
+/// Home server: find your devices (on Tailscale) that run openbot.
+async fn discover_computers() -> Json<Value> {
+    Json(crate::discover::discover().await)
 }
 
 /// Home server: pair this app with another computer (sends the code to its /api/pair).
@@ -1581,7 +1603,11 @@ async fn remove_secret(State(st): State<Shared>, UrlPath(name): UrlPath<String>)
 
 // ---------------------------------------------------------------- misc
 
-async fn get_computer(State(st): State<Shared>) -> Json<Value> {
+/// `?refresh=1` re-checks Claude Code right away (the setup screen's "Check again").
+async fn get_computer(State(st): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    if q.get("refresh").map(String::as_str) == Some("1") {
+        crate::computer::forget_claude_info();
+    }
     Json(computer_json(&st).await)
 }
 
