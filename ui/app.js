@@ -1085,6 +1085,13 @@
         S.settings = e.settings;
         if (S.settingsUI) rerenderSettings();
         break;
+      case 'devices.updated':
+        if (S.devicesUI) {
+          S.devicesUI.list = null;
+          S.devicesUI.err = null;
+          if (S.settingsUI && S.settingsUI.tab === 'computer') rerenderSettings();
+        }
+        break;
       case 'routines.updated':
         if (S.panelOpen && (!e.bot_id || e.bot_id === S.current)) loadPanelLists('routines');
         break;
@@ -4381,7 +4388,7 @@
   function tabComputer() {
     const c = S.computer;
     const conn = S.conn;
-    if (!S.connDraft) S.connDraft = { mode: conn.mode === 'remote' ? 'remote' : 'local', url: conn.url || '', token: conn.token || '', result: null, busy: false };
+    if (!S.connDraft) S.connDraft = { mode: conn.mode === 'remote' ? 'remote' : 'local', url: conn.url || '', code: '', token: '', useToken: false, result: null, busy: false };
     const d = S.connDraft;
     const out = h('div');
     const s = S.settings;
@@ -4429,55 +4436,79 @@
     );
     const runsOn = card(row('Bots run on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : 'Bots are using this computer.'));
     if (d.mode === 'remote') {
-      const urlIn = h('input', { class: 'field', placeholder: 'http://my-pc:7777', value: d.url, spellcheck: 'false', autocomplete: 'off' });
-      const tokIn = h('input', { class: 'field', type: 'password', placeholder: 'Pairing token', value: d.token, autocomplete: 'off' });
+      // Pair with another computer: its private address + a 6-digit code made on that computer.
+      const urlIn = h('input', { class: 'field', placeholder: 'https://my-pc.your-tailnet.ts.net', value: d.url, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Computer address' });
+      const codeIn = h('input', { class: 'field mono', placeholder: '123 456', value: d.code, inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '7', 'aria-label': 'Pairing code' });
+      const tokIn = h('input', { class: 'field', type: 'password', placeholder: 'Token', value: d.token, autocomplete: 'off', 'aria-label': 'Token' });
       urlIn.addEventListener('input', () => (d.url = urlIn.value));
+      codeIn.addEventListener('input', () => (d.code = codeIn.value));
       tokIn.addEventListener('input', () => (d.token = tokIn.value));
-      const eye = h('button', { class: 'icon-btn field-eye', title: 'Show token', onclick: () => (tokIn.type = tokIn.type === 'password' ? 'text' : 'password') }, icon('eye', 16));
       const resultEl = d.result ? h('div', { class: 'conn-result ' + (d.result.ok ? 'ok' : 'bad') }, d.result.ok ? icon('check', 15) : icon('alert', 15), h('span', null, d.result.text)) : null;
-      const test = async () => {
-        const url = normalizeUrl(d.url);
-        if (!url) return urlIn.focus();
-        d.busy = true;
-        d.result = null;
-        rerenderSettings(true);
-        try {
-          const r = await home('/api/connection/test', { method: 'POST', body: { url, token: d.token.trim() } });
-          d.result = r && r.ok ? { ok: true, text: `Connected to ${(r.computer && r.computer.hostname) || hostOf(url)}${r.computer ? ` (${r.computer.os || ''})` : ''}` } : { ok: false, text: (r && r.error) || 'Couldn’t connect' };
-        } catch (e) {
-          d.result = { ok: false, text: e.message };
-        }
-        d.busy = false;
-        rerenderSettings(true);
+      const finish = async (url, token) => {
+        S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'remote', url, token } });
+        S.connDraft = null;
+        S.current = null;
+        await boot();
+        toast(`Connected to ${hostOf(url)}`);
       };
       const connect = async () => {
         const url = normalizeUrl(d.url);
         if (!url) return urlIn.focus();
-        if (!d.token.trim()) return tokIn.focus();
+        const code = (d.code || '').replace(/\D/g, '');
+        if (!d.useToken && code.length !== 6) {
+          d.result = { ok: false, text: 'Enter the 6-digit pairing code shown on that computer.' };
+          rerenderSettings(true);
+          return;
+        }
+        if (d.useToken && !d.token.trim()) return tokIn.focus();
         d.busy = true;
+        d.result = null;
         rerenderSettings(true);
         try {
-          S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'remote', url, token: d.token.trim() } });
-          S.connDraft = null;
-          S.current = null;
-          await boot();
-          toast(`Connected to ${hostOf(url)}`);
+          if (d.useToken) {
+            const r = await home('/api/connection/test', { method: 'POST', body: { url, token: d.token.trim() } });
+            if (!r || !r.ok) throw new Error((r && r.error) || 'Couldn’t connect');
+            await finish(url, d.token.trim());
+          } else {
+            const r = await home('/api/connection/pair', { method: 'POST', body: { url, code } });
+            if (!r || !r.ok) throw new Error((r && r.error) || 'Couldn’t pair');
+            await finish(url, r.token);
+          }
         } catch (e) {
           d.busy = false;
           d.result = { ok: false, text: e.message };
           rerenderSettings(true);
         }
       };
+      const insecure = /^http:\/\//i.test(normalizeUrl(d.url)) && !/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(normalizeUrl(d.url));
       runsOn.append(
         h(
           'div',
           { class: 'set-row stack' },
+          h('div', { class: 'set-row-sub' }, 'On the other computer, run the openbot host setup. It shows a private address and a 6-digit pairing code. Enter both here.'),
           h('label', { class: 'f-label' }, 'Address'),
           urlIn,
-          h('label', { class: 'f-label' }, 'Token'),
-          h('div', { class: 'field-wrap' }, tokIn, eye),
+          insecure && h('div', { class: 'conn-result bad' }, icon('alert', 15), h('span', null, 'This address isn’t encrypted. Use the https://…ts.net address from Tailscale Serve, or an SSH tunnel to http://127.0.0.1.')),
+          d.useToken ? h('label', { class: 'f-label' }, 'Token') : h('label', { class: 'f-label' }, 'Pairing code'),
+          d.useToken ? tokIn : codeIn,
           resultEl,
-          h('div', { class: 'row-actions' }, btn(d.busy ? 'Working…' : 'Test connection', test), btn(conn.mode === 'remote' && normalizeUrl(d.url) === conn.url && d.token === conn.token ? 'Reconnect' : 'Connect', connect, 'primary'))
+          h(
+            'div',
+            { class: 'row-actions' },
+            h(
+              'button',
+              {
+                class: 'link-btn',
+                onclick: () => {
+                  d.useToken = !d.useToken;
+                  d.result = null;
+                  rerenderSettings(true);
+                },
+              },
+              d.useToken ? 'Use a pairing code instead' : 'Use a token instead (SSH tunnel)'
+            ),
+            btn(d.busy ? 'Connecting…' : 'Connect', connect, 'primary')
+          )
         )
       );
     } else if (conn.mode === 'remote') {
@@ -4529,12 +4560,15 @@
               h('span', { class: 'val' }, claude.installed ? `Version ${(claude.version || '').replace(/^v/, '').split(' ')[0] || '?'}` : 'Not installed'),
               claude.installed ? (claude.logged_in ? `Signed in as ${claude.email || 'your Claude account'}` : 'Not signed in. Open a terminal on that computer and run: claude') : 'Install Claude Code on that computer, then run: claude'
             ),
-            row('Listening on', h('span', { class: 'val mono' }, c.listen || '—'), c.is_remote_capable ? 'Other computers on your network can connect.' : 'Only this computer can connect.'),
+            row('Listening on', h('span', { class: 'val mono' }, c.listen || '—'), c.is_remote_capable ? 'Warning: any computer on the network can reach this. Safer: listen on 127.0.0.1 and use Tailscale Serve.' : 'Private: only this computer, plus devices you pair through Tailscale Serve or an SSH tunnel.'),
             row('Data folder', h('span', { class: 'val mono ellipsis', title: c.data_dir || '' }, c.data_dir || '—'))
           )
         )
       );
     } else out.append(section('Status', card(row('Status', h('span', { class: 'status-pill off' }, h('i'), 'Offline'), 'Not connected'))));
+
+    // paired devices (devices that can use the computer where bots run)
+    out.append(pairedDevicesSection());
 
     // plugins (custom MCP servers, 4.8)
     if (s) {
@@ -4613,15 +4647,102 @@
               'ol',
               { class: 'steps' },
               h('li', null, 'On the other PC (for example your Windows PC), install Claude Code and sign in by running ', h('code', null, 'claude'), ' once.'),
-              h('li', null, 'Start the host there: ', h('code', null, 'openbot-server --host 0.0.0.0 --port 7777'), '. It prints a pairing token.'),
-              h('li', null, 'Choose “Remote computer” above, enter ', h('code', null, 'http://<pc-name>:7777'), ' and the token, then press Connect.')
+              h('li', null, 'Install Tailscale on that PC and on this computer, and sign in to the same account on both.'),
+              h('li', null, 'On the PC, run the openbot host setup (', h('code', null, 'install-host.ps1'), '). It keeps openbot private and prints a ', h('code', null, 'https://…ts.net'), ' address and a 6-digit pairing code.'),
+              h('li', null, 'Choose “Remote computer” above, enter the address and the code, then press Connect.')
             ),
-            h('div', { class: 'set-row-sub' }, 'Tip: install Tailscale on both computers to reach the PC securely from anywhere, and set the PC to never sleep so your bots stay online.')
+            h('div', { class: 'set-row-sub' }, 'Only your own devices can reach the PC, and everything is encrypted. Never open port 7777 on your router or use Tailscale Funnel. Set the PC to never sleep so your bots stay online.')
           )
         )
       )
     );
     return out;
+  }
+  function pairedDevicesSection() {
+    const wrap = h('div', { class: 'set-section' });
+    // Reset when the app switches to a different computer.
+    if (!S.devicesUI || S.devicesUI.base !== S.apiBase) S.devicesUI = { base: S.apiBase, list: null, err: null, code: null, loading: false };
+    const st = S.devicesUI;
+    const load = async () => {
+      st.loading = true;
+      try {
+        st.list = await api('/api/devices');
+        st.err = null;
+      } catch (e) {
+        st.err = e.message;
+      }
+      st.loading = false;
+      rerenderSettings(true);
+    };
+    if (!st.list && !st.loading && !st.err) load();
+    const makeCode = async () => {
+      try {
+        st.code = await api('/api/pair/code', { method: 'POST' });
+        rerenderSettings(true);
+      } catch (e) {
+        fail(e);
+      }
+    };
+    const where = S.conn.mode === 'remote' ? hostOf(S.conn.url) : 'this computer';
+    wrap.append(
+      h(
+        'div',
+        { class: 'set-head' },
+        h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Paired devices'), h('div', { class: 'set-explain' }, `Devices that can use the bots on ${where}. Remove any you don’t recognize.`)),
+        pillBtn('Pair a new device', makeCode)
+      )
+    );
+    const rows = [];
+    if (st.code) {
+      const left = Math.max(0, Math.round((st.code.expires_at - Date.now()) / 60000));
+      rows.push(
+        row(
+          h('span', { class: 'mono pair-code' }, st.code.code.slice(0, 3) + ' ' + st.code.code.slice(3)),
+          btn('Done', () => {
+            st.code = null;
+            load();
+          }),
+          `Enter this code on the new device. It works once, for ${left} more minute${left === 1 ? '' : 's'}.`
+        )
+      );
+    }
+    if (st.err) rows.push(row('Couldn’t load paired devices', btn('Try again', load), st.err));
+    else if (st.list && !st.list.length) rows.push(row('No paired devices', null, 'Only this computer’s own openbot app can use it right now.'));
+    for (const dv of st.list || []) {
+      rows.push(
+        row(
+          h('span', null, dv.name, dv.current ? h('span', { class: 'chip' }, 'This device') : null),
+          h(
+            'button',
+            {
+              class: 'btn sm',
+              'aria-label': `Remove ${dv.name}`,
+              onclick: async () => {
+                const ok = await confirmDialog({
+                  title: `Remove “${dv.name}”?`,
+                  body: dv.current ? 'This device will be disconnected right away. You’ll need a new pairing code to connect again.' : 'That device will lose access right away. It can only come back with a new pairing code.',
+                  confirmText: 'Remove',
+                  danger: true,
+                });
+                if (!ok) return;
+                try {
+                  await api('/api/devices/' + encodeURIComponent(dv.id), { method: 'DELETE' });
+                  st.list = st.list.filter((x) => x.id !== dv.id);
+                  rerenderSettings(true);
+                } catch (e) {
+                  fail(e);
+                }
+              },
+            },
+            'Remove'
+          ),
+          `Paired ${fmtTime(dv.created_at)} · last used ${fmtTime(dv.last_seen)}`
+        )
+      );
+    }
+    if (rows.length) wrap.append(card(rows));
+    else if (!st.list) wrap.append(card(row('Loading…')));
+    return wrap;
   }
   function normalizeUrl(u) {
     u = (u || '').trim();

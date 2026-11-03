@@ -84,6 +84,9 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         port: addr.port(),
         listen: addr.to_string(),
         self_exe: std::env::current_exe()?,
+        limiter: crate::security::RateLimiter::default(),
+        device_seen: std::sync::Mutex::new(HashMap::new()),
+        pair_lock: Mutex::new(()),
     });
 
     // Look up Claude Code in the background so the first screen loads fast.
@@ -96,7 +99,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
 
     let app = router(state.clone());
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(listener, app).await {
+        if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await {
             tracing::error!("server stopped: {e}");
         }
     });
@@ -147,6 +150,10 @@ fn router(state: Shared) -> Router {
         .route("/api/search", get(search))
         .route("/api/open-folder", post(open_folder))
         .route("/api/events", get(events))
+        .route("/api/pair/code", post(new_pair_code))
+        .route("/api/devices", get(list_devices))
+        .route("/api/devices/{id}", delete(revoke_device))
+        .route("/api/connection/pair", post(pair_with_computer))
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new()
@@ -157,8 +164,11 @@ fn router(state: Shared) -> Router {
         .route("/avatar.js", get(|| async { ui_response("avatar.js") }))
         .route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT }))
         .route("/pages/{id}", get(get_page))
+        // No token needed: a new device trades a pairing code for its own token here.
+        .route("/api/pair", post(pair_device))
         .merge(api)
-        .layer(CorsLayer::very_permissive())
+        .layer(cors())
+        .layer(middleware::from_fn(guard_origin))
         .with_state(state)
 }
 
@@ -187,28 +197,100 @@ fn not_found(msg: &str) -> ApiError {
 
 type ApiResult<T> = Result<T, ApiError>;
 
-fn constant_eq(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+use crate::security::{client_key, constant_eq, sha256_hex};
+
+/// Which credential a request used: None = the owner token, Some(id) = a paired device.
+#[derive(Clone)]
+pub struct AuthDevice(pub Option<String>);
+
+fn peer_of(req: &Request) -> Option<SocketAddr> {
+    req.extensions()
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|c| c.0)
 }
 
-async fn require_token(State(st): State<Shared>, req: Request, next: Next) -> Response {
-    let expected = st.config.read().await.token.clone();
+fn token_of(req: &Request) -> Option<String> {
     let from_header = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::to_string);
-    let from_query = req.uri().query().and_then(|q| {
-        q.split('&')
-            .find_map(|kv| kv.strip_prefix("token="))
-            .map(|v| percent_decode(v))
-    });
-    let ok = from_header.or(from_query).map_or(false, |t| constant_eq(&t, &expected));
-    if !ok && req.method() != axum::http::Method::OPTIONS {
+    from_header.or_else(|| {
+        req.uri().query().and_then(|q| {
+            q.split('&')
+                .find_map(|kv| kv.strip_prefix("token="))
+                .map(percent_decode)
+        })
+    })
+}
+
+fn too_many(secs: i64) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [(header::RETRY_AFTER, secs.to_string())],
+        Json(json!({ "error": format!("Too many wrong tries. Wait {} minute(s) and try again.", (secs + 59) / 60) })),
+    )
+        .into_response()
+}
+
+async fn require_token(State(st): State<Shared>, mut req: Request, next: Next) -> Response {
+    if req.method() == axum::http::Method::OPTIONS {
+        return next.run(req).await;
+    }
+    let key = client_key(peer_of(&req), req.headers());
+    if let Some(secs) = st.limiter.blocked(&key) {
+        return too_many(secs);
+    }
+    let who = match token_of(&req) {
+        Some(t) if !t.is_empty() => {
+            let cfg = st.config.read().await;
+            if constant_eq(&t, &cfg.token) {
+                Some(AuthDevice(None))
+            } else {
+                let h = sha256_hex(&t);
+                cfg.devices.iter().find(|d| constant_eq(&d.token_hash, &h)).map(|d| AuthDevice(Some(d.id.clone())))
+            }
+        }
+        _ => None,
+    };
+    let Some(who) = who else {
+        st.limiter.fail(&key);
         return ApiError(StatusCode::UNAUTHORIZED, "Wrong or missing token".into()).into_response();
+    };
+    if let Some(id) = &who.0 {
+        st.device_seen.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone(), now_ms());
+    }
+    req.extensions_mut().insert(who);
+    next.run(req).await
+}
+
+/// Refuse requests from web pages that aren't openbot's own (stops a malicious site from
+/// talking to openbot in the background), and requests for unexpected host names
+/// (DNS rebinding).
+async fn guard_origin(req: Request, next: Next) -> Response {
+    if !crate::security::host_allowed(req.headers()) {
+        return ApiError(StatusCode::FORBIDDEN, "Unknown host name. Set OPENBOT_ALLOWED_HOSTS to allow it.".into()).into_response();
+    }
+    let path = req.uri().path();
+    if path.starts_with("/api/") {
+        if let Some(o) = req.headers().get(header::ORIGIN) {
+            if !crate::security::origin_allowed(o, req.headers()) {
+                tracing::warn!("blocked a request from web page origin {:?}", o);
+                return ApiError(StatusCode::FORBIDDEN, "This web page isn't allowed to use openbot".into()).into_response();
+            }
+        }
     }
     next.run(req).await
+}
+
+fn cors() -> CorsLayer {
+    use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin};
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(|o, parts| crate::security::origin_allowed(o, &parts.headers)))
+        .allow_methods(AllowMethods::mirror_request())
+        .allow_headers(AllowHeaders::mirror_request())
+        .max_age(Duration::from_secs(600))
 }
 
 fn percent_decode(s: &str) -> String {
@@ -328,6 +410,152 @@ async fn test_connection(Json(b): Json<TestBody>) -> Json<Value> {
         },
         Ok(Err(ureq::Error::Status(401, _))) => json!({ "ok": false, "error": "The computer rejected the token." }),
         Ok(Err(e)) => json!({ "ok": false, "error": format!("Couldn't reach the computer: {e}") }),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    })
+}
+
+// ---------------------------------------------------------------- pairing + devices
+
+#[derive(Deserialize)]
+struct PairBody {
+    code: String,
+    #[serde(default)]
+    device_name: String,
+}
+
+/// A new device trades a 6-digit pairing code for its own token. No token needed.
+async fn pair_device(
+    State(st): State<Shared>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(b): Json<PairBody>,
+) -> Response {
+    let key = client_key(Some(peer), &headers);
+    if let Some(secs) = st.limiter.blocked(&key) {
+        return too_many(secs);
+    }
+    let _guard = st.pair_lock.lock().await;
+    match crate::security::check_pairing_code(&st.data_dir, &b.code) {
+        crate::security::PairCheck::Ok => {}
+        crate::security::PairCheck::Wrong { tries_left } => {
+            st.limiter.fail(&key);
+            let msg = if tries_left == 0 {
+                "Wrong code. That code no longer works: make a new one on the host computer.".to_string()
+            } else {
+                format!("Wrong code. {tries_left} tries left.")
+            };
+            return ApiError(StatusCode::UNAUTHORIZED, msg).into_response();
+        }
+        crate::security::PairCheck::NoCode => {
+            st.limiter.fail(&key);
+            return ApiError(
+                StatusCode::UNAUTHORIZED,
+                "No pairing code is active. On the host computer run `openbot-server pair` to get a new one.".into(),
+            )
+            .into_response();
+        }
+    }
+    let token = crate::security::new_device_token();
+    let name = truncate_chars(b.device_name.trim(), 60);
+    let device = crate::security::Device {
+        id: new_id(),
+        name: if name.is_empty() { "Device".into() } else { name },
+        token_hash: sha256_hex(&token),
+        created_at: now_ms(),
+        last_seen: now_ms(),
+    };
+    st.config.write().await.devices.push(device.clone());
+    if let Err(e) = st.save_config().await {
+        return ApiError::from(e).into_response();
+    }
+    tracing::info!("paired a new device: {}", device.name);
+    st.emit("devices.updated", json!({}));
+    let computer = computer_json(&st).await;
+    Json(json!({ "token": token, "device_id": device.id, "computer": computer })).into_response()
+}
+
+/// Settings › "Pair a new device": make a pairing code on this computer.
+async fn new_pair_code(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    let _guard = st.pair_lock.lock().await;
+    let (code, expires_at) = crate::security::new_pairing_code(&st.data_dir)?;
+    Ok(Json(json!({ "code": code, "expires_at": expires_at })))
+}
+
+async fn list_devices(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>) -> ApiResult<Json<Value>> {
+    let seen = st.device_seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let mut changed = false;
+    let list = {
+        let mut cfg = st.config.write().await;
+        for d in cfg.devices.iter_mut() {
+            if let Some(&t) = seen.get(&d.id) {
+                if t > d.last_seen + 60_000 {
+                    d.last_seen = t;
+                    changed = true;
+                }
+            }
+        }
+        cfg.devices
+            .iter()
+            .map(|d| {
+                json!({
+                    "id": d.id, "name": d.name, "created_at": d.created_at,
+                    "last_seen": seen.get(&d.id).copied().unwrap_or(d.last_seen).max(d.last_seen),
+                    "current": who.0.as_deref() == Some(d.id.as_str()),
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    if changed {
+        st.save_config().await?;
+    }
+    Ok(Json(json!(list)))
+}
+
+async fn revoke_device(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    {
+        let mut cfg = st.config.write().await;
+        let before = cfg.devices.len();
+        cfg.devices.retain(|d| d.id != id);
+        if cfg.devices.len() == before {
+            return Err(not_found("No such device"));
+        }
+    }
+    st.save_config().await?;
+    st.device_seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    st.emit("devices.updated", json!({}));
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct PairWithBody {
+    url: String,
+    code: String,
+}
+
+/// Home server: pair this app with another computer (sends the code to its /api/pair).
+async fn pair_with_computer(Json(b): Json<PairWithBody>) -> Json<Value> {
+    let url = b.url.trim().trim_end_matches('/').to_string();
+    let code = b.code.trim().to_string();
+    let name = sysinfo::System::host_name().unwrap_or_else(|| "openbot app".into());
+    let res = tokio::task::spawn_blocking(move || {
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build();
+        agent.post(&format!("{url}/api/pair")).send_json(json!({ "code": code, "device_name": name }))
+    })
+    .await;
+    Json(match res {
+        Ok(Ok(r)) => match r.into_json::<Value>() {
+            Ok(v) if v.get("token").and_then(Value::as_str).is_some() => json!({ "ok": true, "token": v["token"], "computer": v["computer"] }),
+            Ok(_) | Err(_) => json!({ "ok": false, "error": "That address answered, but it doesn't look like openbot." }),
+        },
+        Ok(Err(ureq::Error::Status(_, r))) => {
+            let msg = r
+                .into_json::<Value>()
+                .ok()
+                .and_then(|v| v.get("error").and_then(Value::as_str).map(str::to_string))
+                .unwrap_or_else(|| "The computer said no.".into());
+            json!({ "ok": false, "error": msg })
+        }
+        Ok(Err(e)) => json!({ "ok": false, "error": format!("Couldn't reach that address: {e}") }),
         Err(e) => json!({ "ok": false, "error": e.to_string() }),
     })
 }

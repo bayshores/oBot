@@ -45,6 +45,12 @@ pub struct AppState {
     pub listen: String,
     /// Path of the current program (the approval helper is this same program with `mcp-approve`).
     pub self_exe: PathBuf,
+    /// Failed logins / pairing tries per client.
+    pub limiter: crate::security::RateLimiter,
+    /// Last time each paired device was seen (device id → unix ms). Saved when devices are listed.
+    pub device_seen: std::sync::Mutex<HashMap<String, i64>>,
+    /// Only one pairing attempt at a time (the code file is shared).
+    pub pair_lock: Mutex<()>,
 }
 
 pub type Shared = Arc<AppState>;

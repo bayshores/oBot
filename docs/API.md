@@ -1,8 +1,21 @@
 # openbot HTTP / WebSocket API (contract between `ui/` and `openbot-core`)
 
-All JSON. All `/api/*` routes need the token, either as header
+All JSON. All `/api/*` routes (except `POST /api/pair`) need a token, either as header
 `Authorization: Bearer <token>` or query `?token=<token>` (used for `<img src>` and the WebSocket).
-CORS is open (any origin) because every call is token-protected.
+Two kinds of token work:
+* the **owner token** (`config.token`): used by the desktop app on the same computer, the approval helper,
+  and SSH tunnels;
+* a **device token** (`obd_…`): given to a paired device by `POST /api/pair`. Only its SHA-256 hash is stored.
+
+Security rules (see `crates/openbot-core/src/security.rs`):
+* The server listens on 127.0.0.1 by default. Remote devices come in through Tailscale Serve (HTTPS) or an SSH tunnel.
+* `Host` must be an IP, `localhost`, a `*.ts.net` name, this computer's name (or `name.local`), or a name in
+  `OPENBOT_ALLOWED_HOSTS` (comma list). Otherwise 403 (blocks DNS rebinding).
+* `/api/*` requests with an `Origin` header are refused (403) unless the origin is `http://127.0.0.1:*`,
+  `http://localhost:*`, `tauri://localhost`, or the same origin as the `Host` the request came in on.
+  CORS allows exactly those origins.
+* 20 failed tokens / pairing codes per minute from one client → 429 for 5 minutes (`Retry-After` set). Behind
+  Tailscale Serve the client is the first `X-Forwarded-For` address (trusted only from loopback).
 
 The UI is served by an openbot server at `/` and is opened as `/?token=<token>`.
 The UI stores that token in `sessionStorage` and removes it from the address bar.
@@ -111,6 +124,11 @@ Usage = {
 | GET | /api/connection | – | `{mode,url,token}` (home only) |
 | PUT | /api/connection | `{mode,url,token}` | same (home only) |
 | POST | /api/connection/test | `{url,token}` | `{ok:bool, error?:string, computer?:Computer}` (home only) |
+| POST | /api/connection/pair | `{url, code}` | `{ok, token?, computer?, error?}` (home only): sends the code to `{url}/api/pair` with this computer's name. Then PUT /api/connection `{mode:"remote", url, token}` |
+| POST | /api/pair | `{code, device_name}` (**no token**) | `{token, device_id, computer}`; 401 `{error}` for a wrong/expired code ("Wrong code. N tries left.") |
+| POST | /api/pair/code | – | `{code:"123456", expires_at}`: new pairing code (10 minutes, single use, 5 tries). Replaces the previous code |
+| GET | /api/devices | – | `[{id, name, created_at, last_seen, current}]` (`current` = the device making this request) |
+| DELETE | /api/devices/:id | – | `{ok}` revokes that device's token right away |
 | GET/PUT | /api/prefs | object | object (home only) |
 | GET | /api/bootstrap | – | see above |
 | GET | /api/bots | – | `[Bot]` |
@@ -166,6 +184,7 @@ Errors: non-2xx with `{error: string}`.
 * `bot.created {bot}` · `bot.updated {bot}` · `bot.deleted {bot_id}`
 * `message.created {message}` · `message.updated {message}` (streaming text, tool finished, approval decided) · `messages.cleared {bot_id}`
 * `usage.updated {usage}` · `settings.updated {settings}`
+* `devices.updated` (a device was paired or removed; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
 * `resync` (reload everything)
 

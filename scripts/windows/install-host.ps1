@@ -4,10 +4,13 @@
   What it does:
     1. Copies openbot-server.exe to %LOCALAPPDATA%\openbot\
     2. Checks that Claude Code is installed and logged in
-    3. Opens TCP port 7777 in Windows Firewall (Private networks only)
+    3. Keeps openbot private: it only listens on this PC (127.0.0.1:7777). No firewall port is
+       opened. If Tailscale is installed and signed in, it turns on Tailscale Serve so your own
+       devices (and nobody else) can reach it at a private https://<pc>.<tailnet>.ts.net address.
     4. Creates a scheduled task that starts openbot-server when Windows boots
        (even before anyone signs in) and restarts it if it crashes
     5. Optional (-KeepAwake): stops the PC from sleeping while plugged in
+    Then it prints the address and a 6-digit pairing code for the openbot app.
 
   How to run (in PowerShell opened with "Run as administrator"):
     Set-ExecutionPolicy -Scope Process Bypass
@@ -38,6 +41,14 @@ function Assert-Admin {
   }
 }
 
+function Find-Tailscale {
+  $c = Get-Command tailscale -ErrorAction SilentlyContinue
+  if ($c) { return $c.Source }
+  $p = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
+  if (Test-Path $p) { return $p }
+  return $null
+}
+
 Assert-Admin
 
 if ($Uninstall) {
@@ -45,6 +56,14 @@ if ($Uninstall) {
   Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   Remove-NetFirewallRule -DisplayName "openbot ($Port)" -ErrorAction SilentlyContinue
   Get-Process openbot-server -ErrorAction SilentlyContinue | Stop-Process -Force
+  $ts = Find-Tailscale
+  if ($ts) {
+    $served = (& $ts serve status 2>$null | Out-String)
+    if ($served -match "127\.0\.0\.1:$Port|localhost:$Port") {
+      & $ts serve --https=443 off 2>$null | Out-Null
+      Write-Host "Turned off Tailscale Serve for openbot." -ForegroundColor Green
+    }
+  }
   Write-Host "openbot-server was removed. Your bots' data is still in $env:APPDATA\openbot" -ForegroundColor Green
   exit 0
 }
@@ -83,11 +102,40 @@ if (-not $claude) {
   }
 }
 
-# 3. Firewall: allow other computers on your private network / Tailscale to connect
+# 3. Private access. openbot listens only on 127.0.0.1, so nothing on your Wi-Fi or the internet
+#    can reach it. Your own devices get in through Tailscale Serve (encrypted, tailnet only).
+#    Older openbot versions opened a firewall port: remove that rule.
 Remove-NetFirewallRule -DisplayName "openbot ($Port)" -ErrorAction SilentlyContinue
-New-NetFirewallRule -DisplayName "openbot ($Port)" -Direction Inbound -Protocol TCP -LocalPort $Port `
-  -Action Allow -Profile Private | Out-Null
-Write-Host "[3/5] Firewall allows port $Port on Private networks." -ForegroundColor Green
+$ServeUrl = $null
+$ts = Find-Tailscale
+if (-not $ts) {
+  Write-Host "[3/5] Tailscale isn't installed. openbot only works on this PC for now." -ForegroundColor Yellow
+  Write-Host "      To use it from your Mac or phone: install Tailscale (https://tailscale.com/download) on"
+  Write-Host "      this PC and your other devices, sign in to the same account, then run this script again."
+} else {
+  $st = $null
+  try { $st = (& $ts status --json 2>$null | Out-String) | ConvertFrom-Json } catch {}
+  if (-not $st -or $st.BackendState -ne "Running") {
+    Write-Host "[3/5] Tailscale is installed but not signed in. Open Tailscale, sign in, then run this script again." -ForegroundColor Yellow
+  } else {
+    $existing = (& $ts serve status 2>$null | Out-String)
+    if ($existing -match "https://" -and $existing -notmatch "127\.0\.0\.1:$Port|localhost:$Port") {
+      Write-Host "[3/5] Tailscale Serve is already used for something else on this PC:" -ForegroundColor Yellow
+      Write-Host $existing
+      Write-Host "      Not changing it. To share openbot on another port run:  tailscale serve --bg --https=8443 $Port"
+    } else {
+      & $ts serve --bg --yes $Port 2>&1 | Out-Host
+      if ($LASTEXITCODE -ne 0) {
+        Write-Host "[3/5] Tailscale Serve didn't start. It may need HTTPS turned on for your tailnet:" -ForegroundColor Yellow
+        Write-Host "      open https://login.tailscale.com/admin/dns , enable MagicDNS and HTTPS Certificates, then run this script again."
+      } else {
+        $ServeUrl = "https://" + ($st.Self.DNSName.TrimEnd('.'))
+        Write-Host "[3/5] Your devices can reach openbot privately at $ServeUrl (Tailscale Serve, HTTPS)." -ForegroundColor Green
+        Write-Host "      Nothing is opened to your Wi-Fi or the internet. Never use 'tailscale funnel' for openbot."
+      }
+    }
+  }
+}
 
 # 4. Start at boot, as you (so it can use your Claude login), restart on crash
 $user = "$env:USERDOMAIN\$env:USERNAME"
@@ -115,9 +163,17 @@ if ($KeepAwake) {
 }
 
 Start-Sleep -Seconds 3
-$token = & $Target token
-$ip = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback' -and $_.IPAddress -notmatch '^169\.' } | Select-Object -First 1).IPAddress
+$pair = (& $Target pair | Out-String)
+$code = if ($pair -match 'Pairing code:\s+(\d{3}) (\d{3})') { "$($Matches[1]) $($Matches[2])" } else { "(run: $Target pair)" }
 Write-Host ""
-Write-Host "All set! In the openbot app go to Settings > Computer > Remote computer and enter:" -ForegroundColor Cyan
-Write-Host "   Address: http://${ip}:$Port   (or your Tailscale address, e.g. http://my-pc:$Port)"
-Write-Host "   Token:   $token"
+if ($ServeUrl) {
+  Write-Host "All set! In the openbot app go to Settings > Computer > Remote computer and enter:" -ForegroundColor Cyan
+  Write-Host "   Address:       $ServeUrl"
+  Write-Host "   Pairing code:  $code   (works once, for 10 minutes)"
+} else {
+  Write-Host "openbot is running on this PC: http://127.0.0.1:$Port" -ForegroundColor Cyan
+  Write-Host "Set up Tailscale (step 3 above) to use it from your other devices."
+}
+Write-Host ""
+Write-Host "Need another code later (for a new device)?  & '$Target' pair"
+Write-Host "See or remove paired devices:                  & '$Target' devices   /   & '$Target' unpair <id>"

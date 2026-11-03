@@ -1796,3 +1796,7 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
   .shimmer { animation: none; color: var(--text-2); background: none; }
 }
+
+/* paired devices */
+.pair-code { font-size: 22px; font-weight: 600; letter-spacing: .08em; }
+.set-row-title .chip, .set-row-text .chip { margin-left: 8px; vertical-align: middle; }

@@ -35,7 +35,8 @@ impl Default for Connection {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    /// Password the UI must send. Generated on first run.
+    /// Owner token: used by the desktop app on this same computer and the approval helper.
+    /// Other devices pair with a code and get their own token instead. Generated on first run.
     pub token: String,
     /// "subscription" (use the Claude Code login) or "api_key".
     pub auth_mode: String,
@@ -62,6 +63,8 @@ pub struct Config {
     pub mcp_servers: Vec<Value>,
     /// IANA timezone for routines, e.g. "America/Los_Angeles". "" = this computer's timezone.
     pub timezone: String,
+    /// Devices paired with a pairing code. Each has its own token (only its hash is stored).
+    pub devices: Vec<crate::security::Device>,
 }
 
 impl Default for Config {
@@ -86,6 +89,7 @@ impl Default for Config {
             review_ask: vec![],
             mcp_servers: vec![],
             timezone: String::new(),
+            devices: vec![],
         }
     }
 }
