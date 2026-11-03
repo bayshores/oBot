@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/icon.png" width="160" alt="openbot icon"></p>
+<p align="center"><img src="frontend/assets/icon.png" width="160" alt="openbot icon"></p>
 
 # openbot
 
@@ -23,12 +23,14 @@ Written in Rust: a small native desktop app (Tauri) plus a fast server, instead 
 
 | Path | What it is |
 |---|---|
-| `ui/` | The interface (HTML/CSS/JS, no build step). Served by the Rust server. |
-| `crates/openbot-core/` | The engine: API server, Claude Code runner, approvals, storage. |
-| `crates/openbot-server/` | The headless always-on server program (`openbot-server`). |
-| `apps/openbot/src-tauri/` | The desktop app (window + built-in local server). |
-| `scripts/windows/install-host.ps1` | One-time setup to make a Windows PC an always-on bot computer. |
-| `docs/API.md` | How the UI talks to the server. |
+| `frontend/ui/` | The interface (HTML/CSS/JS, no build step). Served by the Rust server. |
+| `frontend/desktop/` | The desktop app (Tauri window + built-in local server). |
+| `frontend/assets/` | The app icon (source SVG/PNG). |
+| `backend/core/` | The engine (`openbot-core`): API server, Claude Code runner, approvals, storage, security. |
+| `backend/server/` | The headless always-on server program (`openbot-server`). |
+| `backend/install/windows/install-host.ps1` | One-time setup to make a Windows PC an always-on bot computer. |
+| `docs/` | Documentation. Start at [`docs/README.md`](docs/README.md). |
+| `CLAUDE.md` | Rules for keeping this repo clean (for people and AI assistants). |
 
 ## How it uses your Claude subscription
 
@@ -48,7 +50,7 @@ Each bot is one long Claude Code conversation (`--resume`), with its own folder 
    ```
 3. Build the app:
    ```bash
-   cd apps/openbot/src-tauri
+   cd frontend/desktop
    cargo tauri build
    ```
    The app is at `target/release/bundle/macos/openbot.app`. Drag it into Applications.
@@ -72,7 +74,7 @@ On the **Windows PC**:
 4. Open **PowerShell as Administrator** in the folder and run:
    ```powershell
    Set-ExecutionPolicy -Scope Process Bypass
-   .\scripts\windows\install-host.ps1 -KeepAwake
+   .\backend\install\windows\install-host.ps1 -KeepAwake
    ```
    This starts openbot-server every time Windows boots (even before you sign in), restarts it if it
    crashes, and stops the PC from sleeping while plugged in. openbot only listens on the PC itself
@@ -112,7 +114,7 @@ openbot-server unpair <id>  # remove a paired device
 openbot-server token        # show the owner token (only for this PC or an SSH tunnel)
 openbot-server new-token    # make a new owner token
 Get-Content "$env:LOCALAPPDATA\openbot\openbot-server.log" -Tail 50   # see the log
-.\scripts\windows\install-host.ps1 -Uninstall                         # remove the auto-start
+.\backend\install\windows\install-host.ps1 -Uninstall                         # remove the auto-start
 ```
 
 Data lives in `%APPDATA%\openbot` (bots, chats, settings). Bot folders are in `%USERPROFILE%\OpenBot`.
@@ -135,11 +137,11 @@ the Windows installer and the Mac `.dmg`. Download them from the repository's **
 
 ## Developing the UI
 
-Run the server with `OPENBOT_UI_DIR` pointing at `ui/` and it reads the UI files from disk on every
+Run the server with `OPENBOT_UI_DIR` pointing at `frontend/ui/` and it reads the UI files from disk on every
 reload, so you don't need to rebuild:
 
 ```bash
-OPENBOT_UI_DIR=$PWD/ui cargo run -p openbot-server -- --local-only
+OPENBOT_UI_DIR=$PWD/frontend/ui cargo run -p openbot-server -- --local-only
 ```
 
 ---

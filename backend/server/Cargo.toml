@@ -8,7 +8,7 @@ name = "openbot-server"
 path = "src/main.rs"
 
 [dependencies]
-openbot-core = { path = "../openbot-core" }
+openbot-core = { path = "../core" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

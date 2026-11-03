@@ -1,8 +1,8 @@
-// Embeds every file in ../../ui into the program, so the server works without the folder.
+// Embeds every file in frontend/ui into the program, so the server works without the folder.
 use std::io::Write;
 
 fn main() {
-    let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+    let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../frontend/ui");
     let ui = std::fs::canonicalize(&ui).expect("ui folder missing");
     println!("cargo:rerun-if-changed={}", ui.display());
     let mut entries: Vec<_> = std::fs::read_dir(&ui)

@@ -7,7 +7,7 @@ Two kinds of token work:
   and SSH tunnels;
 * a **device token** (`obd_…`): given to a paired device by `POST /api/pair`. Only its SHA-256 hash is stored.
 
-Security rules (see `crates/openbot-core/src/security.rs`):
+Security rules (see `backend/core/src/security.rs`):
 * The server listens on 127.0.0.1 by default. Remote devices come in through Tailscale Serve (HTTPS) or an SSH tunnel.
 * `Host` must be an IP, `localhost`, a `*.ts.net` name, this computer's name (or `name.local`), or a name in
   `OPENBOT_ALLOWED_HOSTS` (comma list). Otherwise 403 (blocks DNS rebinding).

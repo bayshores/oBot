@@ -72,7 +72,7 @@ if ($Uninstall) {
 if (-not $ServerExe) {
   $candidates = @(
     (Join-Path $PSScriptRoot "openbot-server.exe"),
-    (Join-Path $PSScriptRoot "..\..\target\release\openbot-server.exe")
+    (Join-Path $PSScriptRoot "..\..\..\target\release\openbot-server.exe")
   )
   $ServerExe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }

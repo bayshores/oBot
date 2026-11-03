@@ -22,7 +22,7 @@ jobs:
       - name: Build openbot-server
         run: cargo build --release -p openbot-server
       - name: Build openbot app
-        working-directory: apps/openbot/src-tauri
+        working-directory: frontend/desktop
         run: cargo tauri build
       - uses: actions/upload-artifact@v4
         with:
@@ -33,4 +33,4 @@ jobs:
             target/release/bundle/**/*.dmg
             target/release/bundle/**/*.msi
             target/release/bundle/**/*-setup.exe
-            scripts/windows/install-host.ps1
+            backend/install/windows/install-host.ps1

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "app.openbot.desktop",
   "build": {
-    "frontendDist": "../../../ui"
+    "frontendDist": "../ui"
   },
   "app": {
     "windows": [],

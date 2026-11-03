@@ -1,5 +1,6 @@
 /target
-apps/openbot/src-tauri/gen
+frontend/desktop/gen
 .DS_Store
 .playwright-mcp
+# private notes, never commit (see CLAUDE.md)
 docs/private

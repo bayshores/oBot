@@ -8,6 +8,6 @@ description = "openbot desktop app"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-openbot-core = { path = "../../../crates/openbot-core" }
+openbot-core = { path = "../../backend/core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
