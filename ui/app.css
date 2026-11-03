@@ -1,14 +1,14 @@
 /* openbot styles (warm "sand" colour tokens).
-   Dark by default; light via [data-theme="light"]. */
+   Always dark (there is no light mode). */
 
 /* ───────────── 1. tokens ───────────── */
 :root {
   /* surfaces */
-  --chrome: #121212;
-  --sb: #0e0e0e;
-  --pane: #161616;
-  --elevated: #1f1f1f;
-  --elevated-hover: #2c2c2c;
+  --chrome: #0b0b0c;
+  --sb: #060607;
+  --pane: #0f0f10;
+  --elevated: #161617;
+  --elevated-hover: #222224;
   --hover: #f5f5f50f;
   --active: #f5f5f514;
   --primary: #f5f5f5;
@@ -18,17 +18,17 @@
   --secondary-hover: #f5f5f514;
   --secondary-active: #f5f5f533;
   --quaternary: #f5f5f505;
-  --scrim: #000000b2;
+  --scrim: #000000c2;
   --bubble-agent: #f5f5f50a;
   --bubble-user: #f5f5f52e;
-  --att-card: #252525;
+  --att-card: #1b1b1d;
   /* text + icons */
   --text: #f5f5f5;
   --text-2: #f5f5f5a8;
   --text-3: #f5f5f58a;
   --text-4: #f5f5f561;
   --on-primary: #f5f5f5;
-  --inverted: #121212;
+  --inverted: #0b0b0c;
   --icon: #f5f5f5e6;
   --icon-2: #f5f5f5a3;
   --icon-3: #f5f5f580;
@@ -80,11 +80,12 @@
   --dock-h: 76px;
   /* legacy names used by the settings screens */
   --bg: var(--chrome);
-  --modal: #1b1b1b;
+  --modal: #131314;
+  --dialog: #121213;
   --menu: var(--elevated);
   --card: var(--elevated);
-  --card-2: #1f1f1f;
-  --input-bg: #141414;
+  --card-2: #1a1a1c;
+  --input-bg: #0e0e0f;
   --btn: var(--elevated);
   --btn-hover: var(--elevated-hover);
   --border: var(--b3);
@@ -98,73 +99,6 @@
   --overlay: var(--scrim);
   --scroll: #f5f5f51f;
   color-scheme: dark;
-}
-
-:root[data-theme="light"] {
-  --chrome: #fcfcfc;
-  --sb: #f5f5f5;
-  --pane: #ffffff;
-  --elevated: #ffffff;
-  --elevated-hover: #f1f1f1;
-  --hover: #1c1c1c0f;
-  --active: #1c1c1c14;
-  --primary: #1c1c1c;
-  --primary-hover: #363636;
-  --primary-disabled: #1c1c1c26;
-  --secondary: #1c1c1c0f;
-  --secondary-hover: #1c1c1c1a;
-  --secondary-active: #1c1c1c2e;
-  --quaternary: #1c1c1c0a;
-  --scrim: #00000080;
-  --bubble-agent: #1c1c1c0f;
-  --bubble-user: #1c1c1c;
-  --att-card: #ffffff;
-  --text: #1c1c1c;
-  --text-2: #1c1c1cad;
-  --text-3: #1c1c1c8f;
-  --text-4: #1c1c1c66;
-  --on-primary: #ffffff;
-  --inverted: #fcfcfc;
-  --icon: #1c1c1ceb;
-  --icon-2: #1c1c1ca8;
-  --icon-3: #1c1c1c85;
-  --b1: #1c1c1c3d;
-  --b2: #1c1c1c1f;
-  --b3: #1c1c1c14;
-  --b4: #1c1c1c0f;
-  --focus: #1e86fc;
-  --spec1: #ffffff8f;
-  --spec2: #ffffff29;
-  --spec4: #ffffff0f;
-  --accent: #1680f3;
-  --accent-hover: #126fd4;
-  --accent-2: #1e86fc17;
-  --accent-text: #0b6dd3;
-  --danger: #e72e3b;
-  --danger-hover: #c82532;
-  --danger-2: #fb2b3e17;
-  --danger-text: #cd2834;
-  --success: #10ab61;
-  --success-text: #00854a;
-  --warn: #da830e;
-  --warn-text: #aa6300;
-  --yellow-bright: #f59312;
-  --sh-control: 0 1px 3px 0 #1c1c1c14;
-  --sh-inline: 0 4px 12px -1px #1c1c1c0f, 0 2px 4px -2px #1c1c1c14, 0 0 0 1px #1c1c1c0a;
-  --sh-popover: 0 10px 20px -3px #1c1c1c1a, 0 4px 6px -4px #1c1c1c1a, 0 0 0 1px #1c1c1c0f;
-  --sh-modal: 0 20px 32px -5px #1c1c1c26, 0 8px 12px -6px #1c1c1c1f, 0 0 0 1px #1c1c1c0f;
-  --pop-ring: inset 0 0 0 .5px var(--b3);
-  --tint-bubble-text: #ffffff;
-  --modal: #ffffff;
-  --card-2: #fafafa;
-  --input-bg: #ffffff;
-  --blue: #1680f3;
-  --blue-hover: #126fd4;
-  --code-bg: #1c1c1c0a;
-  --inline-code: #1c1c1c0f;
-  --shadow: 0 20px 32px -5px #1c1c1c26, 0 8px 12px -6px #1c1c1c1f, 0 0 0 1px #1c1c1c0f;
-  --scroll: #1c1c1c29;
-  color-scheme: light;
 }
 
 /* ───────────── 2. base ───────────── */
@@ -949,7 +883,7 @@ b, strong { font-weight: var(--w-semibold); }
 .card.viz { max-width: calc(100% - 82px); padding: 0; overflow: hidden; }
 .viz-head { display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 16px; border-bottom: .5px solid var(--b3); }
 .viz-title { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; font-weight: var(--w-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.viz-frame { display: block; width: 100%; height: 420px; border: 0; background: #fff; }
+.viz-frame { display: block; width: 100%; height: 420px; border: 0; background: var(--chrome); }
 
 .tool-row { display: flex; flex-direction: column; max-width: min(80%, 560px, calc(100% - 82px)); width: 100%; }
 .tool-line { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 10px; border-radius: 10px; font-size: 13px; color: var(--text-2); text-align: left; min-width: 0; }
@@ -1001,7 +935,7 @@ b, strong { font-weight: var(--w-semibold); }
   cursor: pointer;
   animation: fade-in .15s;
 }
-:root[data-theme="dark"] .new-pill { color: #121212; }
+.new-pill { color: var(--inverted); }
 .new-pill .x { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; opacity: .75; }
 .new-pill .x:hover { opacity: 1; background: #14141420; }
 @keyframes fade-in { from { opacity: 0; } }
@@ -1397,12 +1331,11 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
   width: min(460px, 100%);
   max-height: calc(100vh - 48px);
   overflow-y: auto;
-  background: var(--pane);
+  background: var(--dialog);
   border-radius: 24px;
   box-shadow: var(--pop-ring), var(--sh-modal);
   padding: 20px;
 }
-:root[data-theme="dark"] .dialog { background: #1a1a1a; }
 .dialog.wide { width: min(640px, 100%); }
 .dialog.confirm { width: min(380px, 100%); }
 .dialog-title { margin: 0 0 4px; font-size: 17px; line-height: 24px; font-weight: var(--w-medium); }
@@ -1435,8 +1368,7 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .swatches { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
 .swatch { width: 32px; height: 32px; border-radius: 50%; background: var(--sw); box-shadow: inset 0 0 0 .5px var(--b2); transition: transform .12s, box-shadow .12s; }
 .swatch:hover { transform: scale(1.06); }
-.swatch.on { box-shadow: 0 0 0 3px var(--pane), 0 0 0 4px var(--b1); }
-:root[data-theme="dark"] .swatch.on { box-shadow: 0 0 0 3px #1a1a1a, 0 0 0 4px var(--b1); }
+.swatch.on { box-shadow: 0 0 0 3px var(--dialog), 0 0 0 4px var(--b1); }
 .fold-btn { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-2); margin-top: 16px; padding: 4px 2px; }
 .fold-btn:hover { color: var(--text); }
 .fold-btn .ico { transition: transform .15s; }
@@ -1578,7 +1510,6 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .set-section { margin-bottom: 26px; }
 .set-label { font-size: 14px; color: var(--text-2); margin: 0 18px 10px; }
 .set-card { background: var(--card-2); border: .5px solid var(--b3); border-radius: 18px; padding: 6px 0; }
-:root[data-theme="dark"] .set-card { background: #222222; }
 .set-note { color: var(--text-3); font-size: 13px; margin: 10px 18px 0; line-height: 1.5; }
 .set-note code, .set-row code, .steps code { background: var(--inline-code); padding: .1em .38em; border-radius: 6px; font-size: .88em; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 18px; min-height: 56px; }
@@ -1622,7 +1553,6 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .radio-row input { position: absolute; opacity: 0; pointer-events: none; }
 .radio-dot { width: 20px; height: 20px; margin-top: 2px; border-radius: 50%; border: 2px solid var(--b1); flex: none; transition: border-color .15s, box-shadow .15s; }
 .radio-row.on .radio-dot { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--card-2), inset 0 0 0 10px var(--accent); }
-:root[data-theme="dark"] .radio-row.on .radio-dot { box-shadow: inset 0 0 0 4px #222, inset 0 0 0 10px var(--accent); }
 .radio-row input:focus-visible + .radio-dot { outline: 2px solid var(--focus); outline-offset: 2px; }
 .steps { margin: 0 0 10px; padding-left: 1.3em; font-size: 14px; line-height: 1.6; }
 .steps li { margin: 4px 0; }
@@ -1790,7 +1720,7 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 
 /* onboarding (settings-and-bots.md 4.4) */
 .overlay.onboard-overlay { background: var(--chrome); }
-.dialog.onboard { width: min(500px, 100%); padding: 40px 36px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; background: var(--pane); transition: width .2s var(--ease); }
+.dialog.onboard { width: min(500px, 100%); padding: 40px 36px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; background: var(--dialog); transition: width .2s var(--ease); }
 .dialog.onboard.wide { width: min(640px, 100%); text-align: left; align-items: stretch; padding-top: 32px; }
 .ob-skip { position: absolute; top: 18px; right: 20px; text-decoration: none; font-size: 13px; }
 .ob-art { margin-bottom: 18px; }

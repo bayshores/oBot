@@ -1212,7 +1212,8 @@ async fn get_page(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> Res
     }
 }
 
-const PAGE_HEIGHT_SCRIPT: &str = "\n<script>(function(){function s(){try{parent.postMessage({type:'openbot:height',height:document.documentElement.scrollHeight},'*')}catch(e){}}addEventListener('load',s);addEventListener('resize',s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}setTimeout(s,0)})();</script>\n";
+// `:where(html)` has no weight, so a page that sets its own colors keeps them.
+const PAGE_HEIGHT_SCRIPT: &str = "\n<style>:where(html){color-scheme:dark;background:#0b0b0c;color:#ececec}</style><script>(function(){function s(){try{parent.postMessage({type:'openbot:height',height:document.documentElement.scrollHeight},'*')}catch(e){}}addEventListener('load',s);addEventListener('resize',s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}setTimeout(s,0)})();</script>\n";
 
 async fn make_main(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let bot = get_bot(&st, &id).await?;

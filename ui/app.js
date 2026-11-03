@@ -256,14 +256,15 @@
     const color = colorIdOf(bot.color) || d.color;
     return { shape, color };
   }
-  const themeName = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+  // openbot is always dark (there is no light mode), so avatars are always painted for a dark background.
+  const themeName = () => 'dark';
   const inkOf = (color) => {
     const A = OB();
     try {
       if (A && A.ink) return A.ink(color, themeName());
     } catch {}
     const c = COLOR_INK[color] || COLOR_INK.gray;
-    return themeName() === 'light' ? c[1] : c[0];
+    return c[0];
   };
 
   // Activity kind (bot.activity.kind) → avatar animation state
@@ -364,7 +365,7 @@
   function hueText(colorId) {
     const hu = HUES[hueOf(colorId)];
     if (!hu) return 'var(--text-2)';
-    return themeName() === 'light' ? hu[2] : hu[5];
+    return hu[5];
   }
   function applyTint() {
     const pref = S.prefs.accent || 'bot';
@@ -378,12 +379,11 @@
       props.forEach((p) => st.removeProperty(p));
       return;
     }
-    const light = themeName() === 'light';
-    st.setProperty('--tint-bubble', light ? hu[1] : hu[3]);
-    st.setProperty('--tint-bubble-text', light ? '#ffffff' : '#f5f5f5');
-    st.setProperty('--tint-cta', light ? hu[0] : hu[3]);
-    st.setProperty('--tint-cta-hover', light ? hu[1] : hu[4]);
-    st.setProperty('--tint-cta-text', light ? '#ffffff' : '#f5f5f5');
+    st.setProperty('--tint-bubble', hu[3]);
+    st.setProperty('--tint-bubble-text', '#f5f5f5');
+    st.setProperty('--tint-cta', hu[3]);
+    st.setProperty('--tint-cta-hover', hu[4]);
+    st.setProperty('--tint-cta-text', '#f5f5f5');
   }
 
   // ───────────────────────────── constants ─────────────────────────────
@@ -750,27 +750,11 @@
   window.addEventListener('blur', closeMenu);
 
   // ───────────────────────────── theme ─────────────────────────────
-  const mqLight = window.matchMedia('(prefers-color-scheme: light)');
+  // Always dark. Older installs may still have prefs.theme saved; it is ignored.
   function applyTheme() {
-    const t = S.prefs.theme || 'system';
-    const resolved = t === 'system' ? (mqLight.matches ? 'light' : 'dark') : t;
-    const changed = document.documentElement.dataset.theme !== resolved;
-    document.documentElement.dataset.theme = resolved;
+    document.documentElement.dataset.theme = 'dark';
     applyTint();
-    if (changed && S.booted) {
-      // avatars are painted per theme
-      for (const el of liveAvatars) {
-        try {
-          el._av && el._av.set && el._av.set({ theme: resolved });
-        } catch {}
-      }
-      for (const el of $$('.av')) if (!el._live && el._look) {
-        const [shape, color, badge] = el._look.split('/');
-        paintAvatar(el, { shape, color }, el._size || el.offsetWidth || 36, { badge: badge || null });
-      }
-    }
   }
-  mqLight.addEventListener ? mqLight.addEventListener('change', applyTheme) : mqLight.addListener(applyTheme);
 
   // ───────────────────────────── screens (token / offline / boot) ─────────────────────────────
   function showScreen(content) {
@@ -3788,12 +3772,6 @@
 
   // ───────────────────────────── search / command palette (⌘K) ─────────────────────────────
   function paletteCommands() {
-    const th = S.prefs.theme || 'system';
-    const setTheme = (v) => {
-      S.prefs.theme = v;
-      savePrefs();
-      applyTheme();
-    };
     return [
       { title: 'New Bot', icon: 'plus', type: 'Action', run: () => openNewBot() },
       { title: 'Bot templates', icon: 'gridPlus', type: 'Action', run: () => openTemplates() },
@@ -3803,9 +3781,6 @@
       { title: 'How openbot works', icon: 'sparkle', type: 'Action', sub: 'Help', run: () => openOnboarding() },
       { title: 'Set up an always-on computer', icon: 'monitor', type: 'Action', sub: 'Help', run: () => openSetupWizard() },
       ...TABS.map(([key, label, ic]) => ({ title: `Settings: ${label}`, icon: ic, type: 'Action', sub: 'Settings', run: () => openSettings(key) })),
-      { title: 'Theme: System', icon: 'display', type: 'Action', sub: 'Settings · Appearance', checked: th === 'system', keep: true, run: () => setTheme('system') },
-      { title: 'Theme: Light', icon: 'sun', type: 'Action', sub: 'Settings · Appearance', checked: th === 'light', keep: true, run: () => setTheme('light') },
-      { title: 'Theme: Dark', icon: 'moon', type: 'Action', sub: 'Settings · Appearance', checked: th === 'dark', keep: true, run: () => setTheme('dark') },
     ].filter(Boolean);
   }
   function openSearch(initial = '') {
@@ -4320,14 +4295,6 @@
       section(
         'Appearance',
         card(
-          row(
-            'Theme',
-            selectEl(S.prefs.theme || 'system', [['system', 'Follow System'], ['light', 'Light'], ['dark', 'Dark']], (v) => {
-              S.prefs.theme = v;
-              savePrefs();
-              applyTheme();
-            })
-          ),
           row(
             'Accent',
             selectEl(accentVal, [['none', 'Black'], ['bot', 'Bot color']], (v) => {

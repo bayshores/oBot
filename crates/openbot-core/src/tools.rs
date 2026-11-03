@@ -43,7 +43,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "show_page",
-            "description": "Show an interactive HTML page inside the chat (charts, tables, small apps, visual summaries). Give either full HTML or a path to an .html file. Scripts run in a sandbox without network access to the user's data.",
+            "description": "Show an interactive HTML page inside the chat (charts, tables, small apps, visual summaries). Give either full HTML or a path to an .html file. openbot is dark-themed: use a dark background (#0b0b0c) with light text unless the user asks otherwise. Scripts run in a sandbox without network access to the user's data.",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "html": {"type": "string"},

@@ -97,7 +97,10 @@ fn main() {
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("openbot")
                 .inner_size(1040.0, 760.0)
-                .min_inner_size(720.0, 520.0);
+                .min_inner_size(720.0, 520.0)
+                // openbot is always dark (no light mode), so the window frame and loading background match.
+                .theme(Some(tauri::Theme::Dark))
+                .background_color(tauri::window::Color(11, 11, 12, 255));
             #[cfg(target_os = "macos")]
             let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)

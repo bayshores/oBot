@@ -14,10 +14,10 @@
   .controls { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px 24px; border-bottom: 1px solid #222; }
   .controls button { font: inherit; padding: 6px 12px; border-radius: 999px; border: 1px solid #333; background: #1b1b1d; color: #ddd; cursor: pointer; }
   .controls button.on { background: #f2f2f2; color: #111; border-color: #f2f2f2; }
-  .panes { display: grid; grid-template-columns: 1fr 1fr; }
+  .panes { display: grid; grid-template-columns: 1fr; max-width: 760px; }
   @media (max-width: 900px) { .panes { grid-template-columns: 1fr; } }
   .pane { padding: 20px 24px 30px; }
-  .pane.dark { background: #121212; color: #ededed; }
+  .pane.dark { background: #0b0b0c; color: #ededed; }
   .pane.light { background: #f6f5f3; color: #1a1a1a; }
   .pane h2 { font-size: 13px; font-weight: 600; margin: 0 0 12px; opacity: .7; }
   .pane h3 { font-size: 12px; font-weight: 600; margin: 22px 0 10px; opacity: .55; }
@@ -41,7 +41,6 @@
 <div class="controls" id="controls"></div>
 <div class="panes">
   <section class="pane dark"><h2>Dark</h2><h3>Patterns</h3><div class="grid" id="p-dark"></div><h3>Colors</h3><div class="grid" id="c-dark"></div><div class="rows" id="r-dark"></div></section>
-  <section class="pane light"><h2>Light</h2><h3>Patterns</h3><div class="grid" id="p-light"></div><h3>Colors</h3><div class="grid" id="c-light"></div><div class="rows" id="r-light"></div></section>
 </div>
 <script>
 (() => {
@@ -351,7 +350,7 @@
   // ------------------------------------------------------------ page
   const PAT = Object.keys(PATTERNS), COL = Object.keys(SOLIDS);
   const ROWS = [['violet', 'General Bot', 'Main Bot · ready'], ['zebra', 'Research Desk', 'Found 3 new papers'], ['galaxy', 'Ops Runner', 'Weekly report sent'], ['sunset', 'Inbox Helper', 'Waiting for you']];
-  for (const theme of ['dark', 'light']) {
+  for (const theme of ['dark']) {
     const dark = theme === 'dark';
     for (const [gridId, list, sz] of [['p-' + theme, PAT, 72], ['c-' + theme, COL, 56]]) {
       const grid = document.getElementById(gridId);
