@@ -427,12 +427,6 @@
     },
   ];
   const WORK_PHRASES = ['Getting it done', 'Making progress', 'Working on it', 'Handling it', 'Chipping away'];
-  const PERMISSION_MODES = [
-    ['ask', 'Ask every time', 'Bots ask you before running commands, editing files, or using the web. Approve each action in the chat.'],
-    ['auto', 'Let Claude decide', 'A safety check approves routine actions automatically and asks you about risky ones.'],
-    ['accept_edits', 'Auto-approve file edits', 'Bots edit files without asking. They still ask before running other commands.'],
-    ['allow_all', 'Allow everything', 'Bots never ask. They can run any command on the computer.', 'Only use this on a computer you’re comfortable letting bots fully control.'],
-  ];
   const SB_MIN = 240;
   const SB_MAX = 400;
   const SB_DEFAULT = 280;
@@ -1084,6 +1078,7 @@
         break;
       case 'usage.updated':
         S.usage = e.usage;
+        renderUsageBanner();
         if (S.settingsUI && S.settingsUI.tab === 'usage') rerenderSettings();
         break;
       case 'settings.updated':
@@ -1270,13 +1265,29 @@
         parts.preview = h('span', { class: 'row-preview' });
         parts.dot = h('span', { class: 'row-dot' });
         parts.kbd = h('span', { class: 'row-kbd' });
+        parts.more = h(
+          'button',
+          {
+            class: 'row-more',
+            'aria-label': 'Bot actions',
+            tabindex: '-1',
+            onclick: (e) => {
+              e.stopPropagation();
+              const r = e.currentTarget.getBoundingClientRect();
+              botMenu(S.bots.get(b.id), r.left, r.bottom + 4);
+            },
+            ondblclick: (e) => e.stopPropagation(),
+          },
+          icon('more', 16)
+        );
         el = h(
           'div',
           Object.assign({ class: 'row-item', role: 'listitem', tabindex: '-1' }, handlers),
           h('span', { class: 'row-av' }, av, badge),
           h('span', { class: 'row-body' }, parts.name, parts.preview),
           parts.dot,
-          parts.kbd
+          parts.kbd,
+          parts.more
         );
       }
       c = { el, parts, layout };
@@ -1407,45 +1418,118 @@
     inp.addEventListener('click', (e) => e.stopPropagation());
     inp.addEventListener('dblclick', (e) => e.stopPropagation());
   }
+  function copyText(text, msg = 'Copied') {
+    const done = () => toast(msg);
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text).then(done, () => toast('Couldn’t copy', 'error'));
+    try {
+      const t = h('textarea', { style: 'position:fixed;opacity:0' });
+      t.value = text;
+      document.body.append(t);
+      t.select();
+      document.execCommand('copy');
+      t.remove();
+      done();
+    } catch {
+      toast('Couldn’t copy', 'error');
+    }
+  }
+  // Sidebar "Bot actions" menu (settings-and-bots.md 4.9)
   function botMenu(b, x, y) {
     if (!b) return;
-    const pinned = pinnedIds().includes(b.id);
+    const pinned = !!b.pinned && !b.hidden;
+    const rename = () => {
+      const c = rowCache.get((pinned ? 'tile:' : 'row:') + b.id);
+      if (c && c.layout === 'row' && !app.classList.contains('rail')) startRename(b.id, c.parts);
+      else {
+        selectBot(b.id);
+        setPanel(true, { focusName: true });
+      }
+    };
     showMenu(
       [
         !b.hidden && { label: pinned ? 'Unpin' : 'Pin', icon: pinned ? 'pinOff' : 'pin', action: () => togglePin(b) },
-        b.unread > 0 && { label: 'Mark as Read', icon: 'bell', action: () => markRead(b) },
-        !b.unread && b.id !== S.current && { label: 'Mark as Unread', icon: 'bell', action: () => markUnread(b) },
+        b.unread > 0 ? { label: 'Mark as Read', icon: 'bell', action: () => markRead(b) } : b.id !== S.current && { label: 'Mark as Unread', icon: 'bell', action: () => markUnread(b) },
         '-',
-        {
-          label: 'Rename Bot',
-          icon: 'pencil',
-          action: () => {
-            const c = rowCache.get((pinned ? 'tile:' : 'row:') + b.id);
-            if (c && c.layout === 'row' && !app.classList.contains('rail')) startRename(b.id, c.parts);
-            else {
-              selectBot(b.id);
-              setPanel(true, { focusName: true });
-            }
-          },
-        },
-        { label: 'Edit avatar', icon: 'sparkle', action: () => openAvatarEditor(b) },
-        {
-          label: 'Bot settings',
-          icon: 'gear',
-          kbd: isMac ? '⌘⇧,' : 'Ctrl+Shift+,',
-          action: () => {
-            selectBot(b.id);
-            setPanel(true);
-          },
-        },
+        { label: 'Rename Bot', icon: 'pencil', action: rename },
         '-',
+        b.conversation_id && { label: 'Copy conversation ID', icon: 'copy', action: () => copyText(b.conversation_id, 'Copied conversation ID') },
+        b.conversation_id && '-',
         { label: b.hidden ? 'Show in sidebar' : 'Hide from sidebar', icon: b.hidden ? 'eye' : 'eyeOff', action: () => setHidden(b, !b.hidden) },
-        { label: 'Reset conversation', icon: 'reset', action: () => resetBot(b) },
-        { label: 'Delete', icon: 'trash', danger: true, action: () => deleteBot(b) },
+        b.main
+          ? { label: 'Replace with different Bot', icon: 'refresh', action: () => choosePrimaryBot(b) }
+          : { label: 'Delete', icon: 'trash', danger: true, action: () => deleteBot(b) },
       ],
       x,
       y
     );
+  }
+  // "Choose a primary Bot" (4.3): search + radio list
+  function choosePrimaryBot(current) {
+    let pick = current ? current.id : null;
+    let q = '';
+    const list = h('div', { class: 'radio-list', role: 'radiogroup', 'aria-label': 'Bots' });
+    const search = h('input', { class: 'field', placeholder: 'Search Bots', 'aria-label': 'Search Bots', spellcheck: 'false' });
+    const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
+    const okBtn = h('button', { class: 'btn primary', onclick: confirm }, 'Confirm');
+    function paint() {
+      list.textContent = '';
+      const bots = sortedBots().filter((b) => !q || b.name.toLowerCase().includes(q));
+      if (!bots.length) list.append(h('div', { class: 'p-empty' }, `No matches for “${search.value.trim()}”`));
+      for (const b of bots) {
+        const on = pick === b.id;
+        list.append(
+          h(
+            'button',
+            {
+              class: 'radio-item' + (on ? ' on' : ''),
+              role: 'radio',
+              'aria-checked': on ? 'true' : 'false',
+              onclick: () => {
+                pick = b.id;
+                paint();
+              },
+            },
+            avatar(b, 28),
+            h('span', { class: 'radio-item-name' }, b.name),
+            h('span', { class: 'radio-dot' })
+          )
+        );
+      }
+      okBtn.disabled = !pick || (current && pick === current.id);
+    }
+    search.addEventListener('input', () => {
+      q = search.value.trim().toLowerCase();
+      paint();
+    });
+    async function confirm() {
+      if (!pick) return;
+      okBtn.disabled = true;
+      err.hidden = true;
+      try {
+        await api(`/api/bots/${pick}/make-main`, { method: 'POST' });
+        for (const b of S.bots.values()) b.main = b.id === pick;
+        renderSidebar();
+        close();
+      } catch (e) {
+        err.textContent = 'Couldn’t set the primary Bot';
+        err.hidden = false;
+        okBtn.disabled = false;
+      }
+    }
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Choose a primary Bot' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Choose a primary Bot'),
+      h('p', { class: 'dialog-body' }, 'Your main point of contact. It checks in proactively and coordinates work with your other Bots.'),
+      h('div', { style: 'margin-top:14px' }, search),
+      list,
+      err,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), okBtn)
+    );
+    const close = openModal(box);
+    paint();
+    setTimeout(() => search.focus(), 40);
   }
   async function togglePin(b) {
     const pin = !b.pinned;
@@ -1515,7 +1599,7 @@
   async function resetBot(b) {
     const ok = await confirmDialog({
       title: 'Reset this conversation?',
-      body: `This clears the chat and starts a fresh conversation with ${b.name}. Files in its folder stay where they are.`,
+      body: 'The conversation history starts over. The Bot\'s memory, files, routines, and settings are kept.',
       confirmText: 'Reset',
       danger: true,
     });
@@ -1530,9 +1614,10 @@
     }
   }
   async function deleteBot(b) {
+    if (b.main) return choosePrimaryBot(b);
     const ok = await confirmDialog({
-      title: `Delete ${b.name}?`,
-      body: 'This permanently deletes the Bot and its chat history. This can’t be undone. Files in its folder on the computer are kept.',
+      title: `Delete “${b.name}”`,
+      body: 'This permanently deletes the Bot and its chat history. This can\'t be undone.',
       confirmText: 'Delete',
       danger: true,
     });
@@ -1541,7 +1626,7 @@
       await api(`/api/bots/${b.id}`, { method: 'DELETE' });
       onEvent({ type: 'bot.deleted', bot_id: b.id });
     } catch (e) {
-      fail(e);
+      toast(`Couldn’t delete “${b.name}”`, 'error');
     }
   }
   // sidebar list fade: no top fade while scrolled to the top
@@ -2277,52 +2362,86 @@
     WebFetch: ['globe', 'Web', 'open a web page'],
     WebSearch: ['globe', 'Web', 'search the web'],
   };
+  // Approval card (settings-and-bots.md 2.3.1)
+  const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
+  function cutMiddle(text, max = 340) {
+    if (text.length <= max) return text;
+    const keep = Math.floor((max - 30) / 2);
+    const omitted = text.length - keep * 2;
+    return text.slice(0, keep) + `...[${omitted} chars omitted]...` + text.slice(text.length - keep);
+  }
   function approvalCard(m) {
     const meta = m.meta || {};
     const b = S.bots.get(m.bot_id);
+    const botName = b ? b.name : 'Your Bot';
     const tool = meta.tool_name || '';
+    const shell = tool === 'Bash' || tool === 'PowerShell';
     const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(tool);
-    const [ic, src, verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', mcp[1].replace(/[_-]/g, ' '), `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', tool || 'Tool', `use ${tool || 'a tool'}`]);
+    const [ic, , verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', '', `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', '', `use ${tool || 'a tool'}`]);
+    const source = shell ? 'Terminal' : mcp ? mcp[1].replace(/[_-]/g, ' ') : 'Auto-review';
     const input = meta.input && typeof meta.input === 'object' ? meta.input : null;
+    const rule = (meta.proposed_rule || '').trim();
     let well = null;
+    let full = '';
     if (input) {
       const v = input.command || input.file_path || input.notebook_path || input.url || input.query || input.pattern || null;
-      if (typeof v === 'string') well = h('div', { class: 'card-well mono' }, v);
+      if (typeof v === 'string') well = h('div', { class: 'card-well mono' }, v.length > 340 ? cutMiddle(v) : v);
+      full = typeof v === 'string' && Object.keys(input).length === 1 ? v : JSON.stringify(input, null, 2);
     }
     if (!well && (meta.summary || m.text)) well = h('div', { class: 'card-well' }, meta.summary || m.text);
+    const reason = (meta.reason || '').trim();
+    const local = approvalAnswers.get(meta.approval_id);
+    let status = m.status;
+    if (status === 'pending' && local === 'expired') status = 'expired';
+    const decided = meta.decision || (status === 'allowed' ? local || 'allow' : status === 'denied' ? 'deny' : null);
     const card = h(
       'div',
-      { class: 'card approval ' + m.status },
-      h('div', { class: 'card-src' }, icon(ic, 14), h('span', null, src)),
-      h('div', { class: 'card-title' }, `${b ? b.name : 'Your Bot'} wants to ${verb}`),
+      { class: 'card approval ' + status },
+      h('div', { class: 'card-src' }, icon(shell ? 'terminal' : ic, 14), h('span', null, source)),
+      h('div', { class: 'card-title' }, `${botName} wants to ${verb}`),
+      reason && h('div', { class: 'card-caution' }, icon('alert', 14), h('span', null, reason)),
       well,
-      input && Object.keys(input).length > 1 ? h('details', null, h('summary', null, 'Details'), h('pre', null, JSON.stringify(input, null, 2))) : null
+      full && full !== (well && well.textContent) ? h('details', { class: 'card-full' }, h('summary', null, 'View the full request'), h('pre', null, full)) : null
     );
-    if (m.status === 'pending') {
+    if (status === 'pending') {
       const buttons = [];
+      const errLine = h('div', { class: 'card-error', role: 'alert', hidden: true }, 'Your answer didn’t go through. Check your connection and try again.');
       const decide = async (decision) => {
         buttons.forEach((x) => (x.disabled = true));
+        errLine.hidden = true;
         try {
           await api(`/api/approvals/${encodeURIComponent(meta.approval_id)}`, { method: 'POST', body: { decision } });
+          approvalAnswers.set(meta.approval_id, decision);
           upsertMessage(Object.assign({}, m, { status: decision === 'deny' ? 'denied' : 'allowed' }));
         } catch (e) {
+          if (e && e.status === 404) {
+            approvalAnswers.set(meta.approval_id, 'expired');
+            upsertMessage(Object.assign({}, m));
+            return;
+          }
           buttons.forEach((x) => (x.disabled = false));
-          fail(e);
+          errLine.hidden = false;
         }
       };
-      buttons.push(
-        h('button', { class: 'btn primary', onclick: () => decide('allow') }, 'Allow'),
-        h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'),
-        h('button', { class: 'btn ghost', onclick: () => decide('deny') }, 'Deny')
-      );
-      card.append(h('div', { class: 'card-actions' }, buttons));
+      if (rule) card.append(h('div', { class: 'rule-notice' }, h('div', { class: 'rule-notice-title' }, 'Adding to your Allow rules'), h('div', { class: 'rule-notice-text' }, rule)));
+      buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, rule ? 'Allow once' : 'Allow'));
+      if (rule) buttons.push(h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'));
+      buttons.push(h('button', { class: 'btn ghost', onclick: () => decide('deny') }, shell ? 'Skip' : 'Deny'));
+      card.append(h('div', { class: 'card-actions' }, buttons), errLine);
     } else {
-      const ok = m.status !== 'denied';
-      card.append(h('div', { class: 'card-settled ' + (ok ? 'ok' : 'no') }, icon(ok ? 'check' : 'x', 14, '', 2.2), ok ? 'Approved' : 'Denied'));
+      const label = status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? 'Denied' : status === 'allowed' ? 'Allowed once' : 'Status unavailable';
+      const ok = status === 'allowed';
+      card.append(
+        h(
+          'div',
+          { class: 'card-settled' },
+          h('span', { class: 'settled-pill ' + (ok ? 'ok' : status === 'denied' ? 'no' : '') }, ok ? icon('check', 13, '', 2.2) : status === 'denied' ? icon('x', 13, '', 2.2) : null, label),
+          decided === 'always' && rule ? h('span', { class: 'settled-note' }, `Allowed from now on: ${rule}`) : decided === 'deny' ? h('span', { class: 'settled-note' }, `${botName} won’t do this`) : null
+        )
+      );
     }
     return card;
   }
-
   function eventLine(m) {
     const meta = m.meta || {};
     const ic = /routine/.test(meta.kind || '') ? 'clock' : 'bolt';
@@ -2457,7 +2576,8 @@
     composerEl.style.height = H + 'px';
     const dock = $('#dock');
     dock.style.setProperty('--composer-h', H + 'px');
-    $('#chat').style.setProperty('--dock-h', H + 16 + 'px');
+    const ub = $('#usageBanner');
+    $('#chat').style.setProperty('--dock-h', H + 16 + (ub && !ub.hidden ? ub.offsetHeight + 8 : 0) + 'px');
   }
   function placeholderFor(b) {
     if (rec) return 'Listening…';
@@ -2776,142 +2896,365 @@
   function setPanel(open, opts = {}) {
     const b = curBot();
     open = !!open && !!b;
-    if (S.panelOpen === open && !opts.focusName) return;
+    if (S.panelOpen === open && !opts.focusName && !opts.page) return;
     S.panelOpen = open;
     panelEl.hidden = !open;
     layoutShell();
     $('#island').setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open) {
+      if (opts.page) S.panelView = { botId: b.id, page: opts.page, tab: 'details' };
       renderPanel();
-      if (opts.focusName && P) setTimeout(() => P.name.focus(), 30);
+      if (opts.focusName && P && P.name) setTimeout(() => P.name.focus(), 30);
     } else {
       panelEl.textContent = '';
       P = null;
       sweepAvatars();
     }
   }
-  function renderPanel() {
-    const b = curBot();
-    if (!b || !S.panelOpen) return;
-    panelEl.textContent = '';
-    const av = avatar(b, 72, { live: true, state: botState(b), interactive: true });
-    av.addEventListener('click', () => pokeAvatar(av));
-    av.setAttribute('aria-label', 'Poke ' + b.name);
-    const name = h('input', { class: 'p-name', value: b.name, maxlength: '60', 'aria-label': 'Bot name', spellcheck: 'false' });
-    const commitName = () => {
-      const v = name.value.trim();
-      const cur = S.bots.get(b.id);
-      if (!cur) return;
-      if (!v) name.value = cur.name;
-      else if (v !== cur.name) patchBot(b.id, { name: v });
-    };
-    name.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') name.blur();
+  // Bot info pane (settings-and-bots.md 4.6): Details / Library tabs, plus a "Bot settings" sub-page.
+  function panelView(b) {
+    if (!S.panelView || S.panelView.botId !== b.id) S.panelView = { botId: b.id, page: 'main', tab: 'details' };
+    return S.panelView;
+  }
+  function inlineInput(cls, value, attrs, onCommit, { required = false } = {}) {
+    const el = h('input', Object.assign({ class: cls, value: value || '', spellcheck: 'false' }, attrs));
+    let start = value || '';
+    el.addEventListener('focus', () => (start = el.value));
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) el.blur();
       if (e.key === 'Escape') {
-        name.value = (S.bots.get(b.id) || b).name;
-        name.blur();
+        el.value = start;
+        el.blur();
         e.stopPropagation();
       }
     });
-    name.addEventListener('blur', commitName);
-    const about = h('textarea', { class: 'p-text', placeholder: 'What should this Bot do? It follows these instructions in every conversation.', 'aria-label': 'Instructions' });
+    el.addEventListener('blur', () => {
+      const v = el.value.trim();
+      if (required && !v) {
+        el.value = start;
+        return;
+      }
+      if (v !== start.trim()) onCommit(v);
+    });
+    return el;
+  }
+  function renderPanel() {
+    const b = curBot();
+    if (!b || !S.panelOpen) return;
+    const view = panelView(b);
+    panelEl.textContent = '';
+    P = { botId: b.id, page: view.page, tab: view.tab };
+    const head = h('div', { class: 'panel-head' });
+    if (view.page === 'settings') {
+      head.append(
+        h(
+          'div',
+          { class: 'panel-head-start' },
+          h(
+            'button',
+            {
+              class: 'ghost-btn',
+              'aria-label': 'Back',
+              'data-tip': 'Back',
+              onclick: () => {
+                view.page = 'main';
+                renderPanel();
+              },
+            },
+            icon('chevronLeft', 16)
+          ),
+          h('span', { class: 'panel-head-title strong' }, 'Bot settings')
+        )
+      );
+    } else {
+      head.append(
+        h(
+          'button',
+          {
+            class: 'ghost-btn',
+            'aria-label': 'Bot settings',
+            'data-tip': 'Bot settings',
+            onclick: () => {
+              view.page = 'settings';
+              renderPanel();
+            },
+          },
+          icon('gear', 16)
+        )
+      );
+    }
+    head.append(h('button', { class: 'ghost-btn', 'aria-label': 'Close', 'data-tip': 'Close', 'data-kbd': 'Esc', onclick: () => setPanel(false) }, icon('x', 16)));
+    const body = h('div', { class: 'panel-body' });
+    panelEl.append(head, body);
+    if (view.page === 'settings') panelSettingsPage(b, body);
+    else {
+      const tabs = h(
+        'div',
+        { class: 'p-tabs', role: 'tablist' },
+        [
+          ['details', 'Details'],
+          ['library', 'Library'],
+        ].map(([k, l]) =>
+          h(
+            'button',
+            {
+              class: 'p-tab' + (view.tab === k ? ' on' : ''),
+              role: 'tab',
+              'aria-selected': view.tab === k ? 'true' : 'false',
+              onclick: () => {
+                if (view.tab === k) return;
+                view.tab = k;
+                renderPanel();
+              },
+            },
+            l
+          )
+        )
+      );
+      body.append(tabs);
+      if (view.tab === 'library') panelLibrary(b, body);
+      else panelDetails(b, body);
+    }
+    renderChatHeader();
+  }
+  function panelDetails(b, body) {
+    const av = avatar(b, 72, { live: true, state: botState(b), interactive: true, badge: b.main ? 'main' : null });
+    av.addEventListener('click', () => pokeAvatar(av));
+    av.setAttribute('aria-label', 'Poke ' + b.name);
+    const name = inlineInput('p-name', b.name, { maxlength: '255', 'aria-label': 'Bot name' }, (v) => patchBot(b.id, { name: v }), { required: true });
+    const label = inlineInput('p-label-in', b.label, { maxlength: '80', placeholder: 'Add a label', 'aria-label': 'Label' }, (v) => patchBot(b.id, { label: v }));
+    const about = h('textarea', { class: 'p-text', placeholder: 'Tell this Bot what to do. It follows these instructions in every conversation.', 'aria-label': 'Instructions' });
     about.value = b.instructions || '';
+    const more = h('button', { class: 'p-more', hidden: true }, 'Show more');
+    let expanded = false;
     const growAbout = () => {
       about.style.height = 'auto';
-      about.style.height = clamp(about.scrollHeight, 84, 260) + 'px';
+      const full = about.scrollHeight;
+      const cap = expanded || document.activeElement === about ? 480 : 132;
+      about.style.height = clamp(full, 64, cap) + 'px';
+      more.hidden = full <= 132;
+      more.textContent = expanded ? 'Show less' : 'Show more';
     };
+    more.addEventListener('click', () => {
+      expanded = !expanded;
+      growAbout();
+    });
     about.addEventListener('input', growAbout);
+    about.addEventListener('focus', growAbout);
     about.addEventListener('blur', () => {
+      growAbout();
       const cur = S.bots.get(b.id);
       if (cur && about.value.trim() !== (cur.instructions || '').trim()) patchBot(b.id, { instructions: about.value.trim() }).then((nb) => nb && toast('Instructions saved'));
     });
     const routines = h('div', { class: 'panel-card' }, h('div', { class: 'p-empty' }, spinner('xs')));
+    const skills = h('div', { class: 'panel-card' }, h('div', { class: 'p-empty' }, spinner('xs')));
     const memories = h('div', { class: 'panel-card' }, h('div', { class: 'p-empty' }, spinner('xs')));
+    const addSkill = h('button', { class: 'ghost-btn sm', 'aria-label': 'Add skill', 'data-tip': 'Add skill', onclick: () => openSkillEditor(S.bots.get(b.id), null) }, icon('plus', 14));
+    body.append(
+      h(
+        'div',
+        { class: 'p-hero' },
+        h('div', { class: 'p-avatar' }, av),
+        name,
+        h('div', { class: 'p-sub' }, b.running ? (b.activity && b.activity.label) || 'Working' : 'Only you can see it'),
+        label
+      ),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'Instructions'), h('div', { class: 'panel-card' }, about), more),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Routines')), routines),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Skills'), addSkill), skills),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Memories')), memories)
+    );
+    Object.assign(P, { av, name, label, about, routines, skills, memories });
+    requestAnimationFrame(growAbout);
+    loadPanelLists();
+  }
+  function panelSettingsPage(b, body) {
+    const avBtn = h(
+      'button',
+      { class: 'p-av-btn', 'aria-label': 'Edit Bot avatar', 'data-tip': 'Edit Bot avatar', onclick: () => openAvatarEditor(S.bots.get(b.id)) },
+      avatar(b, 56, { badge: b.main ? 'main' : null }),
+      h('span', { class: 'p-avatar-edit' }, icon('pencil', 12, '', 2))
+    );
+    const name = inlineInput('field', b.name, { maxlength: '255', placeholder: 'Bob', 'aria-label': 'Name' }, (v) => patchBot(b.id, { name: v }), { required: true });
+    const label = inlineInput('field', b.label, { maxlength: '80', placeholder: 'Research, marketing, admin', 'aria-label': 'Label (optional)' }, (v) => patchBot(b.id, { label: v }));
+    const notifSub = h('div', { class: 'p-row-sub' }, 'Get notified when this Bot finishes or is waiting for you');
+    const notif = toggleEl(b.notifications !== false, async (v) => {
+      const nb = await patchBotQuiet(b.id, { notifications: v });
+      if (!nb) {
+        notif.checked = !v;
+        notifSub.textContent = 'Couldn’t save. Try again.';
+        notifSub.classList.add('err');
+      } else {
+        notifSub.textContent = 'Get notified when this Bot finishes or is waiting for you';
+        notifSub.classList.remove('err');
+      }
+    });
+    notif.classList.add('sm');
+    notif.setAttribute('aria-label', 'Notifications');
     const model = selectEl(b.model || '', MODELS, (v) => patchBot(b.id, { model: v }));
     model.classList.add('p-select');
     const local = S.conn.mode !== 'remote';
-    const hideBtn = h('button', { class: 'p-action', onclick: () => setHidden(S.bots.get(b.id), !S.bots.get(b.id).hidden) });
-    panelEl.append(
-      h(
-        'div',
-        { class: 'panel-head' },
-        h('span', { class: 'panel-head-title' }, 'Bot settings'),
-        h('button', { class: 'ghost-btn', 'aria-label': 'Close', 'data-tip': 'Close', 'data-kbd': 'Esc', onclick: () => setPanel(false) }, icon('x', 16))
-      ),
-      h(
-        'div',
-        { class: 'panel-body' },
+    const hideBtn = h('button', { class: 'p-action', onclick: () => setHidden(S.bots.get(b.id), !S.bots.get(b.id).hidden) }, icon(b.hidden ? 'eye' : 'eyeOff', 16), b.hidden ? 'Show in sidebar' : 'Hide from sidebar');
+    body.append(
+      h('div', { class: 'p-hero left' }, avBtn),
+      h('label', { class: 'p-flabel' }, 'Name'),
+      name,
+      h('label', { class: 'p-flabel' }, 'Label (optional)'),
+      label,
+      h('div', { class: 'p-sec' }, h('div', { class: 'panel-card' }, h('div', { class: 'p-row' }, h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, 'Notifications'), notifSub), notif))),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'Model'), model),
+      b.workdir &&
         h(
           'div',
-          { class: 'p-hero' },
-          h('div', { class: 'p-avatar' }, av, h('button', { class: 'p-avatar-edit', 'aria-label': 'Edit avatar', 'data-tip': 'Edit avatar', onclick: () => openAvatarEditor(S.bots.get(b.id)) }, icon('pencil', 13, '', 2))),
-          name,
-          h('div', { class: 'p-sub' }, b.running ? (b.activity && b.activity.label) || 'Working' : `Created ${new Date(b.created_at || Date.now()).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}`)
-        ),
-        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'About'), h('div', { class: 'panel-card' }, about), h('div', { class: 'p-hint' }, 'Standing instructions. Saved when you click away.')),
-        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Routines')), routines),
-        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Memories')), memories),
-        h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'Model'), model),
-        b.workdir &&
+          { class: 'p-sec' },
+          h('div', { class: 'p-label' }, 'Folder'),
           h(
             'div',
-            { class: 'p-sec' },
-            h('div', { class: 'p-label' }, 'Folder'),
+            { class: 'panel-card' },
             h(
               'div',
-              { class: 'panel-card' },
-              h(
-                'div',
-                { class: 'p-row' },
-                icon('folder', 16),
-                h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-sub mono', title: b.workdir, style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left' }, b.workdir)),
-                local && h('button', { class: 'btn small', onclick: () => api('/api/open-folder', { method: 'POST', body: { path: b.workdir } }).catch(fail) }, 'Open')
-              )
+              { class: 'p-row' },
+              icon('folder', 16),
+              h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-sub mono', title: b.workdir, style: 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left' }, b.workdir)),
+              local && h('button', { class: 'btn small', onclick: () => api('/api/open-folder', { method: 'POST', body: { path: b.workdir } }).catch(fail) }, 'Open')
             )
-          ),
-        h(
-          'div',
-          { class: 'p-actions' },
-          hideBtn,
-          h('button', { class: 'p-action', onclick: () => resetBot(S.bots.get(b.id)) }, icon('reset', 16), 'Reset conversation'),
-          h('button', { class: 'p-action danger', onclick: () => deleteBot(S.bots.get(b.id)) }, icon('trash', 16), 'Delete Bot')
-        )
+          )
+        ),
+      h(
+        'div',
+        { class: 'p-actions' },
+        hideBtn,
+        h('button', { class: 'p-action', onclick: () => resetBot(S.bots.get(b.id)) }, icon('reset', 16), 'Reset conversation'),
+        b.main
+          ? h('button', { class: 'p-action', onclick: () => choosePrimaryBot(S.bots.get(b.id)) }, icon('refresh', 16), 'Replace with different Bot')
+          : h('button', { class: 'p-action danger', onclick: () => deleteBot(S.bots.get(b.id)) }, icon('trash', 16), 'Delete Bot')
       )
     );
-    P = { botId: b.id, av, name, about, routines, memories, model, hideBtn };
-    paintHideBtn(b);
-    requestAnimationFrame(growAbout);
-    loadPanelLists();
-    renderChatHeader();
+    Object.assign(P, { nameField: name, labelField: label, notif, model });
   }
-  function paintHideBtn(b) {
-    if (!P) return;
-    P.hideBtn.textContent = '';
-    P.hideBtn.append(icon(b.hidden ? 'eye' : 'eyeOff', 16), b.hidden ? 'Show in sidebar' : 'Hide from sidebar');
+  async function patchBotQuiet(id, body) {
+    try {
+      const nb = await api(`/api/bots/${id}`, { method: 'PATCH', body });
+      if (nb && nb.id) S.bots.set(nb.id, Object.assign(S.bots.get(nb.id) || {}, nb));
+      return nb;
+    } catch {
+      return null;
+    }
+  }
+  function panelLibrary(b, body) {
+    const box = h('div', { class: 'p-lib' }, h('div', { class: 'p-empty' }, spinner('xs')));
+    body.append(box);
+    P.library = box;
+    api(`/api/bots/${b.id}/library`)
+      .then((list) => {
+        if (!P || P.botId !== b.id || P.library !== box) return;
+        box.textContent = '';
+        list = Array.isArray(list) ? list : [];
+        if (!list.length) return box.append(h('div', { class: 'p-empty center' }, `No files yet. Files ${b.name} makes or you send it show up here.`));
+        for (const f of list) {
+          const img = isImage(f) && !/\.(heic|svg)$/i.test(f.name || '');
+          box.append(
+            h(
+              'a',
+              { class: 'lib-row', href: fileUrl(f.url), target: '_blank', rel: 'noopener', title: f.path || f.name },
+              img ? h('img', { class: 'lib-thumb', src: fileUrl(f.url), alt: '', loading: 'lazy' }) : h('span', { class: 'lib-icon' }, h('span', null, extOf(f.name).slice(0, 4))),
+              h('span', { class: 'p-row-text' }, h('span', { class: 'p-row-title ellipsis' }, f.name), h('span', { class: 'p-row-sub' }, [fmtBytes(f.size || 0), f.modified ? timeLabel(f.modified) : ''].filter(Boolean).join(' · ')))
+            )
+          );
+        }
+      })
+      .catch(() => {
+        if (P && P.library === box) box.replaceChildren(h('div', { class: 'p-empty center' }, 'Couldn’t load files.'));
+      });
   }
   function refreshPanelBot() {
     const b = curBot();
     if (!P || !b) return;
     if (P.botId !== b.id) return renderPanel();
-    syncAvatar(P.av, b, 72, { live: true, state: botState(b) });
-    if (document.activeElement !== P.name) P.name.value = b.name;
-    if (document.activeElement !== P.about) P.about.value = b.instructions || '';
-    if (document.activeElement !== P.model) P.model.value = b.model || '';
-    paintHideBtn(b);
+    const ae = document.activeElement;
+    if (P.av) syncAvatar(P.av, b, 72, { live: true, state: botState(b), badge: b.main ? 'main' : null });
+    if (P.name && ae !== P.name) P.name.value = b.name;
+    if (P.label && ae !== P.label) P.label.value = b.label || '';
+    if (P.about && ae !== P.about) P.about.value = b.instructions || '';
+    if (P.nameField && ae !== P.nameField) P.nameField.value = b.name;
+    if (P.labelField && ae !== P.labelField) P.labelField.value = b.label || '';
+    if (P.notif) P.notif.checked = b.notifications !== false;
+    if (P.model && ae !== P.model) P.model.value = b.model || '';
+    if (P.page === 'settings' && !(ae && panelEl.contains(ae))) renderPanel();
   }
   async function loadPanelLists(which) {
-    if (!P) return;
+    if (!P || !P.routines) return;
     const id = P.botId;
+    const still = () => P && P.botId === id && P.routines;
     if (!which || which === 'routines') {
       api(`/api/bots/${id}/routines`)
-        .then((r) => P && P.botId === id && paintRoutines(Array.isArray(r) ? r : []))
-        .catch(() => P && P.botId === id && paintRoutines(null));
+        .then((r) => still() && paintRoutines(Array.isArray(r) ? r : []))
+        .catch(() => still() && paintRoutines(null));
     }
     if (!which || which === 'memories') {
       api(`/api/bots/${id}/memories`)
-        .then((r) => P && P.botId === id && paintMemories(Array.isArray(r) ? r : []))
-        .catch(() => P && P.botId === id && paintMemories(null));
+        .then((r) => still() && paintMemories(Array.isArray(r) ? r : []))
+        .catch(() => still() && paintMemories(null));
     }
+    if (!which || which === 'skills') {
+      api(`/api/bots/${id}/skills`)
+        .then((r) => still() && paintSkills(Array.isArray(r) ? r : []))
+        .catch(() => still() && paintSkills(null));
+    }
+  }
+
+  // ── routines (settings-and-bots.md 5.2 / 5.3) ──
+  const routineRuns = new Map(); // routine id → started ms
+  const routineRunning = (r) => {
+    const t = routineRuns.get(r.id);
+    if (!t) return false;
+    const b = S.bots.get(r.bot_id);
+    if (Date.now() - t < 4000 || (b && b.running && Date.now() - t < 15 * 60000)) return true;
+    routineRuns.delete(r.id);
+    return false;
+  };
+  async function setRoutineEnabled(r, on) {
+    try {
+      await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body: { enabled: on } });
+      r.enabled = on;
+      return true;
+    } catch {
+      toast(on ? 'Couldn’t resume this routine' : 'Couldn’t pause this routine', 'error');
+      return false;
+    } finally {
+      loadPanelLists('routines');
+    }
+  }
+  async function testRoutine(r) {
+    routineRuns.set(r.id, Date.now());
+    try {
+      await api(`/api/routines/${encodeURIComponent(r.id)}/run`, { method: 'POST' });
+    } catch (e) {
+      routineRuns.delete(r.id);
+      toast('Couldn’t start a test run. ' + (e && e.network ? 'Check your connection and try again' : 'This Bot is unavailable'), 'error');
+    }
+  }
+  async function deleteRoutine(r) {
+    const ok = await confirmDialog({ title: `Delete “${r.name || 'Routine'}”`, body: 'This deletes the routine and stops its future runs. This can\'t be undone.', confirmText: 'Delete', danger: true });
+    if (!ok) return false;
+    try {
+      await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'DELETE' });
+      loadPanelLists('routines');
+      return true;
+    } catch (e) {
+      fail(e);
+      return false;
+    }
+  }
+  function routineMenu(r, anchor) {
+    const running = routineRunning(r);
+    menuAt(anchor, [
+      { label: r.enabled ? 'Pause' : 'Resume', icon: r.enabled ? 'pause' : 'play', action: () => setRoutineEnabled(r, !r.enabled) },
+      { label: running ? 'Running…' : 'Test', icon: 'bolt', disabled: running, action: () => testRoutine(r) },
+      { label: 'Edit', icon: 'pencil', action: () => openRoutine(r, true) },
+      '-',
+      { label: 'Delete', icon: 'trash', danger: true, action: () => deleteRoutine(r) },
+    ]);
   }
   function paintRoutines(list) {
     const box = P.routines;
@@ -2920,46 +3263,221 @@
     if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load routines.'));
     if (!list.length) return box.append(h('div', { class: 'p-empty' }, `No routines yet. Ask ${b ? b.name : 'this Bot'} to do something on a schedule, like “every weekday at 8, summarize my inbox.”`));
     for (const r of list) {
-      const sub = [r.schedule_text || '', r.paused_for_unread ? 'Paused until you read new messages' : r.enabled && r.next_run_at ? `Next ${timeLabel(r.next_run_at)}` : ''].filter(Boolean).join(' · ');
+      const sched = r.schedule_text || 'On a schedule';
       const sw = toggleEl(!!r.enabled, async (v) => {
-        try {
-          await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body: { enabled: v } });
-        } catch (e) {
-          sw.checked = !v;
-          fail(e);
-        }
+        if (!(await setRoutineEnabled(r, v))) sw.checked = !v;
       });
       sw.classList.add('sm');
-      sw.setAttribute('aria-label', (r.enabled ? 'Turn off ' : 'Turn on ') + (r.name || 'routine'));
+      sw.setAttribute('aria-label', `${r.enabled ? 'Pause' : 'Resume'} ${r.name || 'routine'}, ${sched}`);
+      sw.addEventListener('click', (e) => e.stopPropagation());
+      const rowEl = h(
+        'div',
+        {
+          class: 'p-row clickable',
+          role: 'button',
+          tabindex: '0',
+          'aria-haspopup': 'menu',
+          'aria-label': `Routine actions, ${r.name || 'Routine'}`,
+          onclick: () => routineMenu(r, rowEl),
+          onkeydown: (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              routineMenu(r, rowEl);
+            }
+          },
+        },
+        h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, r.name || r.prompt || 'Routine'), h('div', { class: 'p-row-sub' }, r.enabled ? (r.paused_for_unread ? `${sched} · Paused until you read new messages` : sched) : 'Paused')),
+        sw
+      );
+      box.append(rowEl);
+    }
+  }
+  // Routine detail (5.3): Instruction, When to run, footer Pause/Resume · Test · Edit · Delete
+  function openRoutine(r, editing = false) {
+    const box = h('div', { class: 'dialog routine-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': r.name || 'Routine' });
+    const close = openModal(box);
+    const paint = () => {
+      box.textContent = '';
+      const nameIn = h('input', { class: 'field', value: r.name || '', maxlength: '120', 'aria-label': 'Name' });
+      const promptIn = h('textarea', { class: 'field', rows: '6', 'aria-label': 'Instruction' });
+      promptIn.value = r.prompt || '';
+      const running = routineRunning(r);
+      box.append(
+        h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+        editing ? h('div', { style: 'margin-right:36px' }, nameIn) : h('h2', { class: 'dialog-title' }, r.name || 'Routine'),
+        h('div', { class: 'rt-label' }, 'Instruction'),
+        editing ? promptIn : h('div', { class: 'rt-text' }, r.prompt || ''),
+        h('div', { class: 'rt-label' }, 'When to run'),
+        h('div', { class: 'rt-when' }, icon('clock', 15), h('span', null, r.schedule_text || 'On a schedule'), !r.enabled && h('span', { class: 'chip' }, 'Paused')),
+        editing
+          ? h(
+              'div',
+              { class: 'dialog-actions' },
+              h(
+                'button',
+                {
+                  class: 'btn',
+                  onclick: () => {
+                    editing = false;
+                    paint();
+                  },
+                },
+                'Cancel'
+              ),
+              h(
+                'button',
+                {
+                  class: 'btn primary',
+                  onclick: async (e) => {
+                    const name = nameIn.value.trim();
+                    const prompt = promptIn.value.trim();
+                    if (!name || !prompt) return (name ? promptIn : nameIn).focus();
+                    e.currentTarget.disabled = true;
+                    try {
+                      const nr = await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body: { name, prompt } });
+                      Object.assign(r, nr && nr.id ? nr : { name, prompt });
+                      editing = false;
+                      paint();
+                      loadPanelLists('routines');
+                    } catch (err) {
+                      e.currentTarget.disabled = false;
+                      fail(err);
+                    }
+                  },
+                },
+                'Save'
+              )
+            )
+          : h(
+              'div',
+              { class: 'dialog-actions rt-foot' },
+              h('button', { class: 'btn', onclick: async () => (await setRoutineEnabled(r, !r.enabled)) && paint() }, r.enabled ? 'Pause' : 'Resume'),
+              h(
+                'button',
+                {
+                  class: 'btn',
+                  disabled: running,
+                  onclick: async () => {
+                    await testRoutine(r);
+                    paint();
+                  },
+                },
+                running ? 'Running…' : 'Test'
+              ),
+              h(
+                'button',
+                {
+                  class: 'btn',
+                  onclick: () => {
+                    editing = true;
+                    paint();
+                  },
+                },
+                'Edit'
+              ),
+              h('span', { style: 'flex:1' }),
+              h('button', { class: 'circle-btn danger', 'aria-label': 'Delete routine', 'data-tip': 'Delete routine', onclick: async () => (await deleteRoutine(r)) && close() }, icon('trash', 16))
+            )
+      );
+      if (editing) setTimeout(() => promptIn.focus(), 30);
+    };
+    paint();
+  }
+
+  // ── skills (Claude Code skills in the bot's folder) ──
+  function paintSkills(list) {
+    const box = P.skills;
+    box.textContent = '';
+    const b = curBot();
+    if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load skills.'));
+    if (!list.length) return box.append(h('div', { class: 'p-empty' }, 'No skills yet. A skill is a saved set of steps the Bot can follow, like “weekly-report”.'));
+    for (const sk of list) {
       box.append(
         h(
           'div',
-          { class: 'p-row' },
-          h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, r.name || r.prompt || 'Routine'), sub && h('div', { class: 'p-row-sub' }, sub)),
-          sw,
-          h(
-            'button',
-            {
-              class: 'ghost-btn danger',
-              'aria-label': 'Delete routine',
-              'data-tip': 'Delete',
-              onclick: async () => {
-                const ok = await confirmDialog({ title: `Delete “${r.name || 'this routine'}”?`, body: 'The Bot stops running it. You can ask for a new one any time.', confirmText: 'Delete', danger: true });
-                if (!ok) return;
-                try {
-                  await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'DELETE' });
-                  loadPanelLists('routines');
-                } catch (e) {
-                  fail(e);
-                }
-              },
-            },
-            icon('trash', 15)
-          )
+          { class: 'p-row clickable', role: 'button', tabindex: '0', onclick: () => openSkillEditor(b, sk), onkeydown: (e) => e.key === 'Enter' && openSkillEditor(b, sk) },
+          icon('bolt', 15),
+          h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title mono' }, sk.name), sk.description && h('div', { class: 'p-row-sub' }, sk.description)),
+          icon('chevronRight', 14)
         )
       );
     }
   }
+  function openSkillEditor(b, sk) {
+    if (!b) return;
+    const nameIn = h('input', { class: 'field mono', value: sk ? sk.name : '', placeholder: 'weekly-report', maxlength: '64', spellcheck: 'false', 'aria-label': 'Name', disabled: !!sk });
+    const descIn = h('input', { class: 'field', value: sk ? sk.description || '' : '', placeholder: 'When should the Bot use this skill?', maxlength: '300', 'aria-label': 'Description' });
+    const bodyIn = h('textarea', { class: 'field', rows: '9', placeholder: 'The steps the Bot follows', 'aria-label': 'Instructions' });
+    bodyIn.value = sk ? sk.body || '' : '';
+    const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
+    nameIn.addEventListener('input', () => {
+      const p = nameIn.selectionStart;
+      nameIn.value = nameIn.value.toLowerCase().replace(/[\s_]+/g, '-').replace(/[^a-z0-9-]/g, '');
+      nameIn.setSelectionRange(p, p);
+    });
+    const save = async (e) => {
+      const name = nameIn.value.trim().replace(/^-+|-+$/g, '');
+      err.hidden = true;
+      const bad = (msg, el) => {
+        err.textContent = msg;
+        err.hidden = false;
+        el.focus();
+      };
+      if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name)) return bad('Use lowercase letters, numbers and dashes, like weekly-report', nameIn);
+      if (!bodyIn.value.trim()) return bad('Write the skill’s instructions', bodyIn);
+      e.currentTarget.disabled = true;
+      try {
+        await api(`/api/bots/${b.id}/skills/${encodeURIComponent(name)}`, { method: 'PUT', body: { description: descIn.value.trim(), body: bodyIn.value } });
+        close();
+        loadPanelLists('skills');
+      } catch (x) {
+        e.currentTarget.disabled = false;
+        bad(x.message, nameIn);
+      }
+    };
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': sk ? 'Edit skill' : 'New skill' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, sk ? 'Edit skill' : 'New skill'),
+      h('label', { class: 'f-label' }, 'Name'),
+      nameIn,
+      h('label', { class: 'f-label' }, 'Description'),
+      descIn,
+      h('label', { class: 'f-label' }, 'Instructions'),
+      bodyIn,
+      err,
+      h(
+        'div',
+        { class: 'dialog-actions' },
+        sk &&
+          h(
+            'button',
+            {
+              class: 'btn danger',
+              onclick: async () => {
+                const ok = await confirmDialog({ title: `Delete “${sk.name}”`, body: 'The Bot can no longer use this skill. This can\'t be undone.', confirmText: 'Delete', danger: true });
+                if (!ok) return;
+                try {
+                  await api(`/api/bots/${b.id}/skills/${encodeURIComponent(sk.name)}`, { method: 'DELETE' });
+                  close();
+                  loadPanelLists('skills');
+                } catch (x) {
+                  fail(x);
+                }
+              },
+            },
+            'Delete'
+          ),
+        h('span', { style: 'flex:1' }),
+        h('button', { class: 'btn', onclick: () => close() }, 'Cancel'),
+        h('button', { class: 'btn primary', onclick: save }, sk ? 'Save' : 'Add skill')
+      )
+    );
+    const close = openModal(box);
+    setTimeout(() => (sk ? bodyIn : nameIn).focus(), 40);
+  }
+
   function paintMemories(list) {
     const box = P.memories;
     box.textContent = '';
@@ -3091,7 +3609,7 @@
     const close = openModal(box);
   }
 
-  // ───────────────────────────── new Bot (name + character; instructions folded away) ─────────────────────────────
+  // ───────────────────────────── "Create New Bot" (settings-and-bots.md 4.2) ─────────────────────────────
   function openNewBot(preset) {
     const d = defaultsFor('new-' + Math.random());
     const used = new Set([...S.bots.values()].map((b) => lookOf(b).color));
@@ -3108,69 +3626,59 @@
       paintAvatar(prev, next, 96, { live: true, interactive: true });
       pokeAvatar(prev);
     });
-    const nameIn = h('input', { class: 'field ne-name', value: preset ? preset.name : '', placeholder: 'Name your Bot', maxlength: '60', 'aria-label': 'Name' });
-    const instrIn = h('textarea', { class: 'field', rows: '4', placeholder: 'What should this Bot do? For example: “You help me plan my week and keep my to-do list tidy.”' });
-    instrIn.value = preset ? preset.instructions || '' : '';
-    let model = '';
-    const modelSel = selectEl('', MODELS, (v) => (model = v));
-    const foldBody = h('div', { hidden: !instrIn.value }, instrIn, h('div', { class: 'f-hint' }, 'Optional. The Bot follows these in every conversation. You can also just tell it in the chat.'), h('div', { class: 'f-inline' }, h('label', { class: 'f-label inline' }, 'Model'), modelSel));
-    const foldBtn = h(
-      'button',
-      {
-        class: 'fold-btn' + (instrIn.value ? ' open' : ''),
-        type: 'button',
-        onclick: () => {
-          foldBody.hidden = !foldBody.hidden;
-          foldBtn.classList.toggle('open', !foldBody.hidden);
-          if (!foldBody.hidden) instrIn.focus();
-        },
-      },
-      icon('chevronRight', 12, '', 2.4),
-      'Instructions'
-    );
-    const createBtn = h('button', { class: 'btn primary', onclick: create }, 'Create Bot');
+    const nameIn = h('input', { class: 'field ne-name', value: preset ? preset.name : '', placeholder: 'Name your Bot', maxlength: '255', 'aria-label': 'Bot name' });
+    const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
+    const createBtn = h('button', { class: 'btn primary', onclick: create }, 'Create');
+    let busy = false;
+    const sync = () => (createBtn.disabled = busy || !nameIn.value.trim());
     async function create() {
       const name = nameIn.value.trim();
-      if (!name) {
-        nameIn.classList.add('invalid');
-        nameIn.focus();
-        return;
-      }
-      createBtn.disabled = true;
+      if (!name || busy) return;
+      busy = true;
+      sync();
+      createBtn.textContent = 'Creating…';
+      err.hidden = true;
+      entry.dismissable = false;
       try {
-        const nb = await api('/api/bots', { method: 'POST', body: { name, color: st.color, shape: st.shape, instructions: instrIn.value.trim(), model } });
+        const nb = await api('/api/bots', { method: 'POST', body: { name, color: st.color, shape: st.shape, instructions: preset ? preset.instructions || '' : '', model: '' } });
+        entry.dismissable = true;
         close();
         if (nb && nb.id) {
           S.bots.set(nb.id, nb);
-          S.msgs.set(nb.id, []);
+          if (!S.msgs.has(nb.id)) S.msgs.set(nb.id, []);
           renderSidebar();
           selectBot(nb.id);
         }
       } catch (e) {
-        createBtn.disabled = false;
-        fail(e);
+        busy = false;
+        entry.dismissable = true;
+        createBtn.textContent = 'Create';
+        err.textContent = e && e.message ? e.message : 'Couldn’t create the Bot. Try again.';
+        err.hidden = false;
+        sync();
       }
     }
+    nameIn.addEventListener('input', sync);
     nameIn.addEventListener('keydown', (e) => {
-      nameIn.classList.remove('invalid');
-      if (e.key === 'Enter') create();
+      if (e.key === 'Enter' && !e.isComposing) create();
     });
     const box = h(
       'div',
-      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New Bot' },
-      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
-      h('h2', { class: 'dialog-title' }, 'New Bot'),
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Create New Bot' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => !busy && close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Create New Bot'),
       h('div', { class: 'ne-preview' }, prev),
       nameIn,
       h('label', { class: 'f-label' }, 'Character shape'),
       picker.grid,
       h('label', { class: 'f-label' }, 'Character color'),
       picker.sw,
-      foldBtn,
-      foldBody,
-      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => openTemplatesFrom(close) }, 'Templates'), h('span', { style: 'flex:1' }), h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), createBtn)
+      err,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => !busy && close() }, 'Cancel'), createBtn)
     );
     const close = openModal(box);
+    const entry = modalStack[modalStack.length - 1];
+    sync();
     setTimeout(() => nameIn.focus(), 40);
   }
   function openTemplatesFrom(closePrev) {
@@ -3420,30 +3928,34 @@
       )
     );
   }
-  // ───────────────────────────── settings ─────────────────────────────
+  // ───────────────────────────── settings (settings-and-bots.md 1.x, 2.1, 3.7, 6) ─────────────────────────────
   const TABS = [
     ['general', 'General', 'gear'],
     ['computer', 'Computer', 'monitor'],
     ['permissions', 'Permissions', 'shield'],
     ['vault', 'Vault', 'vault'],
-    ['account', 'Claude Account', 'bars'],
+    ['usage', 'Usage & Billing', 'bars'],
     ['updates', 'Updates', 'updates'],
   ];
+  const TAB_ALIAS = { account: 'usage' };
+  const SAVE_ERR = 'Couldn’t save. Try again.';
+  const USAGE_URL = 'https://claude.ai/settings/usage';
   function openSettings(tab) {
+    tab = TAB_ALIAS[tab] || tab;
     if (S.settingsUI) {
       if (tab) S.settingsUI.tab = tab;
       rerenderSettings(true);
       return;
     }
-    const nav = h('nav', { class: 'set-nav' });
+    const nav = h('nav', { class: 'set-nav', 'aria-label': 'Settings sections' });
     const body = h('div', { class: 'set-body' });
     const main = h('div', { class: 'set-main' }, body);
     const box = h(
       'div',
-      { class: 'settings', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Settings' },
+      { class: 'settings', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'openbot settings' },
       nav,
       main,
-      h('button', { class: 'icon-btn set-close', onclick: () => close(), 'aria-label': 'Close settings' }, icon('x', 20))
+      h('button', { class: 'icon-btn set-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 20))
     );
     const close = openModal(box, {
       cls: 'settings-overlay',
@@ -3452,20 +3964,30 @@
         S.connDraft = null;
       },
     });
-    S.settingsUI = { tab: tab || 'general', nav, body, main, close };
+    S.settingsUI = { tab: tab || 'general', nav, body, main, close, errs: new Set(), ruleEdit: null, vaultForm: null, upd: {} };
     S.connDraft = null;
     rerenderSettings(true);
     refreshSettingsData();
   }
   async function refreshSettingsData() {
-    const jobs = [
-      home('/api/connection').then((c) => (S.conn = Object.assign({ mode: 'local', url: '', token: '' }, c || {}))),
-    ];
+    const jobs = [home('/api/connection').then((c) => (S.conn = Object.assign({ mode: 'local', url: '', token: '' }, c || {})))];
     if (S.booted) {
       jobs.push(
         api('/api/computer').then((c) => (S.computer = c)),
-        api('/api/usage').then((u) => (S.usage = u)),
-        api('/api/settings').then((s) => (S.settings = s))
+        api('/api/usage').then((u) => {
+          S.usage = u;
+          renderUsageBanner();
+        }),
+        api('/api/settings').then(
+          (s) => {
+            S.settings = s;
+            S.settingsLoadErr = false;
+          },
+          (e) => {
+            S.settingsLoadErr = true;
+            throw e;
+          }
+        )
       );
     }
     await Promise.allSettled(jobs);
@@ -3483,9 +4005,12 @@
           'button',
           {
             class: 'set-nav-item' + (ui.tab === key ? ' active' : ''),
+            'aria-current': ui.tab === key ? 'page' : null,
             onclick: () => {
               if (ui.tab === key) return;
               ui.tab = key;
+              ui.ruleEdit = null;
+              ui.vaultForm = null;
               ui.main.scrollTop = 0;
               rerenderSettings(true);
             },
@@ -3499,7 +4024,7 @@
     ui.body.textContent = '';
     const tabDef = TABS.find((t) => t[0] === ui.tab) || TABS[0];
     ui.body.append(h('h1', { class: 'set-title' }, tabDef[1]));
-    const render = { general: tabGeneral, computer: tabComputer, permissions: tabPermissions, vault: tabVault, account: tabAccount, updates: tabUpdates }[ui.tab];
+    const render = { general: tabGeneral, computer: tabComputer, permissions: tabPermissions, vault: tabVault, usage: tabUsage, updates: tabUpdates }[tabDef[0]];
     try {
       ui.body.append(render());
     } catch (e) {
@@ -3513,11 +4038,13 @@
   const section = (label, ...kids) => h('div', { class: 'set-section' }, label ? h('div', { class: 'set-label' }, label) : null, ...kids);
   const card = (...rows) => h('div', { class: 'set-card' }, ...rows);
   const note = (...kids) => h('div', { class: 'set-note' }, ...kids);
-  function row(title, control, sub, cls = '') {
+  // row(title, control, sub, cls, anchor): a failed save on `anchor` swaps the description for "Couldn't save. Try again."
+  function row(title, control, sub, cls = '', anchor = null) {
+    const err = anchor && S.settingsUI && S.settingsUI.errs.has(anchor);
     return h(
       'div',
-      { class: 'set-row ' + cls },
-      h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-title' }, title), sub ? h('div', { class: 'set-row-sub' }, sub) : null),
+      { class: 'set-row ' + cls, id: anchor ? 'set-' + anchor : null },
+      h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-title' }, title), err ? h('div', { class: 'set-row-sub err', role: 'alert' }, SAVE_ERR) : sub ? h('div', { class: 'set-row-sub' }, sub) : null),
       control ? h('div', { class: 'set-row-ctl' }, control) : null
     );
   }
@@ -3527,10 +4054,10 @@
     i.addEventListener('change', () => onchange(i.checked));
     return i;
   }
-  function selectEl(value, options, onchange) {
+  function selectEl(value, options, onchange, cls = '') {
     const s = h(
       'select',
-      { class: 'pill-select' },
+      { class: 'pill-select ' + cls },
       options.map(([v, l]) => h('option', { value: v }, l))
     );
     s.value = value == null ? '' : value;
@@ -3538,59 +4065,192 @@
     return s;
   }
   const btn = (label, onclick, cls = '') => h('button', { class: 'btn ' + cls, onclick }, label);
-  async function putSettings(patch, okMsg) {
+  const pillBtn = (label, onclick, attrs = {}) => h('button', Object.assign({ class: 'btn pill', onclick }, attrs), label);
+  function markSave(anchor, ok) {
+    const ui = S.settingsUI;
+    if (!ui || !anchor) return;
+    if (ok) ui.errs.delete(anchor);
+    else ui.errs.add(anchor);
+  }
+  async function putSettings(patch, anchor) {
     try {
       const s = await api('/api/settings', { method: 'PUT', body: patch });
       if (s) S.settings = s;
-      if (okMsg) toast(okMsg);
+      markSave(anchor, true);
+      rerenderSettings(true);
+      return true;
     } catch (e) {
-      fail(e);
+      if (anchor) markSave(anchor, false);
+      else toast(SAVE_ERR, 'error');
+      rerenderSettings(true);
+      return false;
     }
-    rerenderSettings(true);
   }
   const notConnected = () => note('Not connected to a computer right now. Check the Computer page.');
+  function openExternal(url) {
+    const w = window.open(url, '_blank', 'noopener');
+    if (!w) copyText(url, 'Link copied. Paste it in your browser.');
+  }
 
+  // searchable dropdown (Timezone, 1.3 §6)
+  function searchSelect({ value, options, placeholder, label, closeLabel, onChange }) {
+    const cur = () => options().find((o) => o.value === value) || options()[0];
+    const b = h('button', { class: 'pill-btn', 'aria-haspopup': 'listbox', 'aria-label': label }, h('span', { class: 'pill-btn-text' }, cur().label), icon('chevronDown', 12, '', 2));
+    b.addEventListener('click', () => {
+      closeMenu();
+      const opts = options();
+      const q = h('input', { class: 'sp-search', placeholder, 'aria-label': placeholder, spellcheck: 'false' });
+      const list = h('div', { class: 'sp-list', role: 'listbox', 'aria-label': label });
+      const pop = h('div', { class: 'menu search-pop' }, h('div', { class: 'sp-head' }, icon('search', 15), q, h('button', { class: 'ghost-btn sm', 'aria-label': closeLabel, onclick: () => closeMenu() }, icon('x', 13))), list);
+      let shown = [];
+      let sel = 0;
+      const paint = () => {
+        const t = q.value.trim().toLowerCase();
+        shown = opts.filter((o) => !t || o.label.toLowerCase().includes(t) || (o.search || '').includes(t)).slice(0, 300);
+        list.textContent = '';
+        if (!shown.length) list.append(h('div', { class: 'p-empty' }, `No matches for “${q.value.trim()}”`));
+        shown.forEach((o, i) =>
+          list.append(
+            h(
+              'button',
+              {
+                class: 'menu-item' + (i === sel ? ' kb' : ''),
+                role: 'option',
+                'aria-selected': o.value === value ? 'true' : 'false',
+                onclick: () => pick(o),
+                onmousemove: () => {
+                  if (sel !== i) {
+                    sel = i;
+                    for (const [j, el] of [...list.children].entries()) el.classList.toggle('kb', j === i);
+                  }
+                },
+              },
+              h('span', null, o.label),
+              o.value === value ? h('span', { class: 'kbd' }, icon('check', 14)) : o.meta ? h('span', { class: 'kbd' }, o.meta) : null
+            )
+          )
+        );
+      };
+      const pick = (o) => {
+        closeMenu();
+        value = o.value;
+        b.firstChild.textContent = o.label;
+        onChange(o.value);
+      };
+      q.addEventListener('input', () => {
+        sel = 0;
+        paint();
+      });
+      q.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          sel = clamp(sel + (e.key === 'ArrowDown' ? 1 : -1), 0, shown.length - 1);
+          [...list.children].forEach((el, j) => el.classList.toggle('kb', j === sel));
+          list.children[sel] && list.children[sel].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && shown[sel]) {
+          e.preventDefault();
+          pick(shown[sel]);
+        }
+      });
+      paint();
+      document.body.append(pop);
+      const a = b.getBoundingClientRect();
+      const r = pop.getBoundingClientRect();
+      pop.style.left = clamp(a.right - r.width, 8, innerWidth - r.width - 8) + 'px';
+      pop.style.top = (a.bottom + 6 + r.height > innerHeight - 8 ? Math.max(8, a.top - r.height - 6) : a.bottom + 6) + 'px';
+      openMenuEl = pop;
+      setTimeout(() => q.focus(), 0);
+    });
+    return b;
+  }
+  function timezoneOptions() {
+    const auto = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    let zones = [];
+    try {
+      zones = Intl.supportedValuesOf ? Intl.supportedValuesOf('timeZone') : [];
+    } catch {}
+    const now = new Date();
+    const out = [{ value: '', label: auto ? `Auto-detect (${auto})` : 'Auto-detect' }];
+    for (const z of zones) {
+      let meta = '';
+      try {
+        meta = now.toLocaleTimeString([], { timeZone: z, hour: 'numeric', minute: '2-digit' });
+      } catch {}
+      out.push({ value: z, label: z.replace(/_/g, ' '), meta, search: z.toLowerCase() });
+    }
+    return out;
+  }
 
+  // ── General (1.3) ──
   function tabGeneral() {
     const name = (S.prefs.userName || '').trim();
-    const nameIn = h('input', { class: 'field inline-field', value: name, placeholder: 'Your name', maxlength: '40' });
+    const claude = (S.computer && S.computer.claude) || {};
+    const nameIn = h('input', { class: 'field inline-field strong', value: name, placeholder: 'Your name', maxlength: '40', 'aria-label': 'Your name' });
     const commitName = () => {
       const v = nameIn.value.trim();
       if (v === (S.prefs.userName || '')) return;
       S.prefs.userName = v;
       savePrefs();
       renderMe();
+      rerenderSettings(true);
     };
     nameIn.addEventListener('blur', commitName);
     nameIn.addEventListener('keydown', (e) => e.key === 'Enter' && nameIn.blur());
-    const claude = (S.computer && S.computer.claude) || {};
-    const accentOpts = [['bot', 'Bot color'], ['none', 'None'], ...COLOR_IDS.filter((c) => hueOf(c)).map((c) => [c, COLOR_LABELS[c]])];
-    const accentVal = S.prefs.accent && S.prefs.accent !== 'bot' && S.prefs.accent !== 'none' ? colorIdOf(S.prefs.accent) || 'bot' : S.prefs.accent || 'bot';
+    const signedIn = !!(claude.logged_in && claude.email);
+    const signOut = async () => {
+      const ok = await confirmDialog({
+        title: 'Sign out?',
+        body: 'Signing out logs Claude Code out on the computer where your Bots run. Your Bots and chats stay here and are back when you sign in again.',
+        confirmText: 'Sign Out',
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await api('/api/claude/logout', { method: 'POST' });
+        refreshSettingsData();
+      } catch {
+        toast('Couldn’t sign out. Run claude /logout in a terminal on that computer.', 'error');
+      }
+    };
+    const accountCard = card(
+      h(
+        'div',
+        { class: 'set-row account-row' },
+        h('span', { class: 'acct-circle' }, ((name || claude.email || 'You')[0] || 'Y').toUpperCase()),
+        h(
+          'div',
+          { class: 'set-row-text' },
+          nameIn,
+          signedIn
+            ? h('div', { class: 'acct-email' }, h('span', null, claude.email), h('button', { class: 'ghost-btn sm', 'aria-label': 'Copy email address', 'data-tip': 'Copy email address', onclick: () => copyText(claude.email) }, icon('copy', 14)))
+            : h('div', { class: 'set-row-sub' }, claude.installed === false ? 'Not signed in. Install Claude Code on the computer where Bots run.' : 'Not signed in. Run claude in a terminal on that computer to sign in.')
+        ),
+        signedIn && h('div', { class: 'set-row-ctl' }, pillBtn('Sign Out', signOut))
+      )
+    );
+    const accentVal = S.prefs.accent === 'none' ? 'none' : 'bot';
+    const s = S.settings;
+    const tz = searchSelect({
+      value: S.prefs.timezone || '',
+      options: timezoneOptions,
+      placeholder: 'Search timezone',
+      label: 'Timezone',
+      closeLabel: 'Close timezone picker',
+      onChange: (v) => {
+        S.prefs.timezone = v;
+        savePrefs();
+      },
+    });
     return h(
       'div',
       null,
-      section(
-        'Account',
-        card(
-          h(
-            'div',
-            { class: 'set-row account-row' },
-            h('span', { class: 'acct-circle' }, ((name || 'You')[0] || 'Y').toUpperCase()),
-            h(
-              'div',
-              { class: 'set-row-text' },
-              nameIn,
-              h('div', { class: 'set-row-sub' }, claude.logged_in && claude.email ? `Claude: ${claude.email}` : 'Your name appears in the sidebar.')
-            )
-          )
-        )
-      ),
+      section('Account', accountCard),
       section(
         'Appearance',
         card(
           row(
             'Theme',
-            selectEl(S.prefs.theme || 'system', [['system', 'Follow System'], ['dark', 'Dark'], ['light', 'Light']], (v) => {
+            selectEl(S.prefs.theme || 'system', [['system', 'Follow System'], ['light', 'Light'], ['dark', 'Dark']], (v) => {
               S.prefs.theme = v;
               savePrefs();
               applyTheme();
@@ -3598,14 +4258,13 @@
           ),
           row(
             'Accent',
-            selectEl(accentVal, accentOpts, (v) => {
+            selectEl(accentVal, [['none', 'Black'], ['bot', 'Bot color']], (v) => {
               S.prefs.accent = v;
               savePrefs();
               applyTint();
-            }),
-            'Tints your messages and the send button. “Bot color” uses each Bot’s color.'
+            })
           ),
-          row('Language', selectEl('en', [['en', 'Follow System']], () => {})),
+          row('Language', selectEl('system', [['system', 'Follow System']], () => {})),
           row(
             'Check Spelling While Typing',
             toggleEl(S.prefs.spellcheck !== false, (v) => {
@@ -3613,7 +4272,14 @@
               savePrefs();
               updateComposer();
             })
-          ),
+          )
+        )
+      ),
+      section(
+        'Bot',
+        card(
+          row('Timezone', tz),
+          s ? row('Model', selectEl(s.default_model || '', MODELS, (v) => putSettings({ default_model: v }, 'model')), null, '', 'model') : row('Model', null, 'Connect to a computer to change this.'),
           row(
             'Show Tool Activity',
             toggleEl(S.prefs.showTools === true, (v) => {
@@ -3621,31 +4287,125 @@
               savePrefs();
               renderMessages(false);
             }),
-            'Show each command and file edit as its own line in the chat. When off, the live status line under the last message shows what the Bot is doing.'
+            'Show each command and file edit as its own line in the chat'
           )
         )
       ),
-      section(
-        'Bot',
-        card(
-          S.settings
-            ? row(
-                'Default Model',
-                selectEl(S.settings.default_model || '', MODELS, (v) => putSettings({ default_model: v })),
-                'Used by bots whose model is set to Default.'
-              )
-            : row('Default Model', null, 'Connect to a computer to change this.')
-        )
-      )
+      section(null, card(row('Import Memory to openbot', pillBtn('Import', () => openImportMemory()), 'Transfer your preferences and context from another AI assistant', '', 'import-memory')))
     );
   }
+  const IMPORT_PROMPT = [
+    "Export all of my stored memories and any context you've learned about me from past conversations. Preserve my words verbatim where possible, especially for instructions and preferences.",
+    '',
+    '## Categories (output in this order):',
+    '',
+    '1. **Instructions**: Rules I\'ve explicitly asked you to follow going forward — tone, format, style, "always do X", "never do Y", and corrections to your behavior. Only include rules from stored memories, not from conversations.',
+    '',
+    '2. **Identity**: Name, age, location, education, family, relationships, languages, and personal interests.',
+    '',
+    '3. **Career**: Current and past roles, companies, and general skill areas.',
+    '',
+    '4. **Projects**: Projects I meaningfully built or committed to. Ideally ONE entry per project. Include what it does, current status, and any key decisions. Use the project name or a short descriptor as the first words of the entry.',
+    '',
+    '5. **Preferences**: Opinions, tastes, and working-style preferences that apply broadly.',
+    '',
+    '## Format:',
+    '',
+    'Use section headers for each category. Within each category, list one entry per line, sorted by oldest date first. Format each line as:',
+    '',
+    '[YYYY-MM-DD] - Entry content here.',
+    '',
+    'If no date is known, use [unknown] instead.',
+    '',
+    '## Output:',
+    '- Wrap the entire export in a single code block for easy copying.',
+    '- After the code block, state whether this is the complete set or if more remain.',
+  ].join('\n');
+  function openImportMemory() {
+    const copyBtn = h('button', { class: 'btn small' }, icon('copy', 14), h('span', null, 'Copy'));
+    copyBtn.addEventListener('click', () => {
+      copyText(IMPORT_PROMPT, 'Copied');
+      copyBtn.lastChild.textContent = 'Copied';
+      setTimeout(() => copyBtn.isConnected && (copyBtn.lastChild.textContent = 'Copy'), 2000);
+    });
+    const ta = h('textarea', { class: 'field', rows: '6', placeholder: 'Paste your memory details here', 'aria-label': 'Paste your memory details here' });
+    const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
+    const addBtn = h('button', { class: 'btn primary', disabled: true }, 'Add to Memory');
+    ta.addEventListener('input', () => (addBtn.disabled = !ta.value.trim()));
+    addBtn.addEventListener('click', async () => {
+      const raw = ta.value.trim();
+      err.hidden = true;
+      if (raw.length > 60000) {
+        err.textContent = 'That’s too long. Paste a shorter export.';
+        err.hidden = false;
+        return;
+      }
+      // keep the entries; drop code fences, headings and the trailing "this is the complete set" line
+      const text = raw
+        .split('\n')
+        .map((l) => l.trim().replace(/^\[unknown\]\s*-\s*/i, ''))
+        .filter((l) => l && !/^```/.test(l) && !/^#{1,6}\s/.test(l) && !/^\d+\.\s*\*\*[^*]+\*\*:?\s*$/.test(l) && !/^\*\*[^*]+\*\*:?$/.test(l))
+        .join('\n');
+      addBtn.disabled = true;
+      addBtn.textContent = 'Adding…';
+      try {
+        const r = await api('/api/memories/import', { method: 'POST', body: { text } });
+        close();
+        toast(r && r.imported != null ? `Added ${r.imported} ${r.imported === 1 ? 'memory' : 'memories'}` : 'Added to memory');
+      } catch (e) {
+        addBtn.disabled = false;
+        addBtn.textContent = 'Add to Memory';
+        err.textContent = e && e.network ? 'Couldn’t add to memory. Check your connection and try again.' : e.message;
+        err.hidden = false;
+      }
+    });
+    const box = h(
+      'div',
+      { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Import Memory to openbot' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Import Memory to openbot'),
+      h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '1'), h('span', null, 'Copy this prompt into a chat with your other AI assistant')),
+      h('div', { class: 'im-prompt' }, h('pre', null, IMPORT_PROMPT), h('div', { class: 'im-copy' }, copyBtn)),
+      h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '2'), h('span', null, 'Paste the results below to add them to openbot’s memory')),
+      ta,
+      err,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), addBtn)
+    );
+    const close = openModal(box);
+  }
 
+  // ── Computer (1.7.2) ──
+  const EXEC_OPTS = [
+    ['allow_all', 'Always allow'],
+    ['ask', 'Ask every time'],
+    ['never', 'Never allow'],
+  ];
   function tabComputer() {
     const c = S.computer;
     const conn = S.conn;
     if (!S.connDraft) S.connDraft = { mode: conn.mode === 'remote' ? 'remote' : 'local', url: conn.url || '', token: conn.token || '', result: null, busy: false };
     const d = S.connDraft;
     const out = h('div');
+    const s = S.settings;
+
+    // Your computer › Execution
+    if (s) {
+      const pm = s.permission_mode === 'allow_all' || s.permission_mode === 'never' ? s.permission_mode : 'ask';
+      out.append(
+        section(
+          'Your computer',
+          card(
+            row(
+              conn.mode === 'remote' && c && c.hostname ? `Execution on ${c.hostname}` : 'Execution on this computer',
+              selectEl(pm, EXEC_OPTS, (v) => putSettings({ permission_mode: v }, 'local-execution'), 'ghost'),
+              'Let openbot open files and run tasks on your computer. Auto-review still checks everything first.',
+              '',
+              'local-execution'
+            )
+          )
+        )
+      );
+    } else out.append(section('Your computer', card(row('Execution on this computer', null, S.settingsLoadErr ? 'Couldn’t load this setting' : 'Loading…'))));
 
     // where bots run
     const seg = h(
@@ -3669,37 +4429,14 @@
         )
       )
     );
-    const runsOn = card(
-      row(
-        'Bots run on',
-        seg,
-        conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : 'Bots are using this computer.'
-      )
-    );
+    const runsOn = card(row('Bots run on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : 'Bots are using this computer.'));
     if (d.mode === 'remote') {
       const urlIn = h('input', { class: 'field', placeholder: 'http://my-pc:7777', value: d.url, spellcheck: 'false', autocomplete: 'off' });
       const tokIn = h('input', { class: 'field', type: 'password', placeholder: 'Pairing token', value: d.token, autocomplete: 'off' });
       urlIn.addEventListener('input', () => (d.url = urlIn.value));
       tokIn.addEventListener('input', () => (d.token = tokIn.value));
-      const eye = h(
-        'button',
-        {
-          class: 'icon-btn field-eye',
-          title: 'Show token',
-          onclick: () => {
-            tokIn.type = tokIn.type === 'password' ? 'text' : 'password';
-          },
-        },
-        icon('eye', 16)
-      );
-      const resultEl = d.result
-        ? h(
-            'div',
-            { class: 'conn-result ' + (d.result.ok ? 'ok' : 'bad') },
-            d.result.ok ? icon('check', 15) : icon('alert', 15),
-            h('span', null, d.result.text)
-          )
-        : null;
+      const eye = h('button', { class: 'icon-btn field-eye', title: 'Show token', onclick: () => (tokIn.type = tokIn.type === 'password' ? 'text' : 'password') }, icon('eye', 16));
+      const resultEl = d.result ? h('div', { class: 'conn-result ' + (d.result.ok ? 'ok' : 'bad') }, d.result.ok ? icon('check', 15) : icon('alert', 15), h('span', null, d.result.text)) : null;
       const test = async () => {
         const url = normalizeUrl(d.url);
         if (!url) return urlIn.focus();
@@ -3708,10 +4445,7 @@
         rerenderSettings(true);
         try {
           const r = await home('/api/connection/test', { method: 'POST', body: { url, token: d.token.trim() } });
-          d.result =
-            r && r.ok
-              ? { ok: true, text: `Connected to ${(r.computer && r.computer.hostname) || hostOf(url)}${r.computer ? ` (${r.computer.os || ''})` : ''}` }
-              : { ok: false, text: (r && r.error) || 'Couldn’t connect' };
+          d.result = r && r.ok ? { ok: true, text: `Connected to ${(r.computer && r.computer.hostname) || hostOf(url)}${r.computer ? ` (${r.computer.os || ''})` : ''}` } : { ok: false, text: (r && r.error) || 'Couldn’t connect' };
         } catch (e) {
           d.result = { ok: false, text: e.message };
         }
@@ -3745,45 +4479,35 @@
           h('label', { class: 'f-label' }, 'Token'),
           h('div', { class: 'field-wrap' }, tokIn, eye),
           resultEl,
-          h(
-            'div',
-            { class: 'row-actions' },
-            btn(d.busy ? 'Working…' : 'Test connection', test),
-            btn(conn.mode === 'remote' && normalizeUrl(d.url) === conn.url && d.token === conn.token ? 'Reconnect' : 'Connect', connect, 'primary')
-          )
+          h('div', { class: 'row-actions' }, btn(d.busy ? 'Working…' : 'Test connection', test), btn(conn.mode === 'remote' && normalizeUrl(d.url) === conn.url && d.token === conn.token ? 'Reconnect' : 'Connect', connect, 'primary'))
         )
       );
     } else if (conn.mode === 'remote') {
       runsOn.append(
-        h(
-          'div',
-          { class: 'set-row' },
-          h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-sub' }, `Switch back so bots run on this computer instead of ${hostOf(conn.url)}.`)),
-          h(
-            'div',
-            { class: 'set-row-ctl' },
-            btn(
-              'Use this computer',
-              async () => {
-                try {
-                  S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
-                  S.connDraft = null;
-                  S.current = null;
-                  await boot();
-                  toast('Bots now run on this computer');
-                } catch (e) {
-                  fail(e);
-                }
-              },
-              'primary'
-            )
-          )
+        row(
+          '',
+          btn(
+            'Use this computer',
+            async () => {
+              try {
+                S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
+                S.connDraft = null;
+                S.current = null;
+                await boot();
+                toast('Bots now run on this computer');
+              } catch (e) {
+                fail(e);
+              }
+            },
+            'primary'
+          ),
+          `Switch back so bots run on this computer instead of ${hostOf(conn.url)}.`
         )
       );
     }
-    out.append(section('Where bots run', runsOn));
+    out.append(section('Where Bots run', runsOn));
 
-    // status card
+    // status
     if (c) {
       const claude = c.claude || {};
       const memPct = c.mem_total ? clamp((c.mem_used / c.mem_total) * 100, 0, 100) : 0;
@@ -3791,11 +4515,7 @@
         section(
           'Status',
           card(
-            row(
-              'Status',
-              h('span', { class: 'status-pill ' + (S.wsOk ? 'on' : 'off') }, h('i'), S.wsOk ? 'Online' : 'Offline'),
-              conn.mode === 'remote' ? hostOf(S.apiBase) : 'This computer'
-            ),
+            row('Status', h('span', { class: 'status-pill ' + (S.wsOk ? 'on' : 'off') }, h('i'), S.wsOk ? 'Online' : 'Offline'), conn.mode === 'remote' ? hostOf(S.apiBase) : 'This computer'),
             row('Name', h('span', { class: 'val' }, c.hostname || '—')),
             row('System', h('span', { class: 'val' }, [c.os, c.os_version].filter(Boolean).join(' ') + (c.arch ? ` · ${c.arch}` : ''))),
             row('Up for', h('span', { class: 'val' }, fmtDuration(c.uptime_secs))),
@@ -3804,38 +4524,64 @@
               'div',
               { class: 'set-row' },
               h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-title' }, 'Memory')),
-              h(
-                'div',
-                { class: 'set-row-ctl mem' },
-                h('div', { class: 'meter' }, h('div', { class: 'meter-fill', style: { width: memPct + '%' } })),
-                h('span', { class: 'val small' }, `${fmtBytes(c.mem_used)} of ${fmtBytes(c.mem_total)}`)
-              )
+              h('div', { class: 'set-row-ctl mem' }, h('div', { class: 'meter' }, h('div', { class: 'meter-fill', style: { width: memPct + '%' } })), h('span', { class: 'val small' }, `${fmtBytes(c.mem_used)} of ${fmtBytes(c.mem_total)}`))
             ),
             row(
               'Claude Code',
-              h(
-                'span',
-                { class: 'val' },
-                claude.installed ? `v${(claude.version || '').replace(/^v/, '').split(' ')[0] || '?'}` : 'Not installed'
-              ),
-              claude.installed
-                ? claude.logged_in
-                  ? `Signed in as ${claude.email || 'your Claude account'}`
-                  : 'Not signed in. Open a terminal on that computer and run: claude'
-                : 'Install Claude Code on that computer, then run: claude'
+              h('span', { class: 'val' }, claude.installed ? `Version ${(claude.version || '').replace(/^v/, '').split(' ')[0] || '?'}` : 'Not installed'),
+              claude.installed ? (claude.logged_in ? `Signed in as ${claude.email || 'your Claude account'}` : 'Not signed in. Open a terminal on that computer and run: claude') : 'Install Claude Code on that computer, then run: claude'
             ),
             row('Listening on', h('span', { class: 'val mono' }, c.listen || '—'), c.is_remote_capable ? 'Other computers on your network can connect.' : 'Only this computer can connect.'),
             row('Data folder', h('span', { class: 'val mono ellipsis', title: c.data_dir || '' }, c.data_dir || '—'))
           )
         )
       );
-    } else {
-      out.append(section('Status', card(row('Status', h('span', { class: 'status-pill off' }, h('i'), 'Offline'), 'Not connected'))));
+    } else out.append(section('Status', card(row('Status', h('span', { class: 'status-pill off' }, h('i'), 'Offline'), 'Not connected'))));
+
+    // plugins (custom MCP servers, 4.8)
+    if (s) {
+      const servers = s.mcp_servers || [];
+      out.append(
+        h(
+          'div',
+          { class: 'set-section' },
+          h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Plugins'), h('div', { class: 'set-explain' }, 'Custom MCP servers every Bot can use')), pillBtn('Add plugin', () => openMcpForm())),
+          servers.length
+            ? card(
+                servers.map((m) =>
+                  row(
+                    h('span', { class: 'mono' }, m.name),
+                    h(
+                      'button',
+                      {
+                        class: 'ghost-btn',
+                        'aria-label': `Remove ${m.name}`,
+                        'data-tip': 'Remove',
+                        onclick: async () => {
+                          const ok = await confirmDialog({ title: `Remove “${m.name}”?`, body: 'Bots can no longer use this plugin.', confirmText: 'Remove', danger: true });
+                          if (!ok) return;
+                          try {
+                            S.settings = await api('/api/mcp-servers/' + encodeURIComponent(m.name), { method: 'DELETE' });
+                          } catch (e) {
+                            fail(e);
+                          }
+                          rerenderSettings(true);
+                        },
+                      },
+                      icon('trash', 16)
+                    ),
+                    m.type === 'stdio' ? `Command · ${[m.command, ...(m.args || [])].join(' ')}` : `Remote HTTPS · ${m.url || ''}`
+                  )
+                )
+              )
+            : null
+        )
+      );
     }
 
     // workspace folder
-    if (S.settings) {
-      const wsIn = h('input', { class: 'field mono', value: S.settings.workspace_root || '', spellcheck: 'false' });
+    if (s) {
+      const wsIn = h('input', { class: 'field mono', value: s.workspace_root || '', spellcheck: 'false' });
       out.append(
         section(
           'Workspace',
@@ -3849,9 +4595,8 @@
                 'div',
                 { class: 'inline-form' },
                 wsIn,
-                btn('Save', () => putSettings({ workspace_root: wsIn.value.trim() }, 'Workspace folder saved')),
-                S.conn.mode !== 'remote' &&
-                  btn('Open', () => api('/api/open-folder', { method: 'POST', body: { path: S.settings.workspace_root } }).catch(fail))
+                btn('Save', () => putSettings({ workspace_root: wsIn.value.trim() }).then((ok) => ok && toast('Workspace folder saved'))),
+                S.conn.mode !== 'remote' && btn('Open', () => api('/api/open-folder', { method: 'POST', body: { path: s.workspace_root } }).catch(fail))
               )
             )
           )
@@ -3859,7 +4604,6 @@
       );
     }
 
-    // help
     out.append(
       section(
         'Run openbot 24/7 on another PC',
@@ -3874,11 +4618,7 @@
               h('li', null, 'Start the host there: ', h('code', null, 'openbot-server --host 0.0.0.0 --port 7777'), '. It prints a pairing token.'),
               h('li', null, 'Choose “Remote computer” above, enter ', h('code', null, 'http://<pc-name>:7777'), ' and the token, then press Connect.')
             ),
-            h(
-              'div',
-              { class: 'set-row-sub' },
-              'Tip: install Tailscale on both computers to reach the PC securely from anywhere, and set the PC to never sleep so your bots stay online.'
-            )
+            h('div', { class: 'set-row-sub' }, 'Tip: install Tailscale on both computers to reach the PC securely from anywhere, and set the PC to never sleep so your bots stay online.')
           )
         )
       )
@@ -3892,278 +4632,625 @@
     return u.replace(/\/+$/, '');
   }
 
+  // Custom MCP form (4.8)
+  const mcpSlug = (n) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  function openMcpForm() {
+    const st = { editor: 'form', type: 'http', name: '', url: '', headers: [['', '']], command: '', args: [''], env: [['', '']], json: '' };
+    const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
+    const addBtn = h('button', { class: 'btn primary' }, 'Add plugin');
+    const bodyEl = h('div');
+    const kvRows = (list, kph, vph, label) => {
+      const wrap = h('div', { class: 'kv-list' });
+      const paint = () => {
+        wrap.textContent = '';
+        if (!list.length || list[list.length - 1].some((x) => x)) list.push(Array.isArray(list[0]) || !list.length ? ['', ''] : '');
+        list.forEach((pair, i) => {
+          if (Array.isArray(pair)) {
+            const k = h('input', { class: 'field mono', placeholder: kph, value: pair[0], 'aria-label': `${label} key ${i + 1}`, spellcheck: 'false' });
+            const v = h('input', { class: 'field mono', placeholder: vph, value: pair[1], 'aria-label': `${label} value ${i + 1}`, spellcheck: 'false' });
+            k.addEventListener('input', () => {
+              pair[0] = k.value;
+              if (i === list.length - 1 && k.value) paint(), wrap.querySelectorAll('input')[i * 2].focus();
+            });
+            v.addEventListener('input', () => {
+              pair[1] = v.value;
+              if (i === list.length - 1 && v.value) paint(), wrap.querySelectorAll('input')[i * 2 + 1].focus();
+            });
+            wrap.append(h('div', { class: 'kv-row' }, k, v));
+          } else {
+            const a = h('input', { class: 'field mono', placeholder: 'Argument', value: pair, 'aria-label': `Argument ${i + 1}`, spellcheck: 'false' });
+            a.addEventListener('input', () => {
+              list[i] = a.value;
+              if (i === list.length - 1 && a.value) paint(), wrap.querySelectorAll('input')[i].focus();
+            });
+            wrap.append(h('div', { class: 'kv-row one' }, a));
+          }
+        });
+      };
+      paint();
+      return wrap;
+    };
+    const paint = () => {
+      bodyEl.textContent = '';
+      err.hidden = true;
+      const editorSeg = h(
+        'div',
+        { class: 'segmented', role: 'radiogroup', 'aria-label': 'Editor' },
+        [
+          ['form', 'Form'],
+          ['json', 'JSON'],
+        ].map(([v, l]) => h('button', { class: st.editor === v ? 'on' : '', role: 'radio', 'aria-checked': st.editor === v ? 'true' : 'false', onclick: () => ((st.editor = v), paint()) }, l))
+      );
+      bodyEl.append(h('div', { class: 'f-inline' }, h('label', { class: 'f-label inline' }, 'Editor'), editorSeg));
+      if (st.editor === 'json') {
+        const ta = h('textarea', { class: 'field mono', rows: '10', placeholder: '{\n  "my-server": {\n    "type": "http",\n    "url": "https://example.com/mcp"\n  }\n}', 'aria-label': 'MCP server JSON', spellcheck: 'false' });
+        ta.value = st.json;
+        ta.addEventListener('input', () => (st.json = ta.value));
+        bodyEl.append(h('label', { class: 'f-label' }, 'MCP server JSON'), ta);
+        return;
+      }
+      const nameIn = h('input', { class: 'field', value: st.name, placeholder: 'My server', 'aria-label': 'Name' });
+      nameIn.addEventListener('input', () => (st.name = nameIn.value));
+      const typeSeg = h(
+        'div',
+        { class: 'segmented', role: 'radiogroup', 'aria-label': 'Type' },
+        [
+          ['http', 'Remote HTTPS'],
+          ['stdio', 'Command'],
+        ].map(([v, l]) => h('button', { class: st.type === v ? 'on' : '', role: 'radio', 'aria-checked': st.type === v ? 'true' : 'false', onclick: () => ((st.type = v), paint()) }, l))
+      );
+      bodyEl.append(h('label', { class: 'f-label' }, 'Name'), nameIn, h('label', { class: 'f-label' }, 'Type'), typeSeg);
+      if (st.type === 'http') {
+        const urlIn = h('input', { class: 'field mono', value: st.url, placeholder: 'https://example.com/mcp', 'aria-label': 'Server URL', spellcheck: 'false' });
+        urlIn.addEventListener('input', () => (st.url = urlIn.value));
+        bodyEl.append(h('label', { class: 'f-label' }, 'Server URL'), urlIn, h('label', { class: 'f-label' }, 'HTTP headers'), kvRows(st.headers, 'Key', 'Value', 'Header'));
+      } else {
+        const cmdIn = h('input', { class: 'field mono', value: st.command, placeholder: 'npx', 'aria-label': 'Command', spellcheck: 'false' });
+        cmdIn.addEventListener('input', () => (st.command = cmdIn.value));
+        bodyEl.append(
+          h('label', { class: 'f-label' }, 'Command'),
+          cmdIn,
+          h('label', { class: 'f-label' }, 'Arguments'),
+          kvRows(st.args, '', '', 'Argument'),
+          h('label', { class: 'f-label' }, 'Environment variables'),
+          kvRows(st.env, 'Key', 'Value', 'Variable'),
+          h('div', { class: 'f-hint' }, 'A command runs on the computer your Bots use, in every Bot’s conversations.')
+        );
+      }
+    };
+    const fromPairs = (list) => Object.fromEntries(list.filter((p) => p[0].trim()).map((p) => [p[0].trim(), p[1]]));
+    const build = () => {
+      if (st.editor === 'json') {
+        let v;
+        try {
+          v = JSON.parse(st.json);
+        } catch {
+          throw new Error('Enter valid JSON');
+        }
+        if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Enter valid JSON');
+        const servers = v.mcpServers && typeof v.mcpServers === 'object' ? v.mcpServers : v;
+        const names = Object.keys(servers);
+        if (names.length !== 1) throw new Error('Add one server at a time');
+        const cfg = servers[names[0]] || {};
+        if (cfg.url) return { displayName: names[0], body: { type: 'http', url: String(cfg.url), headers: cfg.headers || {} } };
+        if (cfg.command) return { displayName: names[0], body: { type: 'stdio', command: String(cfg.command), args: Array.isArray(cfg.args) ? cfg.args.map(String) : [], env: cfg.env || {} } };
+        throw new Error('The server needs a URL or a command');
+      }
+      if (st.type === 'http') {
+        if (!st.url.trim()) throw new Error('The server needs a URL or a command');
+        return { displayName: st.name, body: { type: 'http', url: st.url.trim(), headers: fromPairs(st.headers) } };
+      }
+      if (!st.command.trim()) throw new Error('The server needs a URL or a command');
+      return { displayName: st.name, body: { type: 'stdio', command: st.command.trim(), args: st.args.filter((a) => a !== ''), env: fromPairs(st.env) } };
+    };
+    addBtn.addEventListener('click', async () => {
+      err.hidden = true;
+      let out;
+      try {
+        out = build();
+        const slug = mcpSlug(out.displayName || '');
+        if (!slug) throw new Error('Name must contain at least one letter or number');
+        if ((S.settings.mcp_servers || []).some((m) => mcpSlug(m.name) === slug) || slug === 'openbot') throw new Error(`A server named "${out.displayName.trim()}" already exists`);
+        out.body.name = slug;
+      } catch (e) {
+        err.textContent = e.message;
+        err.hidden = false;
+        return;
+      }
+      addBtn.disabled = true;
+      try {
+        S.settings = await api('/api/mcp-servers', { method: 'POST', body: out.body });
+        close();
+        rerenderSettings(true);
+      } catch (e) {
+        addBtn.disabled = false;
+        err.textContent = e.message;
+        err.hidden = false;
+      }
+    });
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Add plugin' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Add plugin'),
+      h('p', { class: 'dialog-body' }, 'Connect a custom MCP server so every Bot can use its tools.'),
+      bodyEl,
+      err,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), addBtn)
+    );
+    paint();
+    const close = openModal(box);
+  }
+
+  // ── Permissions (2.1) ──
+  const RULE_LISTS = [
+    { key: 'review_ask', title: 'Always Ask', explain: 'Stop and ask when an action matches these rules', example: 'Purchases over $50' },
+    { key: 'review_allow', title: 'Allow without Asking', explain: 'Continue automatically when an action matches these rules', example: 'Emails to my team at acme.com' },
+  ];
   function tabPermissions() {
     const s = S.settings;
-    if (!s) return notConnected();
-    const out = h('div');
-    const modes = card(
-      ...PERMISSION_MODES.map(([key, title, desc, warn]) =>
-        h(
-          'label',
-          { class: 'set-row radio-row' + (s.permission_mode === key ? ' on' : '') },
-          h('input', {
-            type: 'radio',
-            name: 'perm',
-            checked: s.permission_mode === key,
-            onchange: () => putSettings({ permission_mode: key }),
-          }),
-          h('span', { class: 'radio-dot' }),
-          h(
-            'div',
-            { class: 'set-row-text' },
-            h('div', { class: 'set-row-title' }, title),
-            h('div', { class: 'set-row-sub' }, desc),
-            warn ? h('div', { class: 'set-row-warn' }, icon('alert', 14), warn) : null
-          )
-        )
-      )
-    );
-    out.append(section('When bots want to take an action', modes));
-
-    const rules = s.allow_rules || [];
-    const ruleIn = h('input', { class: 'field mono', placeholder: 'e.g. Bash(git status) or WebFetch', spellcheck: 'false' });
-    const add = () => {
-      const v = ruleIn.value.trim();
-      if (!v) return ruleIn.focus();
-      if (rules.includes(v)) return toast('That rule is already in the list');
-      putSettings({ allow_rules: [...rules, v] });
-    };
-    ruleIn.addEventListener('keydown', (e) => e.key === 'Enter' && add());
-    out.append(
-      section(
-        'Always allowed',
-        card(
-          rules.length
-            ? rules.map((r) =>
-                row(
-                  h('span', { class: 'mono' }, r),
-                  h(
-                    'button',
-                    { class: 'icon-btn', title: 'Remove', onclick: () => putSettings({ allow_rules: rules.filter((x) => x !== r) }) },
-                    icon('trash', 16)
-                  )
-                )
-              )
-            : row('No rules yet', null, 'Choose “Always allow” on an approval in the chat, or add a rule below.'),
-          h('div', { class: 'set-row' }, h('div', { class: 'inline-form grow' }, ruleIn, btn('Add', add)))
-        ),
-        note('Rules use Claude Code’s permission format. For example, ', h('code', null, 'Bash(npm test)'), ' allows that exact command and ', h('code', null, 'Bash(git *)'), ' allows any git command.')
-      )
-    );
-    return out;
-  }
-
-  function tabVault() {
-    const s = S.settings;
-    if (!s) return notConnected();
-    const vault = s.vault || [];
-    const nameIn = h('input', { class: 'field mono', placeholder: 'NAME (e.g. GITHUB_TOKEN)', spellcheck: 'false', autocomplete: 'off' });
-    const valIn = h('input', { class: 'field', type: 'password', placeholder: 'Secret value', autocomplete: 'new-password' });
-    nameIn.addEventListener('input', () => {
-      const p = nameIn.selectionStart;
-      nameIn.value = nameIn.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
-      nameIn.setSelectionRange(p, p);
-    });
-    const save = async () => {
-      const name = nameIn.value.trim();
-      const value = valIn.value;
-      if (!name) return nameIn.focus();
-      if (!value) return valIn.focus();
-      try {
-        S.settings = await api('/api/vault', { method: 'POST', body: { name, value } });
-        toast(`Saved ${name}`);
-      } catch (e) {
-        fail(e);
-      }
-      rerenderSettings(true);
-    };
-    valIn.addEventListener('keydown', (e) => e.key === 'Enter' && save());
-    const remove = async (name) => {
-      const ok = await confirmDialog({ title: `Delete ${name}?`, body: 'Bots will no longer be able to use this secret.', confirmText: 'Delete', danger: true });
-      if (!ok) return;
-      try {
-        S.settings = await api('/api/vault/' + encodeURIComponent(name), { method: 'DELETE' });
-      } catch (e) {
-        fail(e);
-      }
-      rerenderSettings(true);
-    };
-    return h(
-      'div',
-      null,
-      section(
-        'Secrets',
-        card(
-          vault.length
-            ? vault.map((v) =>
-                row(
-                  h('span', { class: 'secret-name' }, icon('lock', 15), h('span', { class: 'mono' }, v.name)),
-                  h('div', { class: 'secret-ctl' }, h('span', { class: 'val mono dim' }, v.hint || '••••••'), h('button', { class: 'icon-btn', title: 'Delete', onclick: () => remove(v.name) }, icon('trash', 16)))
-                )
-              )
-            : row('Your vault is empty', null, 'Add API keys or passwords your bots need, like a GitHub token.')
-        ),
-        note('Secrets are stored on the computer where bots run and passed to bots as environment variables. They never appear in the chat.')
-      ),
-      section(
-        'Add a secret',
-        card(h('div', { class: 'set-row stack' }, h('div', { class: 'inline-form' }, nameIn, valIn, btn('Save', save, 'primary'))))
-      )
-    );
-  }
-
-  function tabAccount() {
-    const s = S.settings;
-    const u = S.usage;
-    const claude = (S.computer && S.computer.claude) || {};
-    const out = h('div');
-    const rl = u && u.rate_limit;
-    const pct = rl ? Math.round(clamp(rl.utilization || 0, 0, 1) * 100) : null;
-    const windowName = rl && rl.window === 'five_hour' ? '5-hour usage limit' : 'Weekly usage limit';
-    out.append(
-      section(
-        null,
-        h(
+    const ui = S.settingsUI;
+    if (!s) {
+      if (!S.settingsLoadErr) return h('div', { class: 'set-card skeleton', 'aria-label': 'Loading' });
+      return h(
         'div',
-        { class: 'set-card usage-card' },
-        h('div', { class: 'usage-title' }, windowName),
-        pct == null
-          ? h('div', { class: 'usage-big' }, h('span', { class: 'num dim' }, '—'))
-          : h('div', { class: 'usage-big' }, h('span', { class: 'num' }, `${pct}%`), h('span', { class: 'unit' }, 'used')),
-        h('div', { class: 'meter big' + (pct >= 90 ? ' hot' : '') }, h('div', { class: 'meter-fill', style: { width: (pct || 0) + '%' } })),
-        h('div', { class: 'usage-sub' }, rl ? (rl.resets_at ? fmtResetsIn(rl.resets_at) : '') : 'Usage appears after your first message.')
-      ),
-      note(
-        s && s.auth_mode === 'api_key'
-          ? 'Limits shown are for your Claude subscription. With an API key you pay per use instead.'
-          : 'Included usage with your Claude subscription, as reported by Claude Code. It resets automatically.'
-        )
-      )
-    );
-
-    if (s) {
-      const keyIn = h('input', { class: 'field', type: 'password', placeholder: s.api_key_set ? 'Enter a new key to replace it' : 'sk-ant-…', autocomplete: 'off' });
-      const saveKey = () => {
-        const v = keyIn.value.trim();
-        if (!v) return keyIn.focus();
-        putSettings({ api_key: v, auth_mode: 'api_key' }, 'API key saved');
-      };
-      keyIn.addEventListener('keydown', (e) => e.key === 'Enter' && saveKey());
-      const subRow = h(
-        'label',
-        { class: 'set-row radio-row' + (s.auth_mode !== 'api_key' ? ' on' : '') },
-        h('input', { type: 'radio', name: 'auth', checked: s.auth_mode !== 'api_key', onchange: () => putSettings({ auth_mode: 'subscription' }) }),
-        h('span', { class: 'radio-dot' }),
-        h(
-          'div',
-          { class: 'set-row-text' },
-          h('div', { class: 'set-row-title' }, 'Claude subscription'),
-          h(
-            'div',
-            { class: 'set-row-sub' },
-            claude.logged_in
-              ? `Signed in to Claude Code as ${claude.email || 'your account'}${claude.subscription ? ` · ${claude.subscription}` : ''}${claude.auth_method ? ` (${claude.auth_method})` : ''}`
-              : claude.installed
-                ? 'Claude Code isn’t signed in on that computer. Open a terminal there, run claude, and log in.'
-                : 'Install Claude Code on the computer where bots run, then run claude and log in.'
-          )
-        )
+        { class: 'set-alert bad', role: 'alert' },
+        h('div', { class: 'set-alert-text' }, h('div', { class: 'set-alert-title' }, 'Couldn’t load your permissions'), h('div', null, 'Rules and Auto-review settings can’t be shown or changed until they load')),
+        pillBtn('Try again', () => refreshSettingsData())
       );
-      const apiRow = h(
-        'label',
-        { class: 'set-row radio-row' + (s.auth_mode === 'api_key' ? ' on' : '') },
-        h('input', {
-          type: 'radio',
-          name: 'auth',
-          checked: s.auth_mode === 'api_key',
-          onchange: () => {
-            if (s.api_key_set) putSettings({ auth_mode: 'api_key' });
-            else {
-              keyIn.focus();
-              toast('Paste your API key and press Save');
-            }
-          },
-        }),
-        h('span', { class: 'radio-dot' }),
-        h(
-          'div',
-          { class: 'set-row-text' },
-          h('div', { class: 'set-row-title' }, 'Anthropic API key'),
-          h('div', { class: 'set-row-sub' }, s.api_key_set ? `Key saved: ${s.api_key_hint || '••••'}` : 'Pay per use with a key from console.anthropic.com.')
-        )
-      );
+    }
+    const on = s.auto_review !== false;
+    const out = h('div');
+    const reviewCard = card(row('Auto-Review', toggleEl(on, (v) => putSettings({ auto_review: v }, 'auto-review')), 'Review openbot actions based on custom rules', '', 'auto-review'));
+    out.append(h('div', { class: 'set-section' }, reviewCard));
+    if (!on) {
       out.append(
-        section(
-          'Sign-in method',
-          card(
-            subRow,
-            apiRow,
+        h(
+          'div',
+          { class: 'set-alert warn' },
+          icon('alert', 16),
+          h('div', { class: 'set-alert-text' }, h('div', { class: 'set-alert-title' }, 'Rules aren’t used while Auto-review is off'), h('div', null, 'openbot runs actions without checking them. Tools set to Needs approval still ask.')),
+          pillBtn('Turn on', () => putSettings({ auto_review: true }, 'auto-review'))
+        )
+      );
+    }
+    const lists = h('div', { class: 'rule-lists' + (on ? '' : ' dim') });
+    for (const L of RULE_LISTS) {
+      const rules = s[L.key] || [];
+      const ed = ui.ruleEdit && ui.ruleEdit.list === L.key ? ui.ruleEdit : null;
+      const full = rules.length >= 20;
+      const addBtn = pillBtn('Add Rule', () => {
+        ui.ruleEdit = { list: L.key, index: -1, text: '' };
+        rerenderSettings(true);
+      }, { 'aria-label': `Add Rule to ${L.title}`, disabled: full || !!ui.ruleEdit || !!ui.ruleBusy });
+      const head = h(
+        'div',
+        { class: 'set-head', id: 'set-' + (L.key === 'review_ask' ? 'always-ask-rules' : 'allow-without-asking-rules') },
+        h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, L.title), h('div', { class: 'set-explain' }, L.explain)),
+        full && h('span', { class: 'chip' }, 'max 20 rules'),
+        addBtn
+      );
+      const rowsEl = [];
+      rules.forEach((r, i) => {
+        if (ed && ed.index === i) rowsEl.push(ruleEditor(L, rules, ed));
+        else
+          rowsEl.push(
             h(
               'div',
-              { class: 'set-row' },
+              { class: 'set-row rule-row' },
+              h('div', { class: 'set-row-text' }, h('div', { class: 'rule-text' }, r)),
               h(
                 'div',
-                { class: 'inline-form grow' },
-                keyIn,
-                btn('Save', saveKey, 'primary'),
-                s.api_key_set && btn('Remove', () => putSettings({ api_key: '', auth_mode: 'subscription' }, 'API key removed'), 'danger')
+                { class: 'set-row-ctl' },
+                h('button', { class: 'ghost-btn', 'aria-label': `Edit ${L.title} rule ${i + 1}`, 'data-tip': 'Edit', disabled: !!ui.ruleEdit, onclick: () => ((ui.ruleEdit = { list: L.key, index: i, text: r }), rerenderSettings(true)) }, icon('pencil', 15)),
+                h(
+                  'button',
+                  {
+                    class: 'ghost-btn danger',
+                    'aria-label': `Delete ${L.title} rule ${i + 1}`,
+                    'data-tip': 'Delete',
+                    disabled: !!ui.ruleEdit,
+                    onclick: () => saveRules(L.key, rules.filter((_, j) => j !== i)),
+                  },
+                  icon('trash', 15)
+                )
               )
             )
-          ),
-          note('The key is stored only on the computer where bots run.')
-        )
-      );
-    } else out.append(notConnected());
+          );
+      });
+      if (ed && ed.index === -1) rowsEl.push(ruleEditor(L, rules, ed));
+      lists.append(h('div', { class: 'set-section' }, head, rowsEl.length ? card(rowsEl) : null));
+    }
+    out.append(lists);
 
-    if (u) {
-      const per = (u.per_bot || []).slice().sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
+    // Claude Code's own allow rules (added by "Always allow"), openbot-specific
+    const tr = s.allow_rules || [];
+    if (tr.length) {
       out.append(
         section(
-          'Spend',
-          card(
-            row('This week', h('span', { class: 'val' }, fmtUsd(u.week_cost_usd))),
-            row('All time', h('span', { class: 'val' }, fmtUsd(u.total_cost_usd))),
-            per.map((p) => {
-              const b = S.bots.get(p.bot_id);
-              return row(
-                h('span', { class: 'bot-inline' }, avatar(b || {}, 22), h('span', null, b ? b.name : 'Deleted bot')),
-                h('span', { class: 'val' }, fmtUsd(p.cost_usd)),
-                `${p.turns || 0} turn${p.turns === 1 ? '' : 's'}`
-              );
-            })
-          ),
-          note('Estimated by Claude Code. On a subscription you aren’t charged this amount. It shows what the same usage would cost with an API key.')
+          'Tool rules',
+          card(tr.map((r) => row(h('span', { class: 'mono' }, r), h('button', { class: 'ghost-btn danger', 'aria-label': `Remove ${r}`, 'data-tip': 'Remove', onclick: () => putSettings({ allow_rules: tr.filter((x) => x !== r) }) }, icon('trash', 15))))),
+          note('Exact tools and commands Claude Code runs without asking. “Always allow” on an approval adds one here.')
         )
       );
     }
     return out;
   }
+  async function saveRules(key, list) {
+    const ui = S.settingsUI;
+    ui.ruleBusy = true;
+    const ok = await putSettings({ [key]: list }, key === 'review_ask' ? 'always-ask-rules' : 'allow-without-asking-rules');
+    ui.ruleBusy = false;
+    if (ok) ui.ruleEdit = null;
+    rerenderSettings(true);
+  }
+  function ruleEditor(L, rules, ed) {
+    const ui = S.settingsUI;
+    const ta = h('textarea', { class: 'field rule-input', rows: '1', maxlength: '1000', placeholder: L.example, 'aria-label': 'Applies to' });
+    ta.value = ed.text || '';
+    const err = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    const grow = () => {
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight + 2, 200) + 'px';
+    };
+    const cancel = () => {
+      ui.ruleEdit = null;
+      rerenderSettings(true);
+    };
+    const submit = () => {
+      const v = ta.value.trim();
+      const bad = (m) => {
+        err.textContent = m;
+        err.hidden = false;
+        ta.focus();
+      };
+      if (!v) return bad('Enter a rule');
+      if (rules.some((r, i) => i !== ed.index && r.trim().toLowerCase() === v.toLowerCase())) return bad('That rule is already in the list');
+      if (ed.index === -1 && rules.length >= 20) return bad('You can have up to 20 rules');
+      const next = rules.slice();
+      if (ed.index === -1) next.push(v);
+      else next[ed.index] = v;
+      saveRules(L.key, next);
+    };
+    ta.addEventListener('input', () => {
+      ed.text = ta.value;
+      err.hidden = true;
+      grow();
+    });
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        cancel();
+      }
+    });
+    setTimeout(() => {
+      ta.focus();
+      ta.setSelectionRange(ta.value.length, ta.value.length);
+      grow();
+    }, 0);
+    return h(
+      'div',
+      { class: 'set-row stack rule-editor' },
+      h('label', { class: 'f-label' }, 'Applies to'),
+      ta,
+      err,
+      h('div', { class: 'f-hint' }, 'Name the action and who or what it affects, like “Emails to dana@acme.com”'),
+      h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(ed.index === -1 ? 'Add rule' : 'Save rule', submit, 'primary'))
+    );
+  }
 
+  // ── Vault › Secrets (3.7) ──
+  const RESERVED_ENV = ['PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'PWD', 'DISPLAY', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY', 'FTP_PROXY'];
+  const RESERVED_PREFIX = ['LD_', 'CURSOR_', 'CLOUD_AGENT_', 'SAND_'];
+  function secretNameProblem(n) {
+    if (!n) return 'Enter an environment variable name';
+    if (n.length > 128) return 'Too long. Maximum length is 128.';
+    if (!/^[A-Z][A-Z0-9_]*$/.test(n)) return 'Use an uppercase environment variable name (A-Z, 0-9, _) that starts with a letter';
+    if (RESERVED_ENV.includes(n)) return `${n} is reserved by the computer`;
+    const p = RESERVED_PREFIX.find((x) => n.startsWith(x));
+    if (p) return `Names starting with ${p} are reserved by the computer`;
+    return '';
+  }
+  function secretValueProblem(v) {
+    if (!v) return 'Paste the secret';
+    if (v.length < 8) return 'Too short. Minimum length is 8.';
+    if (new Blob([v]).size > 4096) return 'Too large. Maximum size is 4 KiB.';
+    return '';
+  }
+  function tabVault() {
+    const s = S.settings;
+    if (!s) return notConnected();
+    const ui = S.settingsUI;
+    const vault = s.vault || [];
+    const form = ui.vaultForm;
+    const out = h('div');
+    const head = h(
+      'div',
+      { class: 'set-head' },
+      h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Secrets'), h('div', { class: 'set-explain' }, 'Credentials your Bots can use in shell commands as environment variables. Values are write-only.')),
+      pillBtn('Add secret', () => ((ui.vaultForm = { mode: 'add' }), rerenderSettings(true)), { disabled: !!form })
+    );
+    const rows = vault.map((v) =>
+      form && form.mode === 'replace' && form.name === v.name
+        ? secretForm(form, v)
+        : row(
+            h('span', { class: 'secret-name' }, icon('key', 15), h('span', { class: 'mono' }, v.name)),
+            h(
+              'div',
+              { class: 'secret-ctl' },
+              pillBtn('Replace', () => ((ui.vaultForm = { mode: 'replace', name: v.name }), rerenderSettings(true)), { disabled: !!form, 'aria-label': `Replace ${v.name}` }),
+              pillBtn('Remove', () => removeSecret(v.name), { disabled: !!form, 'aria-label': `Remove ${v.name}` })
+            ),
+            v.description || null
+          )
+    );
+    if (form && form.mode === 'add') rows.push(secretForm(form, null));
+    out.append(h('div', { class: 'set-section' }, head, rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No secrets yet'))));
+    out.append(note('Secrets stay on the computer where your Bots run. Bots see the names and what they are for, never the values.'));
+    return out;
+  }
+  async function removeSecret(name) {
+    const ok = await confirmDialog({ title: `Remove ${name}?`, body: 'Bots can no longer use this secret.', confirmText: 'Remove', danger: true });
+    if (!ok) return;
+    try {
+      S.settings = await api('/api/vault/' + encodeURIComponent(name), { method: 'DELETE' });
+    } catch (e) {
+      fail(e);
+    }
+    rerenderSettings(true);
+  }
+  function secretForm(form, existing) {
+    const ui = S.settingsUI;
+    const nameIn = h('input', { class: 'field mono', value: existing ? existing.name : form.nameV || '', placeholder: 'GITHUB_TOKEN', maxlength: '128', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Environment variable name', disabled: !!existing });
+    const descIn = h('input', { class: 'field', value: existing ? existing.description || '' : form.descV || '', placeholder: 'GitHub access for opening pull requests', maxlength: '300', 'aria-label': 'What it is for (shown to the Bot)' });
+    const valIn = h('input', { class: 'field mono', type: 'password', placeholder: existing ? 'Leave empty to keep the current value' : '', autocomplete: 'new-password', 'aria-label': 'Value' });
+    const nameErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    const valErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    nameIn.addEventListener('input', () => {
+      const p = nameIn.selectionStart;
+      nameIn.value = nameIn.value.toUpperCase().replace(/[\s-]/g, '_');
+      nameIn.setSelectionRange(p, p);
+      nameErr.hidden = true;
+    });
+    valIn.addEventListener('input', () => (valErr.hidden = true));
+    const save = async (e) => {
+      const name = nameIn.value.trim();
+      const value = valIn.value;
+      const np = existing ? '' : secretNameProblem(name) || (S.settings.vault || []).some((x) => x.name === name) ? secretNameProblem(name) || `${name} already exists. Use Replace to change it.` : '';
+      const vp = existing && !value ? '' : secretValueProblem(value);
+      nameErr.textContent = np;
+      nameErr.hidden = !np;
+      valErr.textContent = vp;
+      valErr.hidden = !vp;
+      if (np) return nameIn.focus();
+      if (vp) return valIn.focus();
+      e.currentTarget.disabled = true;
+      try {
+        S.settings = await api('/api/vault', { method: 'POST', body: { name, value, description: descIn.value.trim() } });
+        ui.vaultForm = null;
+      } catch (x) {
+        e.currentTarget.disabled = false;
+        valErr.textContent = x.message;
+        valErr.hidden = false;
+        return;
+      }
+      rerenderSettings(true);
+    };
+    const cancel = () => {
+      ui.vaultForm = null;
+      rerenderSettings(true);
+    };
+    for (const el of [nameIn, descIn, valIn])
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') save({ currentTarget: e.target.closest('.secret-form').querySelector('.btn.primary') });
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          cancel();
+        }
+      });
+    setTimeout(() => (existing ? valIn : nameIn).focus(), 0);
+    return h(
+      'div',
+      { class: 'set-row stack secret-form' },
+      h('label', { class: 'f-label' }, 'Environment variable name'),
+      nameIn,
+      nameErr,
+      h('label', { class: 'f-label' }, 'What it is for (shown to the Bot)'),
+      descIn,
+      h('label', { class: 'f-label' }, 'Value'),
+      valIn,
+      valErr,
+      h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(existing ? 'Replace' : 'Add secret', save, 'primary'))
+    );
+  }
+
+  // ── Usage & Billing (1.4 / 6) ──
+  function usageInfo() {
+    const rl = S.usage && S.usage.rate_limit;
+    if (!rl || rl.utilization == null) return null;
+    return { pct: Math.round(clamp(rl.utilization, 0, 1.5) * 100), resetsAt: rl.resets_at || null, weekly: rl.window !== 'five_hour' };
+  }
+  function resetsText(unixSecs) {
+    if (!unixSecs) return '';
+    const d = new Date(unixSecs * 1000);
+    const now = new Date();
+    const day0 = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const days = Math.round((day0(d) - day0(now)) / 86400000);
+    if (days <= 0) return 'Resets today';
+    return `Resets in ${days} day${days === 1 ? '' : 's'}`;
+  }
+  function tabUsage() {
+    const s = S.settings;
+    const u = S.usage;
+    const claude = (S.computer && S.computer.claude) || {};
+    const info = usageInfo();
+    const out = h('div');
+    out.append(
+      h(
+        'div',
+        { class: 'set-section', id: 'set-usage' },
+        h(
+          'div',
+          { class: 'set-card usage-card' },
+          h('div', { class: 'usage-title' }, info && !info.weekly ? '5-hour usage limit' : 'Weekly usage limit'),
+          info ? h('div', { class: 'usage-big' }, h('span', { class: 'num' }, `${info.pct}%`), h('span', { class: 'unit' }, 'used')) : h('div', { class: 'usage-big' }, h('span', { class: 'num dim' }, '—')),
+          h('div', { class: 'meter big' }, h('div', { class: 'meter-fill', style: { width: clamp(info ? info.pct : 0, 0, 100) + '%' } })),
+          h('div', { class: 'usage-sub' }, info ? resetsText(info.resetsAt) : 'Shows up after your Bots’ next reply.')
+        ),
+        note(info && !info.weekly ? 'Included usage with your subscription. Resets every 5 hours.' : 'Included usage with your subscription. Resets weekly.')
+      )
+    );
+    const plan = claude.subscription ? claude.subscription[0].toUpperCase() + claude.subscription.slice(1) : '';
+    out.append(
+      section(
+        'Manage Plan',
+        card(row(plan ? `Current plan: ${plan}` : 'Current plan', pillBtn(h('span', { class: 'btn-ext' }, 'Manage Plan', icon('external', 13)), () => openExternal(USAGE_URL)), 'View, change, or upgrade your plan on claude.ai'))
+      )
+    );
+    if (s) {
+      const keyIn = h('input', { class: 'field', type: 'password', placeholder: s.api_key_set ? 'Enter a new key to replace it' : 'sk-ant-…', autocomplete: 'off' });
+      const saveKey = () => {
+        const v = keyIn.value.trim();
+        if (!v) return keyIn.focus();
+        putSettings({ api_key: v, auth_mode: 'api_key' }).then((ok) => ok && toast('API key saved'));
+      };
+      keyIn.addEventListener('keydown', (e) => e.key === 'Enter' && saveKey());
+      const radio = (on, title, sub, onchange) =>
+        h(
+          'label',
+          { class: 'set-row radio-row' + (on ? ' on' : '') },
+          h('input', { type: 'radio', name: 'auth', checked: on, onchange }),
+          h('span', { class: 'radio-dot' }),
+          h('div', { class: 'set-row-text' }, h('div', { class: 'set-row-title' }, title), h('div', { class: 'set-row-sub' }, sub))
+        );
+      out.append(
+        section(
+          'Sign-in method',
+          card(
+            radio(
+              s.auth_mode !== 'api_key',
+              'Claude subscription',
+              claude.logged_in ? `Signed in to Claude Code as ${claude.email || 'your account'}${claude.subscription ? ` · ${claude.subscription}` : ''}` : claude.installed ? 'Claude Code isn’t signed in on that computer. Open a terminal there, run claude, and log in.' : 'Install Claude Code on the computer where bots run, then run claude and log in.',
+              () => putSettings({ auth_mode: 'subscription' })
+            ),
+            radio(s.auth_mode === 'api_key', 'Anthropic API key', s.api_key_set ? `Key saved: ${s.api_key_hint || '••••'}` : 'Pay per use with a key from console.anthropic.com.', () => {
+              if (s.api_key_set) putSettings({ auth_mode: 'api_key' });
+              else {
+                keyIn.focus();
+                toast('Paste your API key and press Save');
+              }
+            }),
+            h('div', { class: 'set-row' }, h('div', { class: 'inline-form grow' }, keyIn, btn('Save', saveKey, 'primary'), s.api_key_set && btn('Remove', () => putSettings({ api_key: '', auth_mode: 'subscription' }).then((ok) => ok && toast('API key removed')), 'danger')))
+          ),
+          note('The key is stored only on the computer where bots run.')
+        )
+      );
+    }
+    if (u && (u.per_bot || []).length) {
+      const per = u.per_bot.slice().sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
+      out.append(
+        section(
+          'Usage by Bot',
+          card(
+            per.map((p) => {
+              const b = S.bots.get(p.bot_id);
+              return row(h('span', { class: 'bot-inline' }, avatar(b || {}, 22), h('span', null, b ? b.name : 'Deleted Bot')), h('span', { class: 'val' }, fmtUsd(p.cost_usd)), `${p.turns || 0} turn${p.turns === 1 ? '' : 's'}`);
+            })
+          ),
+          note(`This week ${fmtUsd(u.week_cost_usd)} · all time ${fmtUsd(u.total_cost_usd)}. Estimated by Claude Code. On a subscription you aren’t charged this. It shows what the same usage would cost with an API key.`)
+        )
+      );
+    }
+    return out;
+  }
+  // chat banner at 75 / 90 / 100 % of the weekly limit (1.4)
+  function renderUsageBanner() {
+    const el = $('#usageBanner');
+    if (!el) return;
+    const info = usageInfo();
+    let th = 0;
+    if (info && info.weekly) th = info.pct >= 100 ? 100 : info.pct >= 90 ? 90 : info.pct >= 75 ? 75 : 0;
+    const key = th ? `${th}:${(info && info.resetsAt) || ''}` : '';
+    let dismissed = '';
+    try {
+      dismissed = localStorage.getItem('openbot.usageWarning') || '';
+    } catch {}
+    const show = !!th && dismissed !== key;
+    const was = !el.hidden;
+    el.hidden = !show;
+    if (show) {
+      el.textContent = '';
+      el.append(
+        icon('alert', 15),
+        h('span', { class: 'ub-text' }, th === 100 ? 'Weekly usage limit reached.' : `You’re at ${info.pct}% of your weekly usage limit.`),
+        h('button', { class: 'btn small primary', onclick: () => openExternal(USAGE_URL) }, th === 100 ? 'Upgrade' : 'Get More Usage'),
+        h(
+          'button',
+          {
+            class: 'ghost-btn sm',
+            'aria-label': 'Dismiss usage warning',
+            onclick: () => {
+              try {
+                localStorage.setItem('openbot.usageWarning', key);
+              } catch {}
+              renderUsageBanner();
+            },
+          },
+          icon('x', 14)
+        )
+      );
+    }
+    if (was !== show) layoutComposer();
+  }
+
+  // ── Updates (1.5) ──
   function tabUpdates() {
     const claude = (S.computer && S.computer.claude) || {};
+    const ui = S.settingsUI;
+    const up = ui.upd;
+    const cv = (claude.version || '').replace(/^v/, '').split(' ')[0];
+    const check = async () => {
+      up.busy = true;
+      up.status = 'Checking for updates…';
+      rerenderSettings(true);
+      try {
+        const r = await api('/api/claude/update', { method: 'POST' });
+        const text = (r && r.output) || '';
+        const last = text.split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
+        up.status = r && r.ok ? (/up to date|latest/i.test(text) ? 'You’re up to date' : last || 'Claude Code was updated') : last || 'Couldn’t check for updates. Check your connection and try again.';
+        up.bad = !(r && r.ok);
+        api('/api/computer').then((c) => {
+          S.computer = c;
+          rerenderSettings();
+        });
+      } catch (e) {
+        up.status = e && e.network ? 'Couldn’t check for updates. Check your connection and try again.' : e.message;
+        up.bad = true;
+      }
+      up.busy = false;
+      rerenderSettings(true);
+    };
+    const copyBtn = (v) => h('button', { class: 'ghost-btn sm', 'aria-label': 'Copy version', 'data-tip': 'Copy version', onclick: () => copyText(v) }, icon('copy', 14));
     return h(
       'div',
       null,
+      section('openbot Updates', card(row('Version', h('span', { class: 'ver' }, `Version ${S.version || '—'}`, S.version && copyBtn(S.version)), 'openbot updates when you install a new build.', '', 'update-status'))),
       section(
-        'openbot',
-        card(
-          row('Version', h('span', { class: 'val mono' }, S.version || '—')),
-          row('Updates', h('span', { class: 'status-pill on' }, h('i'), 'Up to date'), 'openbot updates when you rebuild or reinstall it.')
-        )
-      ),
-      section(
-        'Claude Code',
+        'Claude Code Updates',
         card(
           row(
-            'Version on the computer',
-            h('span', { class: 'val mono' }, claude.installed ? claude.version || '—' : 'Not installed'),
-            'Claude Code updates itself automatically.'
+            'Version',
+            h('span', { class: 'ver' }, claude.installed ? `Version ${cv || '?'}` : 'Not installed', claude.installed && cv && copyBtn(cv), claude.installed && pillBtn(up.busy ? 'Checking…' : 'Check for Updates', check, { disabled: !!up.busy })),
+            up.status ? h('span', { class: up.bad ? 'err' : '' }, up.status) : claude.installed ? 'Claude Code also updates itself in the background.' : 'Install Claude Code on the computer where Bots run.'
           )
         )
       )
     );
   }
-
 
   // ───────────────────────────── global wiring ─────────────────────────────
   $('#searchBtn').append(icon('search', 20));
