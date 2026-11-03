@@ -30,6 +30,21 @@ fn is_focused(app: tauri::AppHandle) -> bool {
     app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
 
+/// Open an http(s) link in the default web browser.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Only web links can be opened".into());
+    }
+    #[cfg(target_os = "macos")]
+    let r = std::process::Command::new("open").arg(&url).spawn();
+    #[cfg(windows)]
+    let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &url]).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let r = std::process::Command::new("xdg-open").arg(&url).spawn();
+    r.map(|_| ()).map_err(|e| e.to_string())
+}
+
 fn main() {
     // Claude Code starts this same program with `mcp-approve` to ask the user for permission.
     if std::env::args().nth(1).as_deref() == Some("mcp-approve") {
@@ -52,7 +67,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused])
+        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url])
         // Menu bar: openbot › Settings… (⌘,) and Connect to Remote Computer…
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;

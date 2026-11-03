@@ -162,6 +162,7 @@
     chart: '<path d="M4 20h16"/><path d="M7 16v-5M12 16V7M17 16v-8"/>',
     pin: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/>',
     more: '<circle cx="5.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor" stroke="none"/>',
+    phone: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 17.5h2"/>',
     star: '<path d="M12 3.6l2.6 5.3 5.8.8-4.2 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8-4.2-4.1 5.8-.8z"/>',
     play: '<path d="M7 5l12 7-12 7z"/>',
     pause: '<path d="M8 5v14M16 5v14"/>',
@@ -540,6 +541,8 @@
   const savePrefs = debounce(() => {
     home('/api/prefs', { method: 'PUT', body: S.prefs }).catch(() => {});
   }, 400);
+  // save now (before a reboot re-reads prefs from the server)
+  const savePrefsNow = () => home('/api/prefs', { method: 'PUT', body: S.prefs }).catch(() => {});
 
   // ───────────────────────────── desktop bridge (Tauri) ─────────────────────────────
   const TAURI = window.__TAURI_INTERNALS__;
@@ -590,7 +593,16 @@
       setTimeout(() => t.remove(), 250);
     }, kind === 'error' ? 5200 : 2400);
   }
-  const fail = (e) => toast(e && e.message ? e.message : String(e), 'error');
+  // Errors from an unreachable or unpaired computer go to the sidebar banner, not a pile of red toasts.
+  const fail = (e) => {
+    if (e && (e.network || e.status === 401) && S.booted && S.apiBase !== location.origin) return noteNetworkTrouble(e.status);
+    if (e && e.network && S.booted) {
+      noteNetworkTrouble();
+      if (S.link === 'unreachable' || Date.now() - (fail.last || 0) < 15000) return;
+      fail.last = Date.now();
+    }
+    toast(e && e.message ? e.message : String(e), 'error');
+  };
 
   let tipTimer = null;
   let tipFor = null;
@@ -773,7 +785,8 @@
     sweepAvatars();
   }
   function bootScreen() {
-    showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, 'Starting openbot…')));
+    const remote = S.conn && S.conn.mode === 'remote' && S.conn.url;
+    showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, remote ? `Connecting to ${computerName()}…` : 'Starting openbot…')));
   }
   function tokenScreen(msg) {
     const input = h('input', { class: 'field', type: 'password', placeholder: 'Paste your openbot token', autocomplete: 'off' });
@@ -806,45 +819,62 @@
   }
   function offlineScreen(err) {
     const remote = S.conn.mode === 'remote';
-    const where = remote ? hostOf(S.conn.url) : 'this computer';
+    const name = computerName();
     const unauthorized = err && err.status === 401;
+    clearTimeout(offlineScreen.t);
+    const status = h('div', { class: 'screen-note' });
+    const actions = h('div', { class: 'screen-actions' });
+    let title;
+    let sub;
+    let list = null;
+    if (unauthorized && remote) {
+      title = `${ThisDevice()} isn’t paired with ${name} anymore`;
+      sub = 'It may have been removed from that computer’s paired devices. Pair again with a new 6-digit code from that computer.';
+      actions.append(
+        h('button', { class: 'btn primary', onclick: () => openSetupWizard({ step: 2, url: S.conn.url }) }, 'Pair again'),
+        h('button', { class: 'btn', onclick: () => useThisDevice() }, `Use ${thisDevice()} instead`)
+      );
+    } else if (remote) {
+      title = `Can’t reach ${name}`;
+      sub = 'openbot keeps trying in the background. Check that:';
+      list = h('ul', { class: 'screen-list' }, h('li', null, `${name} is turned on and awake`), h('li', null, `Tailscale is on, on ${thisDevice()} and on ${name}`), h('li', null, `openbot is running on ${name}`));
+      actions.append(
+        h('button', { class: 'btn primary', onclick: () => boot() }, icon('refresh', 15), 'Retry'),
+        h('button', { class: 'btn', onclick: () => useThisDevice() }, `Use ${thisDevice()} instead`),
+        h('button', { class: 'btn', onclick: () => openSetupWizard({ step: 1 }) }, 'Help')
+      );
+      // keep checking with backoff (5 s → 30 s) and come back on our own
+      const wait = Math.min(30, (offlineScreen.wait = offlineScreen.wait ? offlineScreen.wait * 2 : 5));
+      let left = wait;
+      const tick = async () => {
+        if (!status.isConnected) return;
+        if (left <= 0) {
+          status.textContent = 'Trying again…';
+          const ok = await fetch(S.conn.url.replace(/\/+$/, '') + '/api/hello').then((r) => r.ok, () => false);
+          if (!status.isConnected) return;
+          if (ok) return boot();
+          return offlineScreen(err);
+        }
+        status.textContent = `Trying again in ${left} s…`;
+        left--;
+        offlineScreen.t = setTimeout(tick, 1000);
+      };
+      offlineScreen.t = setTimeout(tick, 0);
+    } else {
+      title = 'openbot couldn’t start';
+      sub = `Its local service isn’t answering. Quit openbot and open it again. ${err && err.message ? err.message : ''}`;
+      actions.append(h('button', { class: 'btn primary', onclick: () => boot() }, icon('refresh', 15), 'Try again'));
+    }
     showScreen(
       h(
         'div',
         { class: 'screen-card' },
         h('div', { class: 'screen-art' }, avatar({ id: 'offline', shape: 'teardrop', color: 'gray' }, 72, { live: true, state: 'sleeping' })),
-        h('h1', { class: 'screen-title' }, unauthorized ? 'The token was rejected' : 'Can’t reach your computer'),
-        h(
-          'p',
-          { class: 'screen-sub' },
-          unauthorized
-            ? `${where} didn’t accept the saved token. Check the token that openbot-server printed and connect again.`
-            : remote
-              ? `openbot couldn’t connect to ${where}. Make sure the PC is on, openbot-server is running there, and both computers are on the same network (or Tailscale).`
-              : `openbot couldn’t start its local service. ${err && err.message ? err.message : ''}`
-        ),
-        h(
-          'div',
-          { class: 'screen-actions' },
-          h('button', { class: 'btn primary', onclick: () => boot() }, icon('refresh', 15), 'Try again'),
-          remote &&
-            h(
-              'button',
-              {
-                class: 'btn',
-                onclick: async () => {
-                  try {
-                    S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
-                    boot();
-                  } catch (e) {
-                    fail(e);
-                  }
-                },
-              },
-              'Use this computer instead'
-            ),
-          remote && h('button', { class: 'btn', onclick: () => openSettings('computer') }, 'Computer settings')
-        )
+        h('h1', { class: 'screen-title' }, title),
+        h('p', { class: 'screen-sub' + (list ? ' tight' : '') }, sub),
+        list,
+        actions,
+        status
       )
     );
   }
@@ -869,6 +899,8 @@
     } catch {
       S.prefs = S.prefs || {};
     }
+    // remember, before selectBot() writes lastBotId, whether this looks like a brand-new install
+    if (S.freshPrefs === undefined) S.freshPrefs = !S.prefs.onboarded && !S.prefs.lastBotId && !S.prefs.userName;
     applyTheme();
     layoutShell();
     if (S.conn.mode === 'remote' && S.conn.url) {
@@ -882,8 +914,12 @@
     try {
       b = await api('/api/bootstrap');
     } catch (e) {
+      S.booted = false;
       return offlineScreen(e);
     }
+    clearTimeout(offlineScreen.t);
+    offlineScreen.wait = 0;
+    S.link = 'ok';
     S.msgs.clear();
     S.hasMore.clear();
     S.nodes.clear();
@@ -902,7 +938,9 @@
       renderChat();
     }
     connectWS();
+    renderSysBanner();
     if (S.settingsUI) rerenderSettings(true);
+    maybeOnboard();
   }
   function applyBootstrap(b) {
     S.bots.clear();
@@ -916,6 +954,7 @@
     S.version = (b && b.version) || S.version;
     migratePins();
     renderUsageBanner();
+    renderSysBanner();
   }
   function trackRun(bot, prev) {
     if (bot.running && !(prev && prev.running)) {
@@ -961,7 +1000,9 @@
       S.wsOk = true;
       S.wsEverOpened = true;
       S.wsRetry = 1000;
+      S.wsFails = 0;
       setConnBanner(false);
+      setLink('ok');
       if (reconnected) resync();
       if (S.settingsUI) rerenderSettings();
     };
@@ -982,8 +1023,11 @@
     ws.onclose = () => {
       if (gen !== S.wsGen) return;
       S.wsOk = false;
+      S.wsFails = (S.wsFails || 0) + 1;
       setConnBanner(true);
       scheduleReconnect(gen);
+      // after two failed tries, find out why (computer off vs. this device unpaired)
+      if (S.wsFails >= 2 && S.link !== 'unreachable' && S.link !== 'unpaired') noteNetworkTrouble();
       if (S.settingsUI) rerenderSettings();
     };
     ws.onerror = () => {};
@@ -991,18 +1035,19 @@
   function scheduleReconnect(gen) {
     setTimeout(() => {
       if (gen === S.wsGen) connectWS();
-    }, S.wsRetry);
+    }, S.link === 'unpaired' ? 30000 : S.wsRetry);
     S.wsRetry = Math.min(S.wsRetry * 2, 10000);
   }
   function setConnBanner(show) {
     clearTimeout(S.bannerTimer);
     const el = $('#connBanner');
     if (!show) {
-      el.hidden = true;
+      if (!el.classList.contains('bad')) el.hidden = true;
       return;
     }
+    if (el.classList.contains('bad')) return;
     S.bannerTimer = setTimeout(() => {
-      if (S.wsOk) return;
+      if (S.wsOk || el.classList.contains('bad')) return;
       el.textContent = '';
       el.append(spinner('xs'), h('span', null, `Reconnecting to ${S.conn.mode === 'remote' ? hostOf(S.apiBase) : 'openbot'}…`));
       el.hidden = false;
@@ -1116,6 +1161,7 @@
     app.style.setProperty('--sbw', (rail ? RAIL : w) + 'px');
     const sb = rail ? RAIL : w;
     app.classList.toggle('panel-float', S.panelOpen && !isPhone() && innerWidth - sb - PANEL_W < CHAT_MIN);
+    if (S.booted && (S.link && S.link !== 'ok')) renderSysBanner();
   }
   function animateShell(fn) {
     app.classList.add('sb-anim');
@@ -2683,6 +2729,13 @@
     const b = curBot();
     if (!b) return;
     if (S.pending.some((p) => p.uploading)) return setNotice('Wait for files to finish uploading');
+    if (S.link === 'unreachable' || S.link === 'retrying') return setNotice(`Can’t reach ${computerName()} right now. Your message is still here. Send it once it’s back.`, true);
+    if (S.link === 'unpaired') return setNotice(`${ThisDevice()} isn’t paired with ${computerName()} anymore. Pair again to send messages.`, true);
+    if (!claudeReady() && (input.value.trim() || S.pending.length)) {
+      const c = S.computer.claude;
+      setNotice(c.installed ? `Claude isn’t signed in on ${computerName()}. Sign in, then send again.` : `Claude Code isn’t installed on ${computerName()} yet.`, true);
+      return openClaudeHelp();
+    }
     const text = input.value.trim();
     const atts = S.pending.filter((p) => !p.error && p.path).map(({ name, path, mime, url }) => ({ name, path, mime, url }));
     if (!text && !atts.length) return;
@@ -2724,7 +2777,10 @@
         renderAttachRow();
         updateComposer();
       }
-      setNotice('Couldn’t send your message. ' + (e && e.message ? e.message : ''), true);
+      if (e && (e.network || e.status === 401)) {
+        noteNetworkTrouble(e.status);
+        setNotice(`Couldn’t reach ${computerName()}. Your message is still here.`, true);
+      } else setNotice('Couldn’t send your message. ' + (e && e.message ? e.message : ''), true);
     }
   }
 
@@ -3744,6 +3800,8 @@
       curBot() && { title: 'Bot settings', sub: curBot().name, icon: 'gear', type: 'Action', run: () => setPanel(true) },
       { title: 'Toggle compact sidebar', icon: 'sidebar', type: 'Action', sub: MOD + 'B', run: () => toggleRail() },
       { title: 'Keyboard shortcuts', icon: 'keyboard', type: 'Action', sub: 'Help', run: () => openShortcuts() },
+      { title: 'How openbot works', icon: 'sparkle', type: 'Action', sub: 'Help', run: () => openOnboarding() },
+      { title: 'Set up an always-on computer', icon: 'monitor', type: 'Action', sub: 'Help', run: () => openSetupWizard() },
       ...TABS.map(([key, label, ic]) => ({ title: `Settings: ${label}`, icon: ic, type: 'Action', sub: 'Settings', run: () => openSettings(key) })),
       { title: 'Theme: System', icon: 'display', type: 'Action', sub: 'Settings · Appearance', checked: th === 'system', keep: true, run: () => setTheme('system') },
       { title: 'Theme: Light', icon: 'sun', type: 'Action', sub: 'Settings · Appearance', checked: th === 'light', keep: true, run: () => setTheme('light') },
@@ -3907,6 +3965,7 @@
         '-',
         { label: 'Bot templates', icon: 'gridPlus', action: () => openTemplates() },
         { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: MOD + '/', action: () => openShortcuts() },
+        { label: 'How openbot works', icon: 'sparkle', action: () => openOnboarding() },
       ],
       'top-start'
     );
@@ -4097,6 +4156,12 @@
   }
   const notConnected = () => note('Not connected to a computer right now. Check the Computer page.');
   function openExternal(url) {
+    // In the desktop app, open links in the normal web browser.
+    const T = window.__TAURI_INTERNALS__;
+    if (T && /^https?:\/\//.test(url)) {
+      T.invoke('open_url', { url }).catch(() => copyText(url, 'Link copied. Paste it in your browser.'));
+      return;
+    }
     const w = window.open(url, '_blank', 'noopener');
     if (!w) copyText(url, 'Link copied. Paste it in your browser.');
   }
@@ -4298,7 +4363,14 @@
           )
         )
       ),
-      section(null, card(row('Import Memory to openbot', pillBtn('Import', () => openImportMemory()), 'Transfer your preferences and context from another AI assistant', '', 'import-memory')))
+      section(null, card(row('Import Memory to openbot', pillBtn('Import', () => openImportMemory()), 'Transfer your preferences and context from another AI assistant', '', 'import-memory'))),
+      section(
+        'Help',
+        card(
+          row('How openbot works', pillBtn('Show tour', () => (S.settingsUI && S.settingsUI.close(), openOnboarding())), 'Replay the short welcome tour'),
+          row('Set up an always-on computer', pillBtn('Start setup', () => openSetupWizard()), 'Keep your Bots working 24/7 on a PC that stays on')
+        )
+      )
     );
   }
   const IMPORT_PROMPT = [
@@ -4436,7 +4508,20 @@
         )
       )
     );
-    const runsOn = card(row('Bots run on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : 'Bots are using this computer.'));
+    const linkOk = S.wsOk && (!S.link || S.link === 'ok');
+    const current =
+      conn.mode === 'remote'
+        ? row(
+            h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()),
+            h('div', { class: 'secret-ctl' }, h('span', { class: 'status-pill ' + (linkOk ? 'on' : 'off') }, h('i'), linkOk ? 'Online' : S.link === 'unpaired' ? 'Not paired' : 'Can’t reach'), pillBtn(`Switch to ${thisDevice()}`, () => useThisDevice())),
+            `Your Bots run here · ${hostOf(conn.url)}`
+          )
+        : row(
+            h('span', { class: 'comp-name' }, icon('monitor', 16), ThisDevice()),
+            pillBtn('Set up an always-on computer', () => openSetupWizard()),
+            `Your Bots run here. They pause when ${thisDevice()} sleeps.`
+          );
+    const runsOn = card(current, row('Bots run on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : `Bots are using ${thisDevice()}.`));
     if (d.mode === 'remote') {
       // Pair with another computer: its private address + a 6-digit code made on that computer.
       const urlIn = h('input', { class: 'field', placeholder: 'https://my-pc.your-tailnet.ts.net', value: d.url, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Computer address' });
@@ -4446,8 +4531,12 @@
       codeIn.addEventListener('input', () => (d.code = codeIn.value));
       tokIn.addEventListener('input', () => (d.token = tokIn.value));
       const resultEl = d.result ? h('div', { class: 'conn-result ' + (d.result.ok ? 'ok' : 'bad') }, d.result.ok ? icon('check', 15) : icon('alert', 15), h('span', null, d.result.text)) : null;
-      const finish = async (url, token) => {
+      const finish = async (url, token, name) => {
         S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'remote', url, token } });
+        if (name) {
+          S.prefs.remoteNames = Object.assign({}, S.prefs.remoteNames, { [S.conn.url || url]: name });
+          await savePrefsNow();
+        }
         S.connDraft = null;
         S.current = null;
         await boot();
@@ -4474,7 +4563,7 @@
           } else {
             const r = await home('/api/connection/pair', { method: 'POST', body: { url, code } });
             if (!r || !r.ok) throw new Error((r && r.error) || 'Couldn’t pair');
-            await finish(url, r.token);
+            await finish(url, r.token, r.computer && r.computer.hostname);
           }
         } catch (e) {
           d.busy = false;
@@ -4517,21 +4606,7 @@
       runsOn.append(
         row(
           '',
-          btn(
-            'Use this computer',
-            async () => {
-              try {
-                S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
-                S.connDraft = null;
-                S.current = null;
-                await boot();
-                toast('Bots now run on this computer');
-              } catch (e) {
-                fail(e);
-              }
-            },
-            'primary'
-          ),
+          btn(`Use ${thisDevice()}`, () => useThisDevice(), 'primary'),
           `Switch back so bots run on this computer instead of ${hostOf(conn.url)}.`
         )
       );
@@ -4653,7 +4728,8 @@
               h('li', null, 'On the PC, run the openbot host setup (', h('code', null, 'install-host.ps1'), '). It keeps openbot private and prints a ', h('code', null, 'https://…ts.net'), ' address and a 6-digit pairing code.'),
               h('li', null, 'Choose “Remote computer” above, enter the address and the code, then press Connect.')
             ),
-            h('div', { class: 'set-row-sub' }, 'Only your own devices can reach the PC, and everything is encrypted. Never open port 7777 on your router or use Tailscale Funnel. Set the PC to never sleep so your bots stay online.')
+            h('div', { class: 'set-row-sub' }, 'Only your own devices can reach the PC, and everything is encrypted. Never open port 7777 on your router or use Tailscale Funnel. Set the PC to never sleep so your bots stay online.'),
+            h('div', { class: 'row-actions' }, btn('Open the step-by-step guide', () => openSetupWizard(), 'primary'))
           )
         )
       )
@@ -5371,6 +5447,662 @@
         )
       )
     );
+  }
+
+  // ───────────────────────────── onboarding · always-on computer setup · connection states ─────────────────────────────
+  const UA = navigator.platform || navigator.userAgent || '';
+  const PLATFORM = /Mac|iPhone|iPad/.test(UA) ? 'mac' : /Win/.test(UA) ? 'win' : 'other';
+  const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+  const thisDevice = () => (PLATFORM === 'mac' ? 'this Mac' : PLATFORM === 'win' ? 'this PC' : 'this computer');
+  const ThisDevice = () => cap(thisDevice());
+  const CLAUDE_INSTALL = { unix: 'curl -fsSL https://claude.ai/install.sh | bash', win: 'irm https://claude.ai/install.ps1 | iex' };
+  const HOST_CMD = 'Set-ExecutionPolicy -Scope Process Bypass; .\\install-host.ps1 -KeepAwake';
+  const GITHUB_URL = 'https://github.com/bayshores/openbot';
+  const TAILSCALE_URL = 'https://tailscale.com/download';
+  function osLabel(os) {
+    const o = String(os || '').toLowerCase();
+    if (o.startsWith('win')) return 'Windows';
+    if (o.includes('mac') || o === 'darwin') return 'Mac';
+    if (o === 'ios') return 'iPhone';
+    if (o.includes('android')) return 'Android';
+    if (o.includes('linux')) return 'Linux';
+    return os || 'Device';
+  }
+  function prettyHost(u) {
+    const host = hostOf(u);
+    return /\.ts\.net(:\d+)?$/i.test(host) ? host.split('.')[0].toUpperCase() : host;
+  }
+  // The name of the computer the Bots run on, as people say it.
+  function computerName() {
+    if (S.conn.mode !== 'remote') return thisDevice();
+    return ((S.prefs.remoteNames || {})[S.conn.url]) || prettyHost(S.conn.url);
+  }
+  // Does the computer the Bots use run Windows? (picks PowerShell vs Terminal wording)
+  function botComputerIsWindows() {
+    if (S.conn.mode === 'remote') return /^win/i.test((S.computer && S.computer.os) || '') || /^win-/i.test(computerName());
+    return PLATFORM === 'win';
+  }
+  const shellName = () => (botComputerIsWindows() ? 'PowerShell' : 'Terminal');
+
+  // small building blocks shared by the onboarding and setup dialogs
+  function cmdBlock(cmd) {
+    return h(
+      'div',
+      { class: 'ob-cmd' },
+      h('code', null, cmd),
+      h('button', { class: 'ghost-btn sm', 'aria-label': 'Copy command', 'data-tip': 'Copy', onclick: () => copyText(cmd, 'Copied') }, icon('copy', 14))
+    );
+  }
+  function statusLine(kind, ...text) {
+    return h('div', { class: 'ob-status ' + kind }, kind === 'wait' ? spinner('xs') : icon(kind === 'ok' ? 'check' : 'alert', 15, '', 2.2), h('span', null, ...text));
+  }
+  const extLink = (label, url) => h('button', { class: 'link-btn ob-link', onclick: () => openExternal(url) }, label, icon('external', 12));
+
+  // ── "Is Claude Code ready?" (onboarding step, banner help, send guard) ──
+  const claudeReady = () => {
+    const c = S.computer && S.computer.claude;
+    return !c || (c.installed && c.logged_in);
+  };
+  async function recheckClaude() {
+    try {
+      S.computer = await api('/api/computer?refresh=1');
+    } catch (e) {
+      if (e && e.network) noteNetworkTrouble();
+    }
+    renderSysBanner();
+    if (S.settingsUI) rerenderSettings();
+  }
+  function claudeCheckView(onChange) {
+    const box = h('div', { class: 'ob-check' });
+    let busy = false;
+    const paint = () => {
+      box.textContent = '';
+      const c = S.computer && S.computer.claude;
+      const where = computerName();
+      const again = h('button', { class: 'btn', disabled: busy, onclick: check }, busy ? 'Checking…' : 'Check again');
+      if (!c) {
+        box.append(statusLine('wait', 'Checking Claude Code…'));
+        return;
+      }
+      if (!c.installed) {
+        box.append(
+          statusLine('bad', `Claude Code isn’t installed on ${where}`),
+          h('p', { class: 'ob-p' }, `openbot uses Claude Code to do the work. Open ${shellName()} on ${where}, paste this, and press Enter:`),
+          cmdBlock(botComputerIsWindows() ? CLAUDE_INSTALL.win : CLAUDE_INSTALL.unix),
+          h('p', { class: 'ob-p' }, 'When it finishes, type ', h('code', null, 'claude'), ' and sign in with your Claude account.'),
+          h('div', { class: 'ob-row' }, again)
+        );
+      } else if (!c.logged_in) {
+        box.append(
+          statusLine('bad', `Claude isn’t signed in on ${where}`),
+          h(
+            'ol',
+            { class: 'ob-steps' },
+            h('li', null, `Open ${shellName()} on ${where}.`),
+            h('li', null, 'Type ', h('code', null, 'claude'), ' and press Enter.'),
+            h('li', null, 'Sign in with your Claude account, then come back here.')
+          ),
+          h('div', { class: 'ob-row' }, again, h('button', { class: 'link-btn', onclick: () => openSettings('usage') }, 'Or use an API key instead'))
+        );
+      } else {
+        box.append(statusLine('ok', `Connected as ${c.email || 'your Claude account'}${c.subscription ? ` (${cap(c.subscription)})` : ''}`));
+      }
+    };
+    async function check() {
+      busy = true;
+      paint();
+      await recheckClaude();
+      busy = false;
+      paint();
+      if (onChange) onChange();
+    }
+    paint();
+    return { el: box, paint, check };
+  }
+  function openClaudeHelp() {
+    const view = claudeCheckView(() => claudeReady() && setTimeout(() => close(), 900));
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Set up Claude Code' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Set up Claude Code'),
+      h('p', { class: 'dialog-body' }, `Bots use Claude Code on ${computerName()} with your Claude subscription. It takes about a minute.`),
+      view.el,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary', onclick: () => close() }, 'Done'))
+    );
+    const close = openModal(box);
+  }
+
+  // ── "Set up an always-on computer": 3-step tutorial ──
+  // opts: {step: 0|1|2, url, onDone(name), onLater(), embedded}
+  function setupWizard(opts = {}) {
+    const st = { step: opts.step || 0, ts: null, tsErr: false, tsBusy: false, disc: null, discBusy: false, sel: null, manual: !!opts.url, url: opts.url || 'https://', code: '', busy: false, err: '' };
+    const root = h('div', { class: 'wz' });
+    const STEP_NAMES = [`Tailscale on ${thisDevice()}`, 'The other computer', 'Connect'];
+    async function loadTs() {
+      st.tsBusy = true;
+      paint();
+      try {
+        st.ts = await home('/api/tailscale');
+        st.tsErr = false;
+      } catch {
+        st.tsErr = true;
+      }
+      st.tsBusy = false;
+      paint();
+    }
+    async function discover() {
+      st.discBusy = true;
+      st.err = '';
+      paint();
+      try {
+        const r = await home('/api/discover', { method: 'POST' });
+        st.disc = (r && r.found) || [];
+        if (r && r.tailscale) st.ts = r.tailscale;
+      } catch {
+        st.disc = [];
+      }
+      if (st.disc.length && !st.manual) st.sel = st.sel && st.disc.some((f) => f.url === st.sel) ? st.sel : st.disc[0].url;
+      if (!st.disc.length) st.manual = true;
+      st.discBusy = false;
+      paint();
+    }
+    async function connect() {
+      const code = st.code.replace(/\D/g, '');
+      let url = st.manual || !st.sel ? st.url.trim() : st.sel;
+      if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+      url = url.replace(/\/+$/, '');
+      st.err = '';
+      if (!/^https?:\/\/[^/]+/.test(url) || /^https?:\/\/$/.test(url)) {
+        st.err = 'Enter the address the other computer showed, like https://my-pc.tailnet.ts.net';
+        return paint();
+      }
+      if (code.length !== 6) {
+        st.err = 'Enter the 6-digit code the other computer showed.';
+        return paint();
+      }
+      st.busy = true;
+      paint();
+      try {
+        const r = await home('/api/connection/pair', { method: 'POST', body: { url, code } });
+        if (!r || !r.ok || !r.token) throw new Error((r && r.error) || 'That code didn’t work. Check it and try again.');
+        const found = (st.disc || []).find((f) => f.url === url);
+        const name = (r.computer && r.computer.hostname) || (found && (found.computer_name || found.name)) || prettyHost(url);
+        S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'remote', url, token: r.token } });
+        S.prefs.remoteNames = Object.assign({}, S.prefs.remoteNames, { [S.conn.url || url]: name });
+        await savePrefsNow();
+        S.connDraft = null;
+        S.current = null;
+        await boot();
+        toast(`Connected to ${name}`);
+        st.busy = false;
+        if (opts.onDone) opts.onDone(name);
+      } catch (e) {
+        st.busy = false;
+        st.err = e && e.network ? 'Couldn’t reach openbot on this computer. Is the openbot app still running?' : e.status === 404 ? 'Couldn’t find openbot at that address. Check it and try again.' : String(e.message || '').replace(/`/g, '');
+        paint();
+      }
+    }
+    function header() {
+      return h(
+        'ol',
+        { class: 'wz-steps', 'aria-label': 'Steps' },
+        STEP_NAMES.map((n, i) =>
+          h(
+            'li',
+            { class: 'wz-step' + (i === st.step ? ' on' : i < st.step ? ' done' : ''), 'aria-current': i === st.step ? 'step' : null },
+            h('span', { class: 'wz-num' }, i < st.step ? icon('check', 12, '', 2.6) : String(i + 1)),
+            h('span', { class: 'wz-name' }, n)
+          )
+        )
+      );
+    }
+    function stepTailscale() {
+      const t = st.ts;
+      const again = h('button', { class: 'btn', disabled: st.tsBusy, onclick: loadTs }, st.tsBusy ? 'Checking…' : 'Check again');
+      let status;
+      if (!t && (st.tsBusy || !st.tsErr)) status = [statusLine('wait', 'Checking Tailscale…')];
+      else if (st.tsErr) status = [statusLine('bad', 'Couldn’t check Tailscale on ', thisDevice(), '.'), h('div', { class: 'ob-row' }, again)];
+      else if (!t.installed) status = [statusLine('bad', `Tailscale isn’t installed on ${thisDevice()}`), h('div', { class: 'ob-row' }, h('button', { class: 'btn primary', onclick: () => openExternal(TAILSCALE_URL) }, 'Download Tailscale', icon('external', 13)), again)];
+      else if (t.needs_login || !t.running) status = [statusLine('bad', 'Tailscale is installed but not signed in'), h('p', { class: 'ob-p' }, 'Open Tailscale (in the menu bar on a Mac) and sign in. Use the same account you’ll use on the other computer.'), h('div', { class: 'ob-row' }, again)];
+      else status = [statusLine('ok', `Tailscale is on (this device: ${(t.self && t.self.name) || thisDevice()})`)];
+      return [
+        h('h3', { class: 'wz-title' }, `Turn on Tailscale on ${thisDevice()}`),
+        h('p', { class: 'ob-p' }, `Tailscale makes a private, encrypted link between your own devices, so ${thisDevice()} can reach your always-on computer from anywhere. It’s free for personal use.`),
+        ...status,
+      ];
+    }
+    function stepOther() {
+      const t = st.ts;
+      const peers = ((t && t.peers) || []).slice().sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
+      const list = peers.length
+        ? h(
+            'div',
+            { class: 'wz-card' },
+            peers.map((p) =>
+              h(
+                'div',
+                { class: 'wz-dev' },
+                h('span', { class: 'wz-os' }, icon(/ios|android/i.test(p.os || '') ? 'phone' : 'monitor', 16)),
+                h('span', { class: 'wz-dev-text' }, h('span', { class: 'wz-dev-name' }, p.name || p.dns), h('span', { class: 'wz-dev-sub' }, osLabel(p.os))),
+                h('span', { class: 'status-pill small ' + (p.online ? 'on' : 'off') }, h('i'), p.online ? 'Online' : 'Offline')
+              )
+            )
+          )
+        : h('div', { class: 'wz-card' }, h('div', { class: 'p-empty' }, t ? 'No other devices yet. They show up here once Tailscale is signed in on them.' : 'Checking your devices…'));
+      return [
+        h('h3', { class: 'wz-title' }, 'Set up the other computer'),
+        h('p', { class: 'ob-p' }, 'Use a computer that stays on, like a Windows PC at home. Do these steps on that computer:'),
+        h(
+          'ol',
+          { class: 'ob-steps big' },
+          h('li', null, 'Install Tailscale and sign in with the same account. ', extLink('Get Tailscale', TAILSCALE_URL)),
+          h('li', null, 'Install Claude Code: open PowerShell, paste this, press Enter, then type ', h('code', null, 'claude'), ' and sign in.', cmdBlock(CLAUDE_INSTALL.win)),
+          h('li', null, 'Download ', h('code', null, 'openbot-server.exe'), ' and ', h('code', null, 'install-host.ps1'), ' from the openbot GitHub page into one folder. ', extLink('Open GitHub', GITHUB_URL)),
+          h('li', null, 'Open PowerShell as Administrator in that folder and run:', cmdBlock(HOST_CMD)),
+          h('li', null, 'It shows an address and a 6-digit code. Keep them for the next step.')
+        ),
+        h('div', { class: 'wz-sub' }, h('span', null, 'Your devices on Tailscale'), h('button', { class: 'link-btn', onclick: loadTs }, st.tsBusy ? 'Checking…' : 'Refresh')),
+        list,
+      ];
+    }
+    function stepConnect() {
+      const out = [h('h3', { class: 'wz-title' }, 'Connect to it'), h('p', { class: 'ob-p' }, 'Pick your always-on computer and enter the 6-digit code it showed.')];
+      if (st.discBusy) out.push(statusLine('wait', 'Looking for your computers…'));
+      else if (st.disc && st.disc.length && !st.manual) {
+        out.push(
+          h(
+            'div',
+            { class: 'radio-list wz-found', role: 'radiogroup', 'aria-label': 'Computers running openbot' },
+            st.disc.map((f) =>
+              h(
+                'button',
+                {
+                  class: 'radio-item' + (st.sel === f.url ? ' on' : ''),
+                  role: 'radio',
+                  'aria-checked': st.sel === f.url ? 'true' : 'false',
+                  onclick: () => {
+                    st.sel = f.url;
+                    paint();
+                  },
+                },
+                h('span', { class: 'wz-os' }, icon('monitor', 16)),
+                h('span', { class: 'radio-item-name' }, [f.computer_name || f.name, osLabel(f.os), f.version ? `openbot ${f.version}` : ''].filter(Boolean).join(' · ')),
+                h('span', { class: 'radio-dot' })
+              )
+            )
+          ),
+          h('div', { class: 'ob-row' }, h('button', { class: 'link-btn', onclick: () => ((st.manual = true), paint()) }, 'Enter the address yourself'))
+        );
+      } else {
+        if (st.disc && !st.disc.length) out.push(statusLine('bad', 'Didn’t find openbot on your devices yet'), h('div', { class: 'ob-row' }, h('button', { class: 'btn', onclick: discover }, 'Search again')));
+        const urlIn = h('input', { class: 'field mono', value: st.url, placeholder: 'https://my-pc.tailnet.ts.net', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Computer address' });
+        urlIn.addEventListener('input', () => (st.url = urlIn.value));
+        out.push(h('label', { class: 'f-label' }, 'Address'), urlIn);
+        if (st.disc && st.disc.length) out.push(h('div', { class: 'ob-row' }, h('button', { class: 'link-btn', onclick: () => ((st.manual = false), paint()) }, `Pick from the ${st.disc.length} found`)));
+      }
+      const codeIn = h('input', { class: 'field wz-code', value: st.code, placeholder: '123 456', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '7', spellcheck: 'false', 'aria-label': '6-digit code' });
+      codeIn.addEventListener('input', () => {
+        const d = codeIn.value.replace(/\D/g, '').slice(0, 6);
+        codeIn.value = d.length > 3 ? d.slice(0, 3) + ' ' + d.slice(3) : d;
+        st.code = codeIn.value;
+        if (st.err) {
+          st.err = '';
+          errEl.hidden = true;
+        }
+      });
+      codeIn.addEventListener('keydown', (e) => e.key === 'Enter' && connect());
+      const errEl = h('div', { class: 'dialog-error', role: 'alert', hidden: !st.err }, st.err);
+      out.push(h('label', { class: 'f-label' }, '6-digit code'), codeIn, errEl);
+      st.codeIn = codeIn;
+      return out;
+    }
+    function paint() {
+      const ae = document.activeElement;
+      const refocus = ae && root.contains(ae) && ae.getAttribute('aria-label');
+      root.textContent = '';
+      const body = h('div', { class: 'wz-body' }, ...[stepTailscale, stepOther, stepConnect][st.step]());
+      const back = st.step > 0 || opts.onBack ? h('button', { class: 'btn', onclick: () => (st.step > 0 ? goStep(st.step - 1) : opts.onBack()) }, 'Back') : null;
+      const tsOk = st.ts && st.ts.installed && st.ts.running && !st.ts.needs_login;
+      const next =
+        st.step < 2
+          ? h('button', { class: 'btn primary', onclick: () => goStep(st.step + 1) }, st.step === 0 && !tsOk ? 'Continue anyway' : 'Next')
+          : h('button', { class: 'btn primary', disabled: st.busy || st.discBusy, onclick: connect }, st.busy ? 'Connecting…' : 'Connect');
+      root.append(
+        header(),
+        body,
+        h('div', { class: 'dialog-actions wz-foot' }, opts.onLater && h('button', { class: 'link-btn', onclick: opts.onLater }, 'Set up later'), h('span', { style: 'flex:1' }), back, next)
+      );
+      if (refocus) {
+        const el = root.querySelector(`[aria-label="${refocus}"]`);
+        if (el) el.focus();
+      }
+    }
+    function goStep(n) {
+      st.step = n;
+      st.err = '';
+      paint();
+      if (n === 2) {
+        if (!st.disc && !st.discBusy && !opts.url) discover();
+        setTimeout(() => st.codeIn && !st.discBusy && (st.manual ? root.querySelector('[aria-label="Computer address"]') || st.codeIn : st.codeIn).focus(), 30);
+      }
+      if (opts.onStep) opts.onStep(n);
+    }
+    paint();
+    loadTs();
+    if (st.step === 2) goStep(2);
+    return { el: root, goStep };
+  }
+  function openSetupWizard(opts = {}) {
+    const box = h('div', { class: 'dialog wide wz-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Set up an always-on computer' });
+    const close = openModal(box);
+    const wz = setupWizard(Object.assign({}, opts, { onDone: () => close() }));
+    box.append(
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, opts.url ? `Pair ${thisDevice()} again` : 'Set up an always-on computer'),
+      h('p', { class: 'dialog-body' }, opts.url ? 'Get a new 6-digit code on that computer: open openbot there and choose Settings › Computer › Pair a new device, or run openbot-server pair.' : 'Your Bots keep working 24/7 on a computer that stays on, and you use them from here.'),
+      wz.el
+    );
+    return close;
+  }
+
+  // ── first-run onboarding (settings-and-bots.md 4.4; avatar moods per avatars.md "Onboarding steps") ──
+  const SUGGESTIONS = ['What can you do for me?', 'Every weekday at 8am, send me a short news summary', 'Help me plan my week'];
+  function maybeOnboard() {
+    if (S.prefs.onboarded || S.onboardingOpen) return;
+    // People who already use openbot skip it.
+    const used = !S.freshPrefs || S.bots.size > 1 || S.conn.mode === 'remote';
+    if (used) {
+      S.prefs.onboarded = true;
+      savePrefs();
+      return;
+    }
+    openOnboarding();
+  }
+  function openOnboarding() {
+    if (S.onboardingOpen) return;
+    const mainBot = () => [...S.bots.values()].find((b) => b.main) || orderedBots()[0] || null;
+    const mb = mainBot();
+    const look = mb ? lookOf(mb) : { shape: 'blob', color: 'magenta' };
+    const st = { i: 0, where: S.conn.mode === 'remote' ? 'remote' : 'local', name: S.prefs.userName || '', wz: null };
+    const av = h('span', { class: 'av', style: { width: '96px', height: '96px' } });
+    av._size = 96;
+    paintAvatar(av, look, 96, { live: true, interactive: true });
+    av.addEventListener('click', () => pokeAvatar(av));
+    const art = h('div', { class: 'ob-art' }, av);
+    const body = h('div', { class: 'ob-body' });
+    const foot = h('div', { class: 'ob-foot' });
+    const dots = h('div', { class: 'ob-dots', 'aria-hidden': 'true' });
+    const skip = h('button', { class: 'link-btn ob-skip', onclick: () => finish() }, 'Skip');
+    const box = h('div', { class: 'dialog onboard', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Welcome to openbot' }, skip, art, body, foot, dots);
+    const onMove = (e) => {
+      if (!av._av || !av._av.lookAt) return;
+      const r = av.getBoundingClientRect();
+      const nx = clamp((e.clientX - (r.left + r.width / 2)) / (innerWidth / 2), -1, 1);
+      const ny = clamp((e.clientY - (r.top + r.height / 2)) / (innerHeight / 2), -1, 1);
+      try {
+        av._av.lookAt(nx, ny);
+      } catch {}
+    };
+    window.addEventListener('pointermove', onMove);
+    S.onboardingOpen = true;
+    const close = openModal(box, {
+      cls: 'onboard-overlay',
+      dismissable: false,
+      onClose: () => {
+        window.removeEventListener('pointermove', onMove);
+        S.onboardingOpen = false;
+      },
+    });
+    const steps = () => ['welcome', 'name', 'where', ...(st.where === 'remote' && S.conn.mode !== 'remote' ? ['setup'] : []), 'claude', 'done'];
+    const mood = (s) => setAvatarState(av, s, true);
+    function go(i) {
+      st.i = clamp(i, 0, steps().length - 1);
+      paint();
+    }
+    function finish(suggestion) {
+      if (st.name.trim() !== (S.prefs.userName || '')) S.prefs.userName = st.name.trim();
+      S.prefs.onboarded = true;
+      savePrefs();
+      renderMe();
+      close();
+      const b = mainBot();
+      if (b) {
+        selectBot(b.id, { focus: true });
+        if (suggestion) {
+          input.value = suggestion;
+          updateComposer();
+          input.focus();
+        }
+      }
+    }
+    const nav = (nextLabel = 'Next', nextFn = () => go(st.i + 1), extra = null) =>
+      h('div', { class: 'ob-nav' }, st.i > 0 ? h('button', { class: 'btn', onclick: () => go(st.i - 1) }, 'Back') : h('span'), extra, h('button', { class: 'btn primary', onclick: nextFn }, nextLabel));
+    function paint() {
+      const id = steps()[st.i];
+      body.textContent = '';
+      foot.textContent = '';
+      box.classList.toggle('wide', id === 'setup');
+      art.hidden = id === 'setup';
+      skip.hidden = id === 'done';
+      dots.textContent = '';
+      steps().forEach((_, j) => dots.append(h('span', { class: j === st.i ? 'on' : '' })));
+      if (id === 'welcome') {
+        mood('idle');
+        body.append(h('h1', { class: 'ob-title' }, 'openbot'), h('p', { class: 'ob-lead' }, 'Your always-on Bots that do real work on a computer, powered by your Claude subscription.'));
+        foot.append(h('button', { class: 'btn primary ob-wide', onclick: () => go(1) }, 'Get started'));
+      } else if (id === 'name') {
+        mood('waking');
+        const nameIn = h('input', { class: 'field ob-name', value: st.name, placeholder: 'Your name', maxlength: '40', 'aria-label': 'Your name', autocomplete: 'given-name' });
+        nameIn.addEventListener('input', () => (st.name = nameIn.value));
+        nameIn.addEventListener('keydown', (e) => e.key === 'Enter' && go(st.i + 1));
+        body.append(h('h1', { class: 'ob-title' }, mb ? `Hi, I’m ${mb.name}` : 'Hi there'), h('p', { class: 'ob-lead' }, 'What should your Bots call you?'), nameIn, h('div', { class: 'f-hint center' }, 'Optional. You can change it later in Settings.'));
+        foot.append(nav());
+        setTimeout(() => nameIn.focus(), 60);
+      } else if (id === 'where') {
+        mood('thinking');
+        setTimeout(() => steps()[st.i] === 'where' && mood('idle'), 1400);
+        const choice = (key, title, sub, ic) =>
+          h(
+            'button',
+            {
+              class: 'ob-choice' + (st.where === key ? ' on' : ''),
+              role: 'radio',
+              'aria-checked': st.where === key ? 'true' : 'false',
+              onclick: () => {
+                st.where = key;
+                paint();
+              },
+            },
+            h('span', { class: 'ob-choice-ic' }, icon(ic, 20)),
+            h('span', { class: 'ob-choice-text' }, h('span', { class: 'ob-choice-title' }, title), h('span', { class: 'ob-choice-sub' }, sub)),
+            h('span', { class: 'radio-dot' })
+          );
+        const remoteNow = S.conn.mode === 'remote';
+        body.append(
+          h('h1', { class: 'ob-title' }, 'Where should your Bots work?'),
+          h('p', { class: 'ob-lead' }, 'Bots use a real computer to open files, browse, and run tasks.'),
+          h(
+            'div',
+            { class: 'ob-choices', role: 'radiogroup', 'aria-label': 'Where should your Bots work?' },
+            choice('local', ThisDevice(), `Works right now. Bots pause when ${thisDevice()} sleeps or is closed.`, 'monitor'),
+            choice('remote', 'An always-on computer', remoteNow ? `Connected to ${computerName()}. Bots keep working 24/7.` : 'Like a Windows PC at home. Bots keep working 24/7, even when this one is off.', 'bolt')
+          )
+        );
+        const toLocal = async () => {
+          if (st.where === 'local' && S.conn.mode === 'remote') await useThisDevice(true);
+          go(st.i + 1);
+        };
+        foot.append(nav(st.where === 'remote' && !remoteNow ? 'Set it up' : 'Next', toLocal));
+      } else if (id === 'setup') {
+        mood('working');
+        if (!st.wz)
+          st.wz = setupWizard({
+            onBack: () => go(st.i - 1),
+            onLater: () => {
+              st.where = 'local';
+              st.wz = null;
+              go(steps().indexOf('claude'));
+            },
+            onDone: () => {
+              st.wz = null;
+              go(steps().indexOf('claude'));
+            },
+          });
+        body.append(h('h1', { class: 'ob-title small' }, 'Set up an always-on computer'), st.wz.el);
+      } else if (id === 'claude') {
+        mood('working');
+        const view = claudeCheckView(() => {
+          mood(claudeReady() ? 'happy' : 'working');
+          paintFoot();
+        });
+        body.append(h('h1', { class: 'ob-title' }, 'Connect your Claude account'), h('p', { class: 'ob-lead' }, `Bots do their work with Claude Code on ${computerName()}, using your Claude subscription.`), view.el);
+        const paintFoot = () => {
+          foot.textContent = '';
+          foot.append(nav(claudeReady() ? 'Next' : 'Continue anyway'));
+        };
+        paintFoot();
+        view.check();
+      } else if (id === 'done') {
+        mood('excited');
+        setTimeout(() => S.onboardingOpen && mood('celebrate'), 1800);
+        const b = mainBot();
+        appendKids(body, [
+          h('h1', { class: 'ob-title' }, 'You’re all set'),
+          h('p', { class: 'ob-lead' }, b ? `${b.name} is your main Bot. Say hi, or try one of these:` : 'Create your first Bot with the + button.'),
+          b && h('div', { class: 'ob-suggest' }, SUGGESTIONS.map((t) => h('button', { class: 'ob-chip', onclick: () => finish(t) }, t))),
+        ]);
+        foot.append(h('button', { class: 'btn primary ob-wide', onclick: () => finish() }, 'Start chatting'));
+      }
+    }
+    paint();
+  }
+
+  // ── connection + Claude status around the app (settings-and-bots.md 1.7.5 sidebar banners) ──
+  async function useThisDevice(quiet) {
+    try {
+      S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
+      S.connDraft = null;
+      S.current = null;
+      S.link = 'ok';
+      await boot();
+      if (!quiet) toast(`Bots now run on ${thisDevice()}`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  async function probeLink() {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 6000);
+    try {
+      const r = await fetch(S.apiBase + '/api/computer', { headers: S.apiToken ? { Authorization: 'Bearer ' + S.apiToken } : {}, signal: ctl.signal });
+      if (r.status === 401) return 'unpaired';
+      if (!r.ok) return 'unreachable';
+      try {
+        S.computer = await r.json();
+      } catch {}
+      return 'ok';
+    } catch {
+      return 'unreachable';
+    } finally {
+      clearTimeout(t);
+    }
+  }
+  function setLink(v) {
+    if (S.link === v) return;
+    S.link = v;
+    renderSysBanner();
+    if (S.settingsUI) rerenderSettings();
+  }
+  // a request failed because the computer can't be reached: show the banner instead of piling up toasts
+  let probing = false;
+  async function noteNetworkTrouble(status) {
+    if (status === 401) return setLink('unpaired');
+    if (probing || !S.booted) return;
+    probing = true;
+    const v = await probeLink();
+    probing = false;
+    if (v !== 'ok') setLink(v);
+  }
+  function retryNow() {
+    S.link = 'retrying';
+    renderSysBanner();
+    S.wsRetry = 1000;
+    probeLink().then((v) => {
+      if (v === 'ok') {
+        if (!S.wsOk) {
+          closeWS();
+          connectWS();
+        }
+        setLink('ok');
+        resync();
+      } else setLink(v);
+    });
+  }
+  function bannerModel() {
+    if (!S.booted) return null;
+    const remote = S.conn.mode === 'remote';
+    const name = computerName();
+    if (S.link === 'unpaired')
+      return {
+        kind: 'bad',
+        title: `${ThisDevice()} isn’t paired with ${name} anymore`,
+        body: 'It may have been removed from that computer’s paired devices. Pair again with a new 6-digit code.',
+        actions: [
+          ['Pair again', () => openSetupWizard({ step: 2, url: S.conn.url }), 'primary'],
+          [`Use ${thisDevice()} instead`, () => useThisDevice()],
+        ],
+      };
+    if (S.link === 'unreachable' || S.link === 'retrying')
+      return {
+        kind: 'bad',
+        title: remote ? `Can’t reach ${name}` : 'Can’t reach openbot',
+        list: remote ? [`Is ${name} turned on and awake?`, `Is Tailscale on, on ${thisDevice()} and on ${name}?`] : ['Is the openbot app still running?'],
+        note: 'Trying again automatically…',
+        actions: [
+          [S.link === 'retrying' ? 'Retrying…' : 'Retry', retryNow, 'primary', S.link === 'retrying'],
+          remote && [`Use ${thisDevice()} instead`, () => useThisDevice()],
+          remote && ['Help', () => openSetupWizard({ step: 1 })],
+        ],
+      };
+    if (S.link === 'connecting') return { kind: 'wait', title: 'Connecting to your computer…' };
+    const c = S.computer && S.computer.claude;
+    if (c && !c.installed)
+      return { kind: 'warn', title: `Claude Code isn’t installed on ${name}`, body: 'Your Bots need it to work.', actions: [['How to fix', openClaudeHelp, 'primary'], ['Check again', recheckClaude]] };
+    if (c && !c.logged_in)
+      return { kind: 'warn', title: `Claude isn’t signed in on ${name}`, body: `Open ${shellName()} there, type claude, and sign in.`, actions: [['How to fix', openClaudeHelp, 'primary'], ['Check again', recheckClaude]] };
+    return null;
+  }
+  function renderSysBanner() {
+    const el = $('#sbBanner');
+    const pill = $('#connBanner');
+    if (!el) return;
+    const m = bannerModel();
+    el.textContent = '';
+    el.hidden = !m;
+    el.className = 'sb-banner' + (m ? ' ' + m.kind : '');
+    if (m) {
+      appendKids(el, [
+        h('div', { class: 'sbb-head' }, m.kind === 'wait' ? spinner('xs') : icon('alert', 15, '', 2), h('span', { class: 'sbb-title' }, m.title)),
+        m.body && h('div', { class: 'sbb-body' }, m.body),
+        m.list && h('ul', { class: 'sbb-list' }, m.list.map((t) => h('li', null, t))),
+        m.actions && h('div', { class: 'sbb-actions' }, m.actions.filter(Boolean).map(([l, fn, cls, dis]) => h('button', { class: 'btn small ' + (cls || ''), disabled: !!dis, onclick: fn }, l))),
+        m.note && h('div', { class: 'sbb-note' }, m.note),
+      ]);
+    }
+    // compact pill at the top of the chat when the sidebar is narrow or hidden
+    const narrow = app.classList.contains('rail') || innerWidth <= 520;
+    if (m && m.kind === 'bad') {
+      clearTimeout(S.bannerTimer);
+      pill.textContent = '';
+      pill.append(icon('alert', 13, '', 2), h('span', null, m.title));
+      if (narrow) pill.append(h('button', { class: 'pill-retry', onclick: retryNow }, 'Retry'));
+      pill.classList.add('bad');
+      pill.hidden = !narrow;
+    } else if (pill.classList.contains('bad')) {
+      pill.classList.remove('bad');
+      pill.hidden = true;
+    }
   }
 
   // ───────────────────────────── global wiring ─────────────────────────────

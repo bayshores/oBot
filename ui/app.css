@@ -1760,6 +1760,114 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .rt-foot { align-items: center; }
 .circle-btn.danger { color: var(--danger-text); }
 
+/* ───────────── 10c. onboarding · always-on computer setup · connection banners ───────────── */
+.sb-banner { margin: 0 12px 10px; padding: 12px 12px 12px 14px; border-radius: 14px; background: var(--elevated); box-shadow: var(--pop-ring), 0 2px 8px -1px #0000000d; font-size: 13px; line-height: 18px; color: var(--text-2); flex: none; animation: rise .2s ease-out; }
+.sb-banner[hidden] { display: none; }
+.app.rail .sb-banner { display: none; }
+.sbb-head { display: flex; align-items: flex-start; gap: 8px; color: var(--text); }
+.sbb-head .ico, .sbb-head .spinner { flex: none; margin-top: 2px; }
+.sb-banner.bad .sbb-head .ico { color: var(--danger-text); }
+.sb-banner.warn .sbb-head .ico { color: var(--warn-text); }
+.sbb-title { font-weight: var(--w-medium); overflow-wrap: anywhere; }
+.sbb-body { margin: 4px 0 0 23px; }
+.sbb-list { margin: 6px 0 0 23px; padding-left: 1.1em; }
+.sbb-list li { margin: 2px 0; }
+.sbb-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0 23px; }
+.sbb-note { margin: 8px 0 0 23px; font-size: 12px; color: var(--text-3); }
+.conn-banner.bad { color: var(--text); gap: 8px; padding-right: 6px; }
+.conn-banner.bad > .ico { color: var(--danger-text); }
+.pill-retry { height: 20px; padding: 0 8px; border-radius: 9999px; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b2); font-size: 12px; color: var(--text); }
+.screen-sub.tight { margin-bottom: 8px; }
+.screen-list { margin: 0 0 20px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 20px; color: var(--text-2); text-align: left; }
+.screen-list li { display: flex; gap: 8px; }
+.screen-list li::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); margin-top: 7px; flex: none; }
+.screen-note { margin-top: 14px; font-size: 12px; color: var(--text-3); min-height: 16px; }
+.status-pill.small { font-size: 12px; gap: 6px; }
+.status-pill.small i { width: 7px; height: 7px; }
+.status-pill.off i { background: var(--text-4); }
+.comp-name { display: inline-flex; align-items: center; gap: 8px; }
+.comp-name .ico { color: var(--icon-2); }
+
+/* onboarding (settings-and-bots.md 4.4) */
+.overlay.onboard-overlay { background: var(--chrome); }
+.dialog.onboard { width: min(500px, 100%); padding: 40px 36px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; background: var(--pane); transition: width .2s var(--ease); }
+.dialog.onboard.wide { width: min(640px, 100%); text-align: left; align-items: stretch; padding-top: 32px; }
+.ob-skip { position: absolute; top: 18px; right: 20px; text-decoration: none; font-size: 13px; }
+.ob-art { margin-bottom: 18px; }
+.ob-art .av { width: 96px; height: 96px; cursor: pointer; }
+.ob-body { width: 100%; display: flex; flex-direction: column; align-items: center; }
+.dialog.onboard.wide .ob-body { align-items: stretch; }
+.ob-title { margin: 0 0 8px; font-size: 24px; line-height: 30px; font-weight: var(--w-medium); letter-spacing: -.2px; }
+.ob-title.small { font-size: 19px; line-height: 26px; margin-bottom: 14px; }
+.ob-lead { margin: 0 0 20px; font-size: 15px; line-height: 22px; color: var(--text-2); max-width: 380px; }
+.ob-name { max-width: 320px; text-align: center; height: 44px; font-size: 16px; }
+.f-hint.center { text-align: center; margin-top: 8px; }
+.ob-foot { width: 100%; margin-top: 26px; display: flex; justify-content: center; }
+.ob-wide { min-width: 200px; height: 40px; border-radius: 12px; font-size: 15px; }
+.ob-nav { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ob-dots { display: flex; gap: 6px; margin-top: 22px; }
+.ob-dots span { width: 6px; height: 6px; border-radius: 50%; background: var(--b1); transition: background-color .2s, width .2s; }
+.ob-dots span.on { width: 18px; border-radius: 3px; background: var(--text-2); }
+.dialog.onboard.wide .ob-dots { align-self: center; }
+.ob-choices { width: 100%; display: flex; flex-direction: column; gap: 8px; text-align: left; }
+.ob-choice { text-align: left; display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 16px; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b2); transition: box-shadow .15s, background-color .15s; }
+.ob-choice:hover { background: var(--hover); }
+.ob-choice.on { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.ob-choice-ic { width: 40px; height: 40px; border-radius: 12px; display: inline-flex; align-items: center; justify-content: center; background: var(--elevated); box-shadow: inset 0 0 0 .5px var(--b2); color: var(--icon); flex: none; }
+.ob-choice-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ob-choice-title { font-size: 15px; line-height: 20px; color: var(--text); font-weight: var(--w-medium); }
+.ob-choice-sub { font-size: 13px; line-height: 18px; color: var(--text-2); }
+.ob-choice.on .radio-dot { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--secondary), inset 0 0 0 10px var(--accent); }
+.dialog .dialog-body + .ob-check { margin-top: 14px; }
+.ob-check { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 10px; }
+.ob-status { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b3); font-size: 14px; line-height: 20px; color: var(--text); text-align: left; }
+.ob-status .ico, .ob-status .spinner { flex: none; margin-top: 2px; }
+.ob-status.ok .ico { color: var(--success-text); }
+.ob-status.bad .ico { color: var(--warn-text); }
+.ob-status.wait { color: var(--text-2); }
+.ob-p { margin: 0; font-size: 14px; line-height: 20px; color: var(--text-2); text-align: left; }
+.ob-p code, .ob-steps code { background: var(--inline-code); padding: .1em .38em; border-radius: 6px; font-size: .9em; }
+.ob-steps { margin: 0; padding-left: 1.3em; font-size: 14px; line-height: 21px; color: var(--text-2); text-align: left; }
+.ob-steps li { margin: 3px 0; }
+.ob-steps.big li { margin: 0 0 12px; padding-left: 2px; }
+.ob-steps.big li::marker { color: var(--text-3); }
+.ob-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.ob-row .btn { display: inline-flex; align-items: center; gap: 6px; }
+.ob-link { display: inline-flex; align-items: center; gap: 3px; vertical-align: baseline; }
+.ob-cmd { display: flex; align-items: center; gap: 6px; margin-top: 8px; padding: 6px 6px 6px 12px; border-radius: 10px; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b2); }
+.ob-cmd code { flex: 1; min-width: 0; font: 12.5px/18px var(--mono); color: var(--text); overflow-wrap: anywhere; white-space: pre-wrap; }
+.ob-suggest { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 380px; }
+.ob-chip { padding: 10px 14px; border-radius: 14px; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b2); font-size: 14px; line-height: 20px; color: var(--text); text-align: left; transition: background-color .12s; }
+.ob-chip:hover { background: var(--hover); }
+
+/* setup wizard */
+.wz-dialog .dialog-body { margin-bottom: 16px; }
+.wz-steps { display: flex; gap: 6px; margin: 0 0 18px; padding: 0; list-style: none; }
+.wz-step { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: var(--secondary); font-size: 12.5px; line-height: 16px; color: var(--text-3); }
+.wz-step.on { color: var(--text); box-shadow: inset 0 0 0 1px var(--b1); }
+.wz-step.done { color: var(--text-2); }
+.wz-num { width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; flex: none; font-size: 11px; font-weight: 600; background: var(--elevated); box-shadow: inset 0 0 0 .5px var(--b2); }
+.wz-step.on .wz-num { background: var(--primary); color: var(--inverted); box-shadow: none; }
+.wz-step.done .wz-num { background: var(--success); color: #fff; box-shadow: none; }
+.wz-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wz-body { display: flex; flex-direction: column; gap: 12px; min-height: 180px; }
+.wz-title { margin: 0; font-size: 16px; line-height: 22px; font-weight: var(--w-medium); }
+.wz-sub { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.wz-card { border-radius: 14px; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b3); overflow: hidden; }
+.wz-dev { display: flex; align-items: center; gap: 10px; padding: 9px 12px; min-height: 44px; }
+.wz-dev + .wz-dev { box-shadow: inset 0 .5px 0 var(--b3); }
+.wz-os { width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: var(--elevated); box-shadow: inset 0 0 0 .5px var(--b2); color: var(--icon-2); flex: none; }
+.wz-dev-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wz-dev-name { font-size: 13.5px; line-height: 18px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wz-dev-sub { font-size: 12px; line-height: 16px; color: var(--text-3); }
+.wz-found { margin-top: 0; }
+.wz-found .radio-item { box-shadow: inset 0 0 0 .5px var(--b2); background: var(--secondary); }
+.wz-found .radio-item.on { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.wz-code { max-width: 200px; height: 46px; font: 500 22px/1 var(--mono); letter-spacing: 4px; text-align: center; }
+.wz-body .f-label { margin: 6px 2px 0; }
+.wz-foot { align-items: center; margin-top: 22px; }
+.dialog.onboard .wz { text-align: left; }
+
 /* ───────────── 11. small windows ───────────── */
 @media (max-width: 520px) {
   .app, .app.rail { grid-template-columns: 0 minmax(0, 1fr) 0; }
@@ -1789,6 +1897,11 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
   .set-row { flex-wrap: wrap; }
   .set-row-ctl { max-width: 100%; }
   .set-row-ctl.mem { width: 100%; align-items: stretch; }
+  .dialog.onboard { padding: 36px 20px 22px; }
+  .wz-name { display: none; }
+  .wz-step { flex: none; }
+  .wz-step.on .wz-name { display: inline; }
+  .wz-step.on { flex: 1; }
 }
 @media (min-width: 521px) { .scrim { display: none; } }
 
