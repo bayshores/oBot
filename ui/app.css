@@ -1351,11 +1351,11 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .f-label.inline { margin: 0; }
 .f-hint { font-size: 12px; line-height: 16px; color: var(--text-3); margin: 6px 2px 0; }
 .f-inline { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
-.shape-grid { display: grid; grid-template-columns: repeat(5, 48px); gap: 8px 10px; justify-content: center; }
+.shape-grid { display: grid; grid-template-columns: repeat(6, 44px); gap: 6px 8px; justify-content: center; }
 .shape-cell {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
   display: inline-flex;
   align-items: center;
   justify-content: center;

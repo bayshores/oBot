@@ -186,53 +186,16 @@
 
   // ───────────────────────────── avatars (avatar.js) ─────────────────────────────
   const OB = () => (window.OBAvatar && typeof window.OBAvatar.svg === 'function' ? window.OBAvatar : null);
-  const COLOR_IDS = ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'];
-  const COLOR_LABELS = { black: 'Black', brown: 'Brown', red: 'Red', orange: 'Orange', yellow: 'Yellow', green: 'Green', cyan: 'Cyan', blue: 'Blue', violet: 'Violet', magenta: 'Magenta', gray: 'Gray' };
-  // body ink per colour (dark / light), used for swatches and the fallback disc
-  const COLOR_INK = {
-    black: ['#ffffff', '#000000'], brown: ['#a16b39', '#a06b39'], red: ['#fc2c3e', '#fb2b3e'], orange: ['#f9670e', '#fd690f'],
-    yellow: ['#f69412', '#f59312'], green: ['#14c370', '#14c16f'], cyan: ['#13b8a3', '#13b7a2'], blue: ['#1884fc', '#1e86fc'],
-    violet: ['#905afb', '#8f59f9'], magenta: ['#fb3499', '#f93498'], gray: ['#777777', '#959595'],
-  };
-  // colours stored by the previous UI build (hex) → colour ids
-  const LEGACY_HEX = { '#e0458f': 'magenta', '#f0a033': 'orange', '#3a7bff': 'blue', '#e5484d': 'red', '#30a46c': 'green', '#8e4ec6': 'violet', '#12a594': 'cyan', '#f5d90a': 'yellow' };
-  const LEGACY_SHAPE = { drop: 'teardrop' };
-  const FALLBACK_SHAPES = ['blob', 'cloud', 'square', 'sparkle', 'clover', 'heart', 'flower', 'teardrop', 'tablet', 'wedge', 'house', 'star', 'hex'];
-  function hexToRgb(hex) {
-    const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
-    if (!m) return null;
-    const n = parseInt(m[1], 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
-  function colorIdOf(c) {
-    if (!c) return null;
-    const v = String(c).toLowerCase().trim();
-    if (COLOR_IDS.includes(v)) return v;
-    if (v === 'purple') return 'violet';
-    if (LEGACY_HEX[v]) return LEGACY_HEX[v];
-    const rgb = hexToRgb(v);
-    if (!rgb) return null;
-    let best = null;
-    let bestD = Infinity;
-    for (const id of COLOR_IDS) {
-      if (id === 'black') continue;
-      const [r, g, b] = hexToRgb(COLOR_INK[id][0]);
-      const d = (r - rgb[0]) ** 2 + (g - rgb[1]) ** 2 + (b - rgb[2]) ** 2;
-      if (d < bestD) {
-        bestD = d;
-        best = id;
-      }
-    }
-    return best;
-  }
+  // A bot's look is { shape: 'ball', color: <skin id> } (skins: violet, zebra, galaxy, ...).
+  const FALLBACK_SKINS = ['violet', 'coral', 'amber', 'lime', 'mint', 'sky', 'cobalt', 'rose'];
+  const FALLBACK_INK = { violet: '#8b5cf6', coral: '#ff6b57', amber: '#f5a524', lime: '#8fd14f', mint: '#2ec4a6', sky: '#38bdf8', cobalt: '#4f6bff', rose: '#f05c9c' };
   function hashDefaults(id) {
     let h0 = 2166136261;
     for (const ch of String(id || '')) {
       h0 ^= ch.charCodeAt(0);
       h0 = Math.imul(h0, 16777619);
     }
-    h0 >>>= 0;
-    return { shape: FALLBACK_SHAPES[h0 % 8], color: COLOR_IDS[1 + (h0 % 10)] };
+    return { shape: 'ball', color: FALLBACK_SKINS[(h0 >>> 0) % FALLBACK_SKINS.length] };
   }
   function defaultsFor(id) {
     const A = OB();
@@ -241,30 +204,26 @@
     } catch {}
     return hashDefaults(id);
   }
-  const shapeList = () => (OB() && OB().SHAPES) || FALLBACK_SHAPES;
-  const pickerShapes = () => (OB() && OB().PICKER_SHAPES) || FALLBACK_SHAPES;
-  const colorList = () => {
+  // [{ id, label, kind: 'solid' | 'pattern' }]
+  const skinList = () => {
     const A = OB();
-    if (A && Array.isArray(A.COLORS)) return A.COLORS.map((c) => (typeof c === 'string' ? c : c.id));
-    return COLOR_IDS;
+    if (A && Array.isArray(A.COLORS)) return A.COLORS;
+    return FALLBACK_SKINS.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1), kind: 'solid' }));
   };
   function lookOf(bot) {
     bot = bot || {};
-    const d = defaultsFor(bot.id);
-    let shape = bot.shape ? LEGACY_SHAPE[bot.shape] || bot.shape : '';
-    if (!shape || !shapeList().includes(shape)) shape = d.shape;
-    const color = colorIdOf(bot.color) || d.color;
-    return { shape, color };
+    const A = OB();
+    if (bot.color && A && A.isSkin && A.isSkin(bot.color)) return A.normalize({ color: bot.color });
+    return defaultsFor(bot.id);
   }
   // openbot is always dark (there is no light mode), so avatars are always painted for a dark background.
   const themeName = () => 'dark';
   const inkOf = (color) => {
     const A = OB();
     try {
-      if (A && A.ink) return A.ink(color, themeName());
+      if (A && A.ink) return A.ink(color);
     } catch {}
-    const c = COLOR_INK[color] || COLOR_INK.gray;
-    return c[0];
+    return FALLBACK_INK[color] || '#8a94a6';
   };
 
   // Activity kind (bot.activity.kind) → avatar animation state
@@ -361,7 +320,15 @@
     magenta: ['#e52f8b', '#c82779', '#c62378', '#cf297e', '#fb3499', '#ff55a4'],
     brown: ['#9d6937', '#86592e', '#996b42', '#8c5d31', '#a16b39', '#c59e7d'],
   };
-  const hueOf = (colorId) => (!colorId || colorId === 'black' || colorId === 'gray' ? null : colorId === 'violet' ? 'purple' : HUES[colorId] ? colorId : null);
+  const hueOf = (colorId) => {
+    if (!colorId) return null;
+    if (HUES[colorId]) return colorId;
+    const A = OB();
+    try {
+      if (A && A.hue) return A.hue(colorId);
+    } catch {}
+    return null;
+  };
   function hueText(colorId) {
     const hu = HUES[hueOf(colorId)];
     if (!hu) return 'var(--text-2)';
@@ -371,7 +338,7 @@
     const pref = S.prefs.accent || 'bot';
     let colorId = null;
     if (pref === 'bot') colorId = curBot() ? lookOf(curBot()).color : null;
-    else if (pref !== 'none') colorId = colorIdOf(pref);
+    else if (pref !== 'none') colorId = pref;
     const hu = HUES[hueOf(colorId)];
     const st = document.documentElement.style;
     const props = ['--tint-bubble', '--tint-bubble-text', '--tint-cta', '--tint-cta-hover', '--tint-cta-text'];
@@ -396,32 +363,32 @@
   const TEMPLATES = [
     {
       name: 'General Bot',
-      color: 'magenta',
-      shape: 'blob',
+      color: 'violet',
+      shape: 'ball',
       blurb: 'Everyday help: questions, writing, and small tasks on the computer.',
       instructions:
         'You are a friendly, capable general assistant. Keep replies short and clear. When asked to do something on this computer, do it and report back briefly.',
     },
     {
       name: 'Research Assistant',
-      color: 'blue',
-      shape: 'sparkle',
+      color: 'galaxy',
+      shape: 'ball',
       blurb: 'Digs through the web and answers with a summary and sources.',
       instructions:
         'You research topics thoroughly on the web, compare several sources, and answer with a short summary followed by the links you used.',
     },
     {
       name: 'Coding Helper',
-      color: 'green',
-      shape: 'square',
+      color: 'zebra',
+      shape: 'ball',
       blurb: 'Writes, fixes, and explains code in its folder.',
       instructions:
         'You are a careful senior software engineer. Explain changes in plain language, run tests when possible, and never delete work without asking first.',
     },
     {
       name: 'Daily Planner',
-      color: 'orange',
-      shape: 'flower',
+      color: 'sunset',
+      shape: 'ball',
       blurb: 'Turns messy to-dos into a clear plan for your day or week.',
       instructions:
         'You help plan days and weeks. Turn messy notes into prioritized task lists and short schedules. Be encouraging and concise.',
@@ -789,7 +756,7 @@
       h(
         'div',
         { class: 'screen-card' },
-        h('div', { class: 'screen-art' }, avatar({ id: 'openbot', shape: 'blob', color: 'magenta' }, 72, { live: true })),
+        h('div', { class: 'screen-art' }, avatar({ id: 'openbot', shape: 'ball', color: 'violet' }, 72, { live: true })),
         h('h1', { class: 'screen-title' }, 'Welcome to openbot'),
         h(
           'p',
@@ -853,7 +820,7 @@
       h(
         'div',
         { class: 'screen-card' },
-        h('div', { class: 'screen-art' }, avatar({ id: 'offline', shape: 'teardrop', color: 'gray' }, 72, { live: true, state: 'sleeping' })),
+        h('div', { class: 'screen-art' }, avatar({ id: 'offline', shape: 'ball', color: 'slate' }, 72, { live: true, state: 'sleeping' })),
         h('h1', { class: 'screen-title' }, title),
         h('p', { class: 'screen-sub' + (list ? ' tight' : '') }, sub),
         list,
@@ -2048,7 +2015,7 @@
     return h(
       'div',
       { class: 'empty-chat' },
-      avatar({ id: 'new', shape: 'blob', color: 'magenta' }, 72, { live: true }),
+      avatar({ id: 'new', shape: 'ball', color: 'violet' }, 72, { live: true }),
       h('div', { class: 'empty-name' }, 'Create your first Bot'),
       h('div', { class: 'empty-sub' }, 'Bots are Claude-powered helpers that work on your computer. Each one gets its own folder and remembers your chat.'),
       h('div', { class: 'empty-actions' }, h('button', { class: 'btn primary', onclick: () => openNewBot() }, icon('plus', 15, '', 2), 'New Bot'), h('button', { class: 'btn', onclick: () => openTemplates() }, 'Browse templates'))
@@ -3558,51 +3525,34 @@
     }
   }
 
-  // ───────────────────────────── avatar picker (shape grid + colour swatches) ─────────────────────────────
-  // st = {shape, color}; onChange(next) is called on every pick
+  // ───────────────────────────── avatar picker (skin grids) ─────────────────────────────
+  // st = {shape, color}; onChange(next) is called on every pick. grid = solid colours, sw = patterns.
   function avatarPicker(st, onChange) {
-    const grid = h('div', { class: 'shape-grid', role: 'radiogroup', 'aria-label': 'Character shape' });
-    const sw = h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Character color' });
+    const grid = h('div', { class: 'shape-grid', role: 'radiogroup', 'aria-label': 'Character color' });
+    const sw = h('div', { class: 'shape-grid', role: 'radiogroup', 'aria-label': 'Character pattern' });
     function paint() {
       grid.textContent = '';
-      const shapes = pickerShapes().slice();
-      if (st.shape && !shapes.includes(st.shape)) shapes.push(st.shape);
-      for (const s of shapes) {
+      sw.textContent = '';
+      for (const skin of skinList()) {
+        const on = st.color === skin.id;
         const cell = h(
           'button',
           {
-            class: 'shape-cell' + (st.shape === s ? ' on' : ''),
+            class: 'shape-cell' + (on ? ' on' : ''),
             role: 'radio',
-            'aria-checked': st.shape === s ? 'true' : 'false',
-            'aria-label': `${s} character shape`,
-            'data-tip': s[0].toUpperCase() + s.slice(1),
+            'aria-checked': on ? 'true' : 'false',
+            'aria-label': skin.label,
+            'data-tip': skin.label,
             onclick: () => {
-              st.shape = s;
+              st.shape = 'ball';
+              st.color = skin.id;
               paint();
               onChange(Object.assign({}, st));
             },
           },
-          avatar({ shape: s, color: st.color }, 36)
+          avatar({ shape: 'ball', color: skin.id }, 36)
         );
-        grid.append(cell);
-      }
-      sw.textContent = '';
-      for (const c of colorList()) {
-        sw.append(
-          h('button', {
-            class: 'swatch' + (st.color === c ? ' on' : ''),
-            role: 'radio',
-            'aria-checked': st.color === c ? 'true' : 'false',
-            'aria-label': COLOR_LABELS[c] || c,
-            'data-tip': COLOR_LABELS[c] || c,
-            style: { '--sw': inkOf(c) },
-            onclick: () => {
-              st.color = c;
-              paint();
-              onChange(Object.assign({}, st));
-            },
-          })
-        );
+        (skin.kind === 'pattern' ? sw : grid).append(cell);
       }
     }
     paint();
@@ -3647,9 +3597,9 @@
       h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
       h('h2', { class: 'dialog-title' }, b.name),
       h('div', { class: 'ne-preview' }, prev),
-      h('label', { class: 'f-label' }, 'Character shape'),
+      h('label', { class: 'f-label' }, 'Color'),
       picker.grid,
-      h('label', { class: 'f-label' }, 'Character color'),
+      h('label', { class: 'f-label' }, 'Pattern'),
       picker.sw,
       h('div', { class: 'dialog-actions', style: 'justify-content:space-between;align-items:center' }, resetLink, h('span', { style: 'flex:1' }), h('button', { class: 'btn primary', onclick: () => close() }, 'Done'))
     );
@@ -3660,7 +3610,7 @@
   function openNewBot(preset) {
     const d = defaultsFor('new-' + Math.random());
     const used = new Set([...S.bots.values()].map((b) => lookOf(b).color));
-    const freeColor = colorList().filter((c) => c !== 'black' && c !== 'gray').find((c) => !used.has(c));
+    const freeColor = skinList().filter((k) => k.kind === 'solid' && k.id !== 'ink' && k.id !== 'snow').map((k) => k.id).find((c) => !used.has(c));
     const st = {
       shape: preset ? preset.shape : d.shape,
       color: preset ? preset.color : used.has(d.color) && freeColor ? freeColor : d.color,
@@ -3716,9 +3666,9 @@
       h('h2', { class: 'dialog-title' }, 'Create New Bot'),
       h('div', { class: 'ne-preview' }, prev),
       nameIn,
-      h('label', { class: 'f-label' }, 'Character shape'),
+      h('label', { class: 'f-label' }, 'Color'),
       picker.grid,
-      h('label', { class: 'f-label' }, 'Character color'),
+      h('label', { class: 'f-label' }, 'Pattern'),
       picker.sw,
       err,
       h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => !busy && close() }, 'Cancel'), createBtn)
@@ -5790,7 +5740,7 @@
     if (S.onboardingOpen) return;
     const mainBot = () => [...S.bots.values()].find((b) => b.main) || orderedBots()[0] || null;
     const mb = mainBot();
-    const look = mb ? lookOf(mb) : { shape: 'blob', color: 'magenta' };
+    const look = mb ? lookOf(mb) : { shape: 'ball', color: 'violet' };
     const st = { i: 0, where: S.conn.mode === 'remote' ? 'remote' : 'local', name: S.prefs.userName || '', wz: null };
     const av = h('span', { class: 'av', style: { width: '96px', height: '96px' } });
     av._size = 96;
