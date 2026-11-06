@@ -1921,3 +1921,61 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 /* Memory groups in the Bot panel ("Always remembered" / "Notes") */
 .p-group { font-size: 11px; line-height: 16px; color: var(--text-3); margin: 10px 10px 2px; }
 .p-group:first-child { margin-top: 4px; }
+
+/* Vault: logins, contact info, secrets (Settings › Vault) */
+.vault-new { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+.vault-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 14px; }
+.vault-tabs .vault-count { margin-left: 6px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.vault-search { flex: 1 1 180px; min-width: 160px; height: 34px; }
+.vault-list { display: flex; flex-direction: column; }
+.vault-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 14px 10px 18px; text-align: left; color: var(--text); transition: background-color .12s; }
+.vault-row:hover { background: var(--secondary); }
+.vault-row > svg { color: var(--icon-2); flex: none; }
+.vault-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vault-row-title { font-size: 14px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-row-sub { font-size: 12px; line-height: 16px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-row mark, .vault-row-title mark { background: var(--secondary); color: var(--text); border-radius: 3px; box-shadow: 0 0 0 1px var(--b2); }
+.vault-more { color: var(--text-3); font-size: 12px; }
+.vault-tile { width: 32px; height: 32px; flex: none; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b2); font-size: 14px; font-weight: var(--w-medium); color: var(--text-2); }
+.vault-tile.icon { color: var(--icon-2); }
+.vault-sub-head { display: flex; justify-content: flex-end; margin: 0 4px 10px; }
+.vault-dlg { width: min(480px, 100%); }
+.vault-dlg.wide { width: min(600px, 100%); }
+.vault-dlg-head { display: flex; align-items: center; gap: 12px; margin: 0 40px 14px 0; }
+.vault-dlg-head .dialog-title { margin: 0; overflow-wrap: anywhere; }
+.vault-field { padding: 10px 0; border-top: .5px solid var(--b3); display: grid; grid-template-columns: 96px 1fr; gap: 12px; font-size: 14px; line-height: 20px; }
+.vault-field-label { color: var(--text-3); font-size: 13px; }
+.vault-field-value { min-width: 0; overflow-wrap: anywhere; display: flex; flex-direction: column; gap: 4px; }
+.vault-site { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vault-site .icon-btn { width: 26px; height: 26px; }
+.vault-dots { letter-spacing: 2px; color: var(--text-2); }
+.vault-site-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.vault-site-row .field { flex: 1; }
+.vault-add { display: inline-flex; align-items: center; gap: 4px; margin-top: 8px; padding: 0 2px; height: 26px; font-size: 13px; color: var(--text-2); }
+.vault-add:hover { color: var(--text); }
+.vault-hints { min-height: 64px; resize: vertical; padding-top: 8px; }
+.vault-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.vault-note { margin-top: 14px; }
+.vault-warn { margin-top: 10px; color: var(--text); }
+.vault-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0; }
+.vault-import-list { max-height: 320px; overflow-y: auto; border-radius: 14px; background: var(--card-2); box-shadow: inset 0 0 0 .5px var(--b3); }
+.vault-import-row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+.vault-import-row + .vault-import-row { border-top: .5px solid var(--b3); }
+.vault-import-row.dim .vault-row-text { opacity: .6; }
+.dialog-actions.split { align-items: center; }
+.dialog-actions .grow { flex: 1; }
+@media (max-width: 520px) { .vault-pair { grid-template-columns: 1fr; gap: 0; } .vault-field { grid-template-columns: 1fr; gap: 2px; } }
+
+/* Secure form card in a chat (secure_form.rs) */
+.sform-title { display: flex; align-items: center; gap: 8px; }
+.sform-title svg { color: var(--icon-2); flex: none; }
+.card.widget.sform .card-sub { padding: 0 6px 6px; font-size: 13px; line-height: 19px; color: var(--text-2); }
+.sform-site { display: flex; align-items: center; gap: 6px; }
+.sform-site svg { flex: none; color: var(--icon-2); }
+.sform-fields { padding: 0 6px; }
+.sform-fields .f-label:first-child { margin-top: 6px; }
+.sform-save { display: flex; align-items: center; gap: 8px; padding: 12px 8px 0; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.card.widget.sform .f-err { padding: 0 6px; }
+.sform-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 6px 4px; }
+.btn.link { background: none; box-shadow: none; height: 28px; padding: 0 6px; font-size: 13px; color: var(--text-2); }
+.btn.link:hover:not(:disabled) { background: var(--secondary); color: var(--text); }

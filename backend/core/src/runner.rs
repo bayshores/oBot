@@ -255,7 +255,8 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "Bash" | "PowerShell" | "BashOutput" | "KillShell" => ("running_commands", "Running commands".into()),
         "Task" | "Agent" => ("working", "Working with a helper".into()),
         "TodoWrite" => ("thinking", "Planning".into()),
-        "mcp__openbot__ask_user" | "mcp__openbot__request_control" => ("waiting_for_you", "Waiting for you".into()),
+        "mcp__openbot__ask_user" | "mcp__openbot__request_control" | "mcp__openbot__request_form" => ("waiting_for_you", "Waiting for you".into()),
+        "mcp__openbot__fill_login" => ("on_its_computer", "Signing in".into()),
         n if n.starts_with("mcp__openbot__computer_") => ("on_its_computer", "On its computer".into()),
         "mcp__openbot__show_page" => ("working", "Making a page".into()),
         "mcp__openbot__send_file" => ("working", "Sending a file".into()),
@@ -549,8 +550,9 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
              browser (clicking through pages, filling forms, logged-in sites): computer_open (open a URL), \
              computer_screenshot, computer_click, computer_type, computer_key, computer_scroll, computer_move, \
              computer_drag and computer_wait. Every action returns a fresh screenshot; look at it before the next \
-             step. Never type passwords, 2FA codes or payment details yourself: call request_control, say what you \
-             need, and end your turn. Do the same for CAPTCHAs or when you're stuck. Before anything that can't \
+             step. Never type passwords or 2FA codes yourself: sign in with fill_login or request_form (see Vault \
+             below). For payments or a CAPTCHA, or when you're stuck, call request_control, say what you need, and end \
+             your turn. Before anything that can't \
              be undone or that speaks for the user (buying or paying, deleting data or accounts, sending messages \
              or posts to other people, accepting terms, changing account or security settings), ask the user with \
              ask_user first, unless they clearly asked for exactly that action.\n",
@@ -604,6 +606,9 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
         }
     }
     s.push_str(&crate::accounts::persona(cfg, &bot.id));
+    if crate::screen::platform_ok().is_ok() {
+        s.push_str(&crate::logins::persona(cfg, &bot.id));
+    }
     let secrets = crate::vault::for_bot(cfg, &bot.id);
     if !secrets.is_empty() {
         s.push_str("\nSecrets the user saved for you (available as environment variables in your shell; never print their values):\n");

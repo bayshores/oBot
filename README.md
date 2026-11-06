@@ -167,11 +167,28 @@ Data lives in `%APPDATA%\openbot` (bots, chats, settings). Bot folders are in `%
 
 ## Vault (Settings › Vault)
 
-Secrets (API keys, tokens) your Bots can use in commands as environment variables, like `$GITHUB_TOKEN`.
+Three kinds of items, under **New item**:
 
-* **Only the Bots you pick.** Each secret goes to **All Bots** or only the Bots you choose. Other Bots
+* **Logins** (website, username, password, hints). Your Bots sign in with them on their screen: openbot
+  types the username and password into the login page, and the Bot never sees the password. A login only
+  fills on `https://` pages of its websites and their subdomains (up to 10 websites), so a fake login
+  page on another website gets nothing. Passwords can't be shown again, not even in the app; leave the
+  box empty when editing to keep the saved one.
+* **Contact info** (name, address, phones, emails). Bots can see it, so they can fill in forms for you.
+* **Secrets** (API keys, tokens) your Bots can use in commands as environment variables, like
+  `$GITHUB_TOKEN`.
+
+When a Bot needs a password or a 2FA code that isn't saved, it shows a **secure form** in the chat.
+What you type there goes straight into the page on the Bot's screen; it isn't shown to the Bot or kept
+in the chat. Tick **Securely save to the Vault** to keep a password as a login. **Import** adds logins
+from a CSV export of 1Password, Chrome, Edge, Safari / Apple Passwords, Firefox, Bitwarden or LastPass
+(the same website and username already in the Vault is skipped). Delete the export file afterwards.
+
+For secrets:
+
+* **Only the Bots you pick.** Each secret, login or contact info goes to **All Bots** or only the Bots you choose. Other Bots
   don't get it and aren't told it exists.
-* **Saved encrypted.** Values (and the Anthropic API key) are encrypted in `config.json` with a key the
+* **Saved encrypted.** Secret values and login passwords (and the Anthropic API key) are encrypted in `config.json` with a key the
   system keeps: Windows DPAPI on Windows, the Keychain on a Mac, a file only your account can read on
   Linux (`vault.key` in the data folder). A copy of the files taken to another computer can't be read.
   Bots run as your user account, so a Bot that tried hard could still decrypt them; picking which Bots

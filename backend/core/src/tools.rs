@@ -191,10 +191,13 @@ pub fn definitions() -> Value {
         a.extend(crate::accounts::tool_definitions());
         a.extend(crate::jobs::tool_definitions());
     }
-    // Bots get their own screen where this computer can run one (Windows + WSL, or Linux).
+    // Bots get their own screen where this computer can run one (Windows + WSL, or Linux), and
+    // can sign in on it with Vault logins or a secure form.
     if crate::screen::platform_ok().is_ok() {
         if let Some(a) = list.as_array_mut() {
             a.extend(crate::screen::tool_definitions());
+            a.extend(crate::logins::tool_definitions());
+            a.extend(crate::secure_form::tool_definitions());
         }
     }
     list
@@ -380,6 +383,17 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
         }
         return match crate::screen::computer_tool(state, bot_id, name, args).await {
             Ok(o) => ToolResult { text: o.text, is_error: false, image: o.image },
+            Err(e) => ToolResult { text: e, is_error: true, image: None },
+        };
+    }
+    if crate::logins::is_tool(name) || crate::secure_form::is_tool(name) {
+        let out = if crate::secure_form::is_tool(name) {
+            crate::secure_form::tool(state, bot_id, args).await
+        } else {
+            crate::logins::tool(state, bot_id, name, args).await
+        };
+        return match out {
+            Ok(t) => ToolResult { text: t, is_error: false, image: None },
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
     }

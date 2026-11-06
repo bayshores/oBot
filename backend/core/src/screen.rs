@@ -80,10 +80,72 @@ ob_browser() {
     ob_keep_logins
   fi
   setsid -f "$B" --user-data-dir="$OBPROF" --no-first-run --no-default-browser-check --disable-dev-shm-usage \
-    --hide-crash-restore-bubble --password-store=basic --disable-features=Translate \
+    --hide-crash-restore-bubble --password-store=basic --disable-features=Translate --remote-debugging-port=0 \
     --window-position=0,0 --window-size=1280,800 --start-maximized "$1" >>"$OBDIR/browser.log" 2>&1
 }
 "#;
+
+/// Runs page_fill.js (filling saved logins and secure forms into the page in front). The browser
+/// picks its debugging port itself (--remote-debugging-port=0, reachable only from this computer)
+/// and writes it to DevToolsActivePort in the profile.
+const NODE_SCRIPT: &str = r#"[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
+export DISPLAY=":$OB_DISPLAY"
+command -v node >/dev/null || { echo "Filling pages needs Node.js inside Linux. Open Settings › Computer › Bot screens and choose Set up again." >&2; exit 1; }
+exec node -e "$OB_JS""#;
+const PAGE_JS: &str = include_str!("page_fill.js");
+
+/// The page in front of a Bot's screen.
+pub struct Page {
+    pub url: String,
+    /// Set only for https:// pages.
+    pub host: Option<String>,
+}
+
+/// One box to fill: `target` is "username", "password", "new_password", "one_time_code",
+/// "focused" or a CSS selector.
+pub struct Fill {
+    pub target: String,
+    pub value: String,
+}
+
+pub struct Filled {
+    pub filled: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+async fn page_call(state: &Shared, bot_id: &str, req: Value) -> Result<Value, String> {
+    let info = state.screens.ensure(state, bot_id).await?;
+    let cfg = state.config.read().await.clone();
+    let env = [
+        ("OB_DISPLAY", info.display.to_string()),
+        ("OB_BOT", bot_id.to_string()),
+        ("OB_JS", PAGE_JS.to_string()),
+        ("OB_REQ", req.to_string()),
+    ];
+    let out = run(&cfg, NODE_SCRIPT, &env, 45).await?;
+    state.screens.touch(bot_id, 0).await;
+    let text = String::from_utf8_lossy(&out);
+    let v: Value = text.lines().rev().find_map(|l| serde_json::from_str(l).ok()).ok_or("The page helper didn't answer")?;
+    match v.get("error").and_then(Value::as_str) {
+        Some(e) => Err(e.to_string()),
+        None => Ok(v),
+    }
+}
+
+/// Which page is in front on the Bot's screen.
+pub async fn page_inspect(state: &Shared, bot_id: &str) -> Result<Page, String> {
+    let v = page_call(state, bot_id, json!({"mode": "inspect"})).await?;
+    let url = v["url"].as_str().unwrap_or("").to_string();
+    Ok(Page { host: crate::logins::https_host(&url), url })
+}
+
+/// Type values into boxes on the page in front, only if it's still on `host` (https).
+pub async fn page_fill(state: &Shared, bot_id: &str, host: &str, fields: &[Fill]) -> Result<Filled, String> {
+    let fields: Vec<Value> = fields.iter().map(|f| json!({"target": f.target, "value": f.value})).collect();
+    let v = page_call(state, bot_id, json!({"mode": "fill", "host": host, "fields": fields})).await?;
+    let list = |k: &str| v[k].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+    Ok(Filled { filled: list("filled"), missing: list("missing") })
+}
 
 /// Starts one screen and keeps running until it is stopped. Prints READY when usable.
 const START_SCRIPT: &str = r#"set -u

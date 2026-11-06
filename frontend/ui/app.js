@@ -1875,6 +1875,7 @@
     for (let i = list.length - 1; i >= 0; i--) {
       const m = list[i];
       if (m.role === 'widget') return m.meta && m.meta.answer == null && m.status !== 'answered' ? m : null;
+      if (m.role === 'form') return m.status === 'pending' ? m : null;
       if (m.role === 'user') return null;
     }
     return null;
@@ -2019,7 +2020,7 @@
     const last = list[list.length - 1];
     if (last && last.role === 'bot' && last.status === 'streaming') return null;
     if (last && last.role === 'approval' && last.status === 'pending') return null;
-    if (last && last.role === 'widget' && openWidget(list)) return null;
+    if (last && (last.role === 'widget' || last.role === 'form') && openWidget(list)) return null;
     if (!actEl) {
       const av = h('span', { class: 'av', style: { width: '28px', height: '28px' } });
       av._size = 28;
@@ -2131,6 +2132,9 @@
         break;
       case 'widget':
         stack.append(widgetCard(m));
+        break;
+      case 'form':
+        stack.append(formCard(m));
         break;
       case 'visualization':
         stack.append(vizCard(m));
@@ -2386,6 +2390,81 @@
     if (answered && !opts.some((o) => String(o) === String(meta.answer))) card.append(h('div', { class: 'answer-note' }, `You answered: ${meta.answer}`));
     card._answer = answer;
     card._opts = opts;
+    return card;
+  }
+
+  // Secure form (secure_form.rs): what the user types goes straight into the page on the Bot's
+  // screen. It is never shown to the Bot or kept in the chat.
+  function formCard(m) {
+    const meta = m.meta || {};
+    const pending = m.status === 'pending';
+    const card = h('div', { class: 'card widget sform' + (pending ? '' : ' answered'), role: 'group', 'aria-label': meta.title || 'Secure form' });
+    card.append(h('div', { class: 'card-title sform-title' }, icon('lock', 15), h('span', null, meta.title || 'Secure form')));
+    if (meta.reason) card.append(h('div', { class: 'card-sub' }, meta.reason));
+    if (!pending) {
+      let done;
+      if (m.status === 'dismissed') done = 'You closed this form.';
+      else {
+        done = `Filled in ${(meta.filled || []).join(', ')} on ${meta.host}.`;
+        if (meta.saved === 'added') done += ' Saved to the Vault.';
+        else if (meta.saved === 'updated') done += ' Updated the login in the Vault.';
+        else if (typeof meta.saved === 'string') done += ` Couldn’t save it to the Vault (${meta.saved.replace(/^not saved: /, '')}).`;
+      }
+      card.append(h('div', { class: 'answer-note' }, done));
+      return card;
+    }
+    card.append(h('div', { class: 'card-sub sform-site' }, icon('globe', 13), h('span', null, `Fills on ${meta.host}. The Bot never sees what you type.`)));
+    const inputs = {};
+    const body = h('div', { class: 'sform-fields' });
+    for (const f of meta.fields || []) {
+      const type = f.type === 'password' ? 'password' : f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'text';
+      const inp = h('input', { class: 'field' + (f.type === 'password' ? ' mono' : ''), type, autocomplete: f.type === 'code' ? 'one-time-code' : 'off', inputmode: f.type === 'code' ? 'numeric' : null, spellcheck: 'false', 'aria-label': f.label });
+      inp.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') submit();
+      });
+      inputs[f.id] = inp;
+      body.append(h('label', { class: 'f-label' }, f.label), inp);
+    }
+    card.append(body);
+    let save = null;
+    if (meta.save_available) {
+      save = h('input', { type: 'checkbox', checked: true });
+      card.append(h('label', { class: 'sform-save' }, save, h('span', null, 'Securely save to the Vault')));
+    }
+    const err = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    const fillBtn = h('button', { class: 'btn primary' }, 'Fill in');
+    const closeBtn = h('button', { class: 'btn' }, 'Not now');
+    card.append(err, h('div', { class: 'sform-actions' }, closeBtn, fillBtn));
+    let busy = false;
+    const send = async (body) => {
+      if (busy) return;
+      busy = true;
+      fillBtn.disabled = closeBtn.disabled = true;
+      err.hidden = true;
+      try {
+        const nm = await api(`/api/messages/${encodeURIComponent(m.id)}/form`, { method: 'POST', body });
+        Object.values(inputs).forEach((i) => (i.value = ''));
+        upsertMessage(nm);
+      } catch (e) {
+        busy = false;
+        fillBtn.disabled = closeBtn.disabled = false;
+        err.textContent = e.message;
+        err.hidden = false;
+      }
+    };
+    const submit = () => {
+      const values = {};
+      for (const [id, inp] of Object.entries(inputs)) if (inp.value) values[id] = inp.value;
+      if (!Object.keys(values).length) {
+        err.textContent = 'Fill in at least one box';
+        err.hidden = false;
+        return;
+      }
+      send({ values, save: !!(save && save.checked) });
+    };
+    fillBtn.addEventListener('click', submit);
+    closeBtn.addEventListener('click', () => send({ dismiss: true }));
     return card;
   }
 
@@ -2906,6 +2985,7 @@
     else if (m.role === 'visualization' && created) maybeNotify(b, 'done', (m.meta && m.meta.title) || 'Made a page', 'd:' + m.id);
     else if (m.role === 'approval' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.summary) || m.text, 'a:' + m.id);
     else if (m.role === 'widget' && m.meta && m.meta.answer == null) maybeNotify(b, 'needs', m.meta.question || m.text, 'w:' + m.id);
+    else if (m.role === 'form' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.title) || m.text, 'f:' + m.id);
   }
 
   // ───────────────────────────── mark read ─────────────────────────────
@@ -5456,7 +5536,7 @@
     );
   }
 
-  // ── Vault › Secrets (3.7) ──
+  // ── Vault › Secrets: names and values checked here and again by the server ──
   // The reserved names come from the server (vault.rs), which checks them again on save.
   function secretNameProblem(n) {
     if (!n) return 'Enter an environment variable name';
@@ -5474,19 +5554,173 @@
     if (new Blob([v]).size > 4096) return 'Too large. Maximum size is 4 KiB.';
     return '';
   }
+  // ── Vault: logins, contact info and secrets (logins.rs, vault.rs) ──
+  // "sso.ucsd.edu" from "https://www.SSO.ucsd.edu/login" (the server tidies addresses the same way).
+  function siteHost(s) {
+    let x = String(s || '').trim().toLowerCase();
+    x = x.includes('://') ? x.split('://')[1] : x;
+    x = x.split(/[/?#]/)[0];
+    x = x.slice(x.lastIndexOf('@') + 1).split(':')[0].replace(/^\*\./, '').replace(/^\.+|\.+$/g, '');
+    return x.replace(/^www\./, '');
+  }
+  const validHost = (x) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(x);
+  function vaultTile(kind, text) {
+    if (kind === 'login') return h('span', { class: 'vault-tile', 'aria-hidden': 'true' }, (siteHost(text)[0] || '?').toUpperCase());
+    return h('span', { class: 'vault-tile icon', 'aria-hidden': 'true' }, icon(kind === 'contact' ? 'person' : 'key', 16));
+  }
+  // Text with the search words highlighted.
+  function marked(text, q) {
+    text = String(text || '');
+    if (!q) return text;
+    const i = text.toLowerCase().indexOf(q);
+    if (i < 0) return text;
+    return h('span', null, text.slice(0, i), h('mark', null, text.slice(i, i + q.length)), text.slice(i + q.length));
+  }
+  const contactName = (c) => c.label || c.full_name || c.emails[0] || c.phones[0] || 'Contact info';
+  const loginTitle = (l) => l.sites[0] || 'Login';
+
   function tabVault() {
     const s = S.settings;
     if (!s) return notConnected();
     const ui = S.settingsUI;
-    const vault = s.vault || [];
-    const form = ui.vaultForm;
+    const v = (ui.vault = ui.vault || { tab: 'all', q: '' });
+    const logins = s.logins || [];
+    const contacts = s.contacts || [];
+    const secrets = s.vault || [];
+    const q = v.q.trim().toLowerCase();
+    const has = (...xs) => !q || xs.some((x) => String(x || '').toLowerCase().includes(q));
+    const fl = logins.filter((l) => has(...l.sites, l.username, l.hints));
+    const fc = contacts.filter((c) => has(c.label, c.full_name, c.city, ...c.emails, ...c.phones));
+    const fs = secrets.filter((x) => has(x.name, x.description));
     const out = h('div');
-    const head = h(
-      'div',
-      { class: 'set-head' },
-      h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Secrets'), h('div', { class: 'set-explain' }, 'Credentials your Bots can use in shell commands as environment variables. Values are write-only.')),
-      pillBtn('Add secret', () => ((ui.vaultForm = { mode: 'add' }), rerenderSettings(true)), { disabled: !!form })
+
+    const newBtn = h('button', { class: 'btn primary pill vault-new', 'aria-haspopup': 'menu' }, 'New item', icon('chevronDown', 14));
+    newBtn.addEventListener('click', () => {
+      const r = newBtn.getBoundingClientRect();
+      showMenu(
+        [
+          { label: 'Login', icon: 'key', action: () => loginDialog(null) },
+          { label: 'Contact info', icon: 'person', action: () => contactDialog(null) },
+          { label: 'Secret (for commands)', icon: 'terminal', action: () => ((v.tab = 'secrets'), (ui.vaultForm = { mode: 'add' }), rerenderSettings(true)) },
+          '-',
+          { label: 'Import', icon: 'file', action: () => importDialog() },
+        ],
+        r.left,
+        r.bottom + 6
+      );
+    });
+    out.append(
+      h(
+        'div',
+        { class: 'set-head' },
+        h('div', { class: 'set-head-text' }, h('div', { class: 'set-explain' }, 'Logins your Bots can sign in with, contact info they can fill forms with, and secrets for commands.')),
+        newBtn
+      )
     );
+
+    // Tabs and search.
+    const tabs = [
+      ['all', 'All', logins.length + contacts.length + secrets.length],
+      ['logins', 'Logins', logins.length],
+      ['contacts', 'Contact info', contacts.length],
+      ['secrets', 'Secrets', secrets.length],
+    ];
+    const search = h('input', { class: 'field vault-search', type: 'search', placeholder: 'Search Vault', value: v.q, 'aria-label': 'Search Vault' });
+    search.addEventListener('input', () => {
+      v.q = search.value;
+      rerenderSettings(true);
+      const el = document.querySelector('.vault-search');
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+    search.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && search.value) {
+        e.stopPropagation();
+        v.q = '';
+        rerenderSettings(true);
+      }
+    });
+    out.append(
+      h(
+        'div',
+        { class: 'vault-bar' },
+        h(
+          'div',
+          { class: 'segmented vault-tabs', role: 'tablist', 'aria-label': 'Item type' },
+          tabs.map(([id, label, n]) =>
+            h('button', { class: 'seg' + (v.tab === id ? ' on' : ''), role: 'tab', 'aria-selected': v.tab === id ? 'true' : 'false', onclick: () => ((v.tab = id), rerenderSettings(true)) }, label, h('span', { class: 'vault-count' }, String(n)))
+          )
+        ),
+        search
+      )
+    );
+
+    const loginRows = () =>
+      fl.map((l) =>
+        h(
+          'button',
+          { class: 'vault-row', onclick: () => loginDialog(l), 'aria-label': `View login for ${loginTitle(l)}${l.username ? ` (${l.username})` : ''}` },
+          vaultTile('login', loginTitle(l)),
+          h('span', { class: 'vault-row-text' }, h('span', { class: 'vault-row-title' }, marked(loginTitle(l), q), l.sites.length > 1 ? h('span', { class: 'vault-more' }, ` +${l.sites.length - 1}`) : null), h('span', { class: 'vault-row-sub' }, l.username ? marked(l.username, q) : l.hints ? `Hint: ${l.hints}` : 'No username'), l.locked ? h('span', { class: 'chip warn' }, 'Locked') : null),
+          icon('chevronRight', 16)
+        )
+      );
+    const contactRows = () =>
+      fc.map((c) =>
+        h(
+          'button',
+          { class: 'vault-row', onclick: () => contactDialog(c), 'aria-label': `Edit ${contactName(c)}` },
+          vaultTile('contact'),
+          h('span', { class: 'vault-row-text' }, h('span', { class: 'vault-row-title' }, marked(contactName(c), q)), h('span', { class: 'vault-row-sub' }, [c.full_name !== contactName(c) ? c.full_name : '', c.emails[0], c.phones[0], c.city].filter(Boolean).join(' · ') || 'Contact info')),
+          icon('chevronRight', 16)
+        )
+      );
+    const secretRows = () =>
+      fs.map((x) =>
+        h(
+          'button',
+          { class: 'vault-row', onclick: () => ((v.tab = 'secrets'), (ui.vaultForm = { mode: 'replace', name: x.name }), rerenderSettings(true)), 'aria-label': `Edit ${x.name}` },
+          vaultTile('secret'),
+          h('span', { class: 'vault-row-text' }, h('span', { class: 'vault-row-title mono' }, marked(x.name, q)), h('span', { class: 'vault-row-sub' }, x.description || x.hint || 'Secret')),
+          icon('chevronRight', 16)
+        )
+      );
+    const EMPTY = {
+      all: 'Nothing saved yet. Add a login, contact info or a secret with New item.',
+      logins: 'No logins yet. Add one with New item, or save one from a secure form in a chat.',
+      contacts: 'No contact info yet. Add some with New item.',
+      secrets: 'No secrets yet. Add one with New item.',
+    };
+    const listCard = (rows, empty) => card(rows.length ? h('div', { class: 'vault-list' }, rows) : h('div', { class: 'set-empty' }, q ? `No matches for “${v.q.trim()}”` : empty));
+    if (v.tab === 'all') {
+      const groups = [
+        ['Logins', loginRows()],
+        ['Contact info', contactRows()],
+        ['Secrets', secretRows()],
+      ].filter(([, rows]) => rows.length);
+      if (!groups.length) out.append(listCard([], EMPTY.all));
+      for (const [label, rows] of groups) out.append(section(label, listCard(rows, '')));
+    } else if (v.tab === 'logins') out.append(listCard(loginRows(), EMPTY.logins));
+    else if (v.tab === 'contacts') out.append(listCard(contactRows(), EMPTY.contacts));
+    else out.append(secretsCard(fs));
+
+    out.append(
+      note(
+        v.tab === 'secrets'
+          ? 'Secrets are environment variables for your Bots’ shell commands. Bots see the names and what they are for, never the values. '
+          : 'Bots never see saved passwords: openbot types them into the login page on the Bot’s screen, and only on the websites you saved them for. Bots can see usernames and contact info so they can type them in. ',
+        h('span', { class: 'secret-protection' }, (s.vault_protection || 'Not encrypted') + '.')
+      )
+    );
+    return out;
+  }
+
+  // Secrets tab: environment variables for shell commands, edited in place.
+  function secretsCard(vault) {
+    const ui = S.settingsUI;
+    const form = ui.vaultForm;
     const rows = vault.map((v) =>
       form && form.mode === 'replace' && form.name === v.name
         ? secretForm(form, v)
@@ -5517,14 +5751,345 @@
           )
     );
     if (form && form.mode === 'add') rows.push(secretForm(form, null));
-    out.append(h('div', { class: 'set-section' }, head, rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No secrets yet'))));
-    out.append(
-      note(
-        'Secrets stay on the computer where your Bots run. Bots see the names and what they are for, never the values. If a value shows up in a chat, it’s replaced with ••••. ',
-        h('span', { class: 'secret-protection' }, (s.vault_protection || 'Not encrypted') + '.')
-      )
+    return h(
+      'div',
+      { class: 'set-section' },
+      h('div', { class: 'vault-sub-head' }, pillBtn('Add secret', () => ((ui.vaultForm = { mode: 'add' }), rerenderSettings(true)), { disabled: !!form })),
+      rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No secrets yet'))
     );
-    return out;
+  }
+
+  // A dialog whose content is redrawn by draw(); returns {box, close, redraw}.
+  function vaultModal(cls, draw) {
+    const box = h('div', { class: 'dialog vault-dlg ' + cls, role: 'dialog', 'aria-modal': 'true' });
+    const close = openModal(box);
+    const redraw = () => box.replaceChildren(...[].concat(draw()).filter(Boolean));
+    redraw();
+    return { box, close, redraw };
+  }
+  const dlgClose = (close) => h('button', { class: 'icon-btn dialog-close', 'aria-label': 'Close dialog', onclick: () => close() }, icon('x', 16));
+  async function vaultSave(st, path, method, body, after) {
+    st.busy = true;
+    st.err = '';
+    st.redraw();
+    try {
+      S.settings = await api(path, { method, body });
+      after && after();
+      rerenderSettings(true);
+    } catch (e) {
+      st.busy = false;
+      st.err = e.message || 'Couldn’t save. Try again.';
+      st.redraw();
+    }
+  }
+
+  // ── Login dialog: view, edit, new ──
+  function loginDialog(login, startEdit) {
+    const st = {
+      mode: login && !startEdit ? 'view' : 'edit',
+      sites: login ? login.sites.slice() : [''],
+      username: login ? login.username : '',
+      password: '',
+      hints: login ? login.hints : '',
+      bots: login && login.bots ? login.bots.slice() : null,
+      err: '',
+      busy: false,
+    };
+    const start = JSON.stringify([st.sites, st.username, st.hints, st.bots]);
+    const changed = () => st.password !== '' || JSON.stringify([st.sites.filter((x) => x.trim()), st.username, st.hints, st.bots]) !== start;
+    const firstHost = () => siteHost(st.sites.find((x) => validHost(siteHost(x))) || '');
+    let m;
+    const remove = async () => {
+      const ok = await confirmDialog({ title: 'Remove this login?', body: `Bots can no longer sign in to ${loginTitle(login)} with it.`, confirmText: 'Remove', danger: true });
+      if (ok) vaultSave(st, '/api/vault/logins/' + encodeURIComponent(login.id), 'DELETE', undefined, () => m.close());
+    };
+    const view = () => {
+      const r = (label, ...kids) => h('div', { class: 'vault-field' }, h('div', { class: 'vault-field-label' }, label), h('div', { class: 'vault-field-value' }, ...kids));
+      return [
+        dlgClose(() => m.close()),
+        h('div', { class: 'vault-dlg-head' }, vaultTile('login', loginTitle(login)), h('h2', { class: 'dialog-title' }, loginTitle(login))),
+        r('Website', ...login.sites.map((x) => h('div', { class: 'vault-site' }, h('span', null, x), h('a', { class: 'icon-btn', href: 'https://' + x, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `Open ${x}` }, icon('external', 14))))),
+        login.username ? r('Username', h('span', { class: 'mono' }, login.username)) : null,
+        r('Password', login.locked ? h('span', { class: 'secret-problem' }, 'Can’t be unlocked on this computer. Use Edit to enter it again.') : h('span', { class: 'vault-dots', 'aria-label': 'Saved password, hidden' }, '••••••••••')),
+        login.hints ? r('Hints', login.hints) : null,
+        r('Bots', scopeText(login.bots, 'Edit')),
+        st.err ? h('div', { class: 'dialog-error', role: 'alert' }, st.err) : null,
+        h('div', { class: 'dialog-actions split' }, h('button', { class: 'btn danger', disabled: st.busy, onclick: remove }, 'Remove'), h('span', { class: 'grow' }), btn('Edit', () => ((st.mode = 'edit'), m.redraw())), btn('Done', () => m.close(), 'primary')),
+      ];
+    };
+    const edit = () => {
+      const save = h('button', { class: 'btn primary', disabled: st.busy || !firstHost() || !changed() || (!login && !st.password) }, 'Save login');
+      const sync = () => (save.disabled = st.busy || !firstHost() || !changed() || (!login && !st.password));
+      const siteRows = st.sites.map((val, i) => {
+        const inp = h('input', { class: 'field', value: val, placeholder: 'example.com', spellcheck: 'false', autocomplete: 'off', 'aria-label': i ? `Website ${i + 1}` : 'Website' });
+        inp.addEventListener('input', () => {
+          st.sites[i] = inp.value;
+          sync();
+          hint.textContent = firstHost() ? `Fills on ${firstHost()} and its subdomains` : '';
+        });
+        // Pasting several addresses separated by spaces makes one row each.
+        inp.addEventListener('paste', (e) => {
+          const t = (e.clipboardData && e.clipboardData.getData('text')) || '';
+          const parts = t.split(/\s+/).filter(Boolean);
+          if (parts.length < 2) return;
+          e.preventDefault();
+          st.sites.splice(i, 1, ...parts);
+          st.sites = st.sites.slice(0, 10);
+          m.redraw();
+        });
+        return h('div', { class: 'vault-site-row' }, inp, i ? h('button', { class: 'icon-btn', 'aria-label': `Remove website ${i + 1}`, onclick: () => (st.sites.splice(i, 1), m.redraw()) }, icon('x', 14)) : null);
+      });
+      const hint = h('div', { class: 'f-hint' }, firstHost() ? `Fills on ${firstHost()} and its subdomains` : '');
+      const user = h('input', { class: 'field', value: st.username, placeholder: 'name@example.com', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'Username or email' });
+      user.addEventListener('input', () => ((st.username = user.value), sync()));
+      const pw = h('input', { class: 'field mono', type: 'password', value: st.password, placeholder: login && !login.locked ? 'Leave empty to keep the saved password' : '', autocomplete: 'new-password', 'aria-label': 'Password' });
+      pw.addEventListener('input', () => ((st.password = pw.value), sync()));
+      const hints = h('textarea', { class: 'field vault-hints', maxlength: '2000', placeholder: 'Use this for the student portal, not the staff one', 'aria-label': 'Hints' }, st.hints);
+      hints.addEventListener('input', () => ((st.hints = hints.value), sync()));
+      save.addEventListener('click', () => {
+        const body = { sites: st.sites.filter((x) => x.trim()), username: st.username, password: st.password, hints: st.hints, bots: st.bots };
+        vaultSave(st, login ? '/api/vault/logins/' + encodeURIComponent(login.id) : '/api/vault/logins', 'POST', body, () => m.close());
+      });
+      setTimeout(() => (login ? pw : m.box.querySelector('input')).focus(), 30);
+      return [
+        dlgClose(() => m.close()),
+        h('h2', { class: 'dialog-title' }, login ? `Edit login for ${loginTitle(login)}` : 'New login'),
+        h('label', { class: 'f-label' }, 'Website'),
+        ...siteRows,
+        st.sites.length < 10 ? h('button', { class: 'btn link vault-add', onclick: () => (st.sites.push(''), m.redraw()) }, icon('plus', 14), 'Add website') : null,
+        hint,
+        h('label', { class: 'f-label' }, 'Username or email'),
+        user,
+        h('label', { class: 'f-label' }, login && login.locked ? 'Password (enter it again)' : 'Password'),
+        pw,
+        h('label', { class: 'f-label' }, 'Hints'),
+        hints,
+        h('div', { class: 'f-hint' }, 'Tell the Bot when to use this login.'),
+        h('label', { class: 'f-label' }, 'Which Bots can use it'),
+        botScopePicker(st, sync),
+        !login && firstHost() ? h('div', { class: 'f-hint vault-note' }, `Bots can use this login to sign in for you on ${firstHost()}.`) : null,
+        st.err ? h('div', { class: 'dialog-error', role: 'alert' }, st.err) : null,
+        h('div', { class: 'dialog-actions split' }, login ? h('button', { class: 'btn danger', disabled: st.busy, onclick: remove }, 'Remove') : null, h('span', { class: 'grow' }), btn('Cancel', () => (login && st.mode === 'edit' && !startEdit ? ((st.mode = 'view'), m.redraw()) : m.close())), save),
+      ];
+    };
+    m = vaultModal('', () => (st.mode === 'view' ? view() : edit()));
+    st.redraw = m.redraw;
+  }
+
+  // ── Contact info dialog ──
+  function contactDialog(c) {
+    const st = Object.assign({ full_name: '', address1: '', address2: '', city: '', region: '', postal_code: '', country: '', label: '', hints: '' }, c || {});
+    st.phones = c ? c.phones.slice() : [''];
+    st.emails = c ? c.emails.slice() : [''];
+    st.bots = c && c.bots ? c.bots.slice() : null;
+    st.err = '';
+    st.busy = false;
+    let m;
+    const text = (key, label, attrs = {}) => {
+      const inp = h('input', Object.assign({ class: 'field', value: st[key], 'aria-label': label, autocomplete: 'off' }, attrs));
+      inp.addEventListener('input', () => (st[key] = inp.value));
+      return h('div', { class: 'vault-cell' }, h('label', { class: 'f-label' }, label), inp);
+    };
+    // Phone and email lists: the first one is the primary.
+    const list = (key, label, check) => {
+      const rows = st[key].map((val, i) => {
+        const inp = h('input', { class: 'field', value: val, type: key === 'emails' ? 'email' : 'tel', 'aria-label': i ? `${label} ${i + 1}` : label, autocomplete: 'off' });
+        const err = h('div', { class: 'f-err', role: 'alert', hidden: true });
+        inp.addEventListener('input', () => ((st[key][i] = inp.value), (err.hidden = true)));
+        inp.addEventListener('blur', () => {
+          const p = check(inp.value.trim(), i);
+          err.textContent = p;
+          err.hidden = !p;
+        });
+        return h(
+          'div',
+          { class: 'vault-list-row' },
+          h('label', { class: 'f-label' }, i ? `${label} ${i + 1}` : label),
+          h('div', { class: 'vault-site-row' }, inp, i ? h('button', { class: 'btn link', onclick: () => (st[key].unshift(...st[key].splice(i, 1)), m.redraw()) }, 'Make primary') : null, st[key].length > 1 ? h('button', { class: 'icon-btn', 'aria-label': `Remove ${label.toLowerCase()} ${i + 1}`, onclick: () => (st[key].splice(i, 1), m.redraw()) }, icon('x', 14)) : null),
+          err
+        );
+      });
+      return [...rows, st[key].length < 10 ? h('button', { class: 'btn link vault-add', onclick: () => (st[key].push(''), m.redraw()) }, icon('plus', 14), `Add ${label.toLowerCase()}`) : null];
+    };
+    const phoneProblem = (v, i) => {
+      if (!v) return '';
+      const digits = v.replace(/\D/g, '').length;
+      if (digits < 7 || digits > 15 || !/^[0-9 +\-().]+$/.test(v)) return 'Enter a valid phone number';
+      return st.phones.slice(0, i).some((x) => x.trim() === v) ? 'Already listed above' : '';
+    };
+    const emailProblem = (v, i) => {
+      if (!v) return '';
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'Enter a valid email';
+      return st.emails.slice(0, i).some((x) => x.trim().toLowerCase() === v.toLowerCase()) ? 'Already listed above' : '';
+    };
+    const remove = async () => {
+      const ok = await confirmDialog({ title: `Remove “${contactName(c)}”?`, body: 'Bots can no longer use this contact info.', confirmText: 'Remove', danger: true });
+      if (ok) vaultSave(st, '/api/vault/contacts/' + encodeURIComponent(c.id), 'DELETE', undefined, () => m.close());
+    };
+    const save = () => {
+      const bad = st.phones.some((x, i) => phoneProblem(x.trim(), i)) || st.emails.some((x, i) => emailProblem(x.trim(), i));
+      if (bad) {
+        st.err = 'Fix the phone numbers and emails marked above.';
+        return m.redraw();
+      }
+      const body = Object.assign({}, st, { phones: st.phones.map((x) => x.trim()).filter(Boolean), emails: st.emails.map((x) => x.trim()).filter(Boolean) });
+      delete body.err;
+      delete body.busy;
+      delete body.redraw;
+      vaultSave(st, c ? '/api/vault/contacts/' + encodeURIComponent(c.id) : '/api/vault/contacts', 'POST', body, () => m.close());
+    };
+    m = vaultModal('wide', () => [
+      dlgClose(() => m.close()),
+      h('h2', { class: 'dialog-title' }, c ? `Edit ${contactName(c)}` : 'New contact info'),
+      text('full_name', 'Full name', { autocomplete: 'off' }),
+      text('address1', 'Address'),
+      text('address2', 'Address line 2'),
+      h('div', { class: 'vault-pair' }, text('city', 'City'), text('region', 'State or region')),
+      h('div', { class: 'vault-pair' }, text('postal_code', 'ZIP or postal code'), text('country', 'Country')),
+      ...list('phones', 'Phone', phoneProblem),
+      ...list('emails', 'Email', emailProblem),
+      text('label', 'Label', { placeholder: 'Home, Work…' }),
+      h('label', { class: 'f-label' }, 'Hints'),
+      (() => {
+        const t = h('textarea', { class: 'field vault-hints', maxlength: '2000', 'aria-label': 'Hints', placeholder: 'Use the work address for deliveries' }, st.hints);
+        t.addEventListener('input', () => (st.hints = t.value));
+        return t;
+      })(),
+      h('label', { class: 'f-label' }, 'Which Bots can use it'),
+      botScopePicker(st),
+      st.err ? h('div', { class: 'dialog-error', role: 'alert' }, st.err) : null,
+      h('div', { class: 'dialog-actions split' }, c ? h('button', { class: 'btn danger', disabled: st.busy, onclick: remove }, 'Remove') : null, h('span', { class: 'grow' }), btn('Cancel', () => m.close()), h('button', { class: 'btn primary', disabled: st.busy, onclick: save }, 'Save contact info')),
+    ]);
+    st.redraw = m.redraw;
+  }
+
+  // ── Import logins from a password manager's CSV export ──
+  // A CSV table (quoted fields may hold commas, quotes and line breaks).
+  function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quoted) {
+        if (ch === '"' && text[i + 1] === '"') (cell += '"'), i++;
+        else if (ch === '"') quoted = false;
+        else cell += ch;
+      } else if (ch === '"') quoted = true;
+      else if (ch === ',') row.push(cell), (cell = '');
+      else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell);
+        rows.push(row);
+        row = [];
+        cell = '';
+      } else cell += ch;
+    }
+    if (cell || row.length) row.push(cell), rows.push(row);
+    return rows;
+  }
+  // Rows {url, username, password, name} from an export by 1Password, Chrome, Edge, Safari / Apple
+  // Passwords, Firefox, Bitwarden or LastPass. null = not a password export.
+  function exportRows(text) {
+    const table = parseCsv(text.replace(/^﻿/, ''));
+    if (table.length < 1) return null;
+    const head = table[0].map((x) => x.trim().toLowerCase());
+    const col = (...names) => names.map((n) => head.indexOf(n)).find((i) => i >= 0) ?? -1;
+    const url = col('url', 'login_uri', 'website', 'login url');
+    const user = col('username', 'login_username', 'user name', 'email');
+    const pass = col('password', 'login_password');
+    const name = col('name', 'title');
+    const type = col('type');
+    if (url < 0 || pass < 0) return null;
+    return table
+      .slice(1)
+      .filter((r) => r.some((x) => x.trim()))
+      .filter((r) => type < 0 || !r[type] || r[type].toLowerCase() === 'login')
+      .map((r) => ({ url: r[url] || '', username: user >= 0 ? r[user] || '' : '', password: r[pass] || '', name: name >= 0 ? r[name] || '' : '' }));
+  }
+  function importDialog() {
+    const st = { step: 'pick', rows: null, preview: null, result: null, err: '', busy: false };
+    let m;
+    const file = h('input', { type: 'file', accept: '.csv,text/csv', hidden: true });
+    file.addEventListener('change', async () => {
+      const f = file.files && file.files[0];
+      file.value = '';
+      if (!f) return;
+      st.err = '';
+      const rows = exportRows(await f.text());
+      if (!rows) {
+        st.err = 'This doesn’t look like a password export. Choose a CSV exported from a supported app.';
+        return m.redraw();
+      }
+      st.busy = true;
+      m.redraw();
+      try {
+        st.preview = await api('/api/vault/import', { method: 'POST', body: { rows, apply: false } });
+        st.rows = rows;
+        st.step = 'preview';
+      } catch (e) {
+        st.err = e.message;
+      }
+      st.busy = false;
+      m.redraw();
+    });
+    const doImport = async () => {
+      st.busy = true;
+      m.redraw();
+      try {
+        const r = await api('/api/vault/import', { method: 'POST', body: { rows: st.rows, apply: true } });
+        if (r.settings) S.settings = r.settings;
+        st.result = r;
+        st.rows = null; // the passwords are on the computer now; drop this copy
+        st.step = 'done';
+        rerenderSettings(true);
+      } catch (e) {
+        st.err = e.message;
+      }
+      st.busy = false;
+      m.redraw();
+    };
+    const LABEL = { ready: 'Ready', duplicate: 'Already in your vault', full: 'Vault full' };
+    const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+    m = vaultModal('wide', () => {
+      const head = [dlgClose(() => m.close()), h('h2', { class: 'dialog-title' }, 'Import logins')];
+      const err = st.err ? h('div', { class: 'dialog-error', role: 'alert' }, st.err) : null;
+      if (st.step === 'pick')
+        return [
+          ...head,
+          h('p', { class: 'dialog-body' }, 'Import logins from a CSV file exported by 1Password, Chrome, Edge, Safari, Apple Passwords, Firefox, Bitwarden, or LastPass.'),
+          file,
+          err,
+          h('div', { class: 'dialog-actions' }, btn('Cancel', () => m.close()), h('button', { class: 'btn primary', disabled: st.busy, onclick: () => file.click() }, st.busy ? 'Reading…' : 'Choose file')),
+        ];
+      if (st.step === 'preview') {
+        const p = st.preview;
+        const chips = [p.ready && `${p.ready} ready`, p.duplicates && `${p.duplicates} already in your vault`, p.errors && plural(p.errors, 'with errors', 'with errors'), p.skipped_full && `${p.skipped_full} skipped`].filter(Boolean);
+        const items = p.items.slice(0, 300);
+        return [
+          ...head,
+          h('div', { class: 'vault-chips' }, chips.map((t) => h('span', { class: 'chip' }, t))),
+          h(
+            'div',
+            { class: 'vault-import-list' },
+            items.map((it) => h('div', { class: 'vault-import-row' + (it.status === 'ready' ? '' : ' dim') }, vaultTile('login', it.title), h('span', { class: 'vault-row-text' }, h('span', { class: 'vault-row-title' }, it.title || 'No website'), h('span', { class: 'vault-row-sub' }, it.username || '')), h('span', { class: 'chip' + (it.status === 'error' ? ' warn' : '') }, it.error || LABEL[it.status])))
+          ),
+          p.items.length > items.length ? h('div', { class: 'f-hint' }, `…and ${p.items.length - items.length} more`) : null,
+          err,
+          h('div', { class: 'dialog-actions' }, btn('Cancel', () => m.close()), h('button', { class: 'btn primary', disabled: st.busy || !p.ready, onclick: doImport }, st.busy ? 'Importing…' : `Import ${plural(p.ready, 'login', 'logins')}`)),
+        ];
+      }
+      const r = st.result;
+      return [
+        ...head,
+        h('p', { class: 'dialog-body' }, `Imported ${plural(r.ready, 'login', 'logins')}.`),
+        r.duplicates ? h('p', { class: 'dialog-body' }, `Skipped ${plural(r.duplicates, 'item', 'items')} already in your vault.`) : null,
+        r.skipped_full ? h('p', { class: 'dialog-body' }, `Your vault is full. ${plural(r.skipped_full, 'item', 'items')} couldn’t be imported.`) : null,
+        h('p', { class: 'dialog-body vault-warn' }, 'Delete the exported file now: it has your passwords in plain text.'),
+        h('div', { class: 'dialog-actions' }, btn('Done', () => m.close(), 'primary')),
+      ];
+    });
   }
   async function removeSecret(name) {
     const ok = await confirmDialog({ title: `Remove ${name}?`, body: 'Bots can no longer use this secret.', confirmText: 'Remove', danger: true });

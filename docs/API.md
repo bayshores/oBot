@@ -63,7 +63,7 @@ Bot = {
 Message = {
   id: string, bot_id: string,
   role: "user" | "bot" | "tool" | "approval" | "error" | "system"
-      | "widget" | "attachment" | "visualization" | "event",
+      | "widget" | "form" | "attachment" | "visualization" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
   status: "streaming" | "done" | "running" | "ok" | "failed" | "pending" | "allowed" | "denied" | "expired",  // expired = approval left open when openbot restarted
@@ -85,6 +85,10 @@ Message = {
 //  system:   {}
 //  widget:   { question, options: string[], allow_custom: bool, answer: string|null }   quick-reply buttons;
 //            answer with POST /api/messages/:id/answer {value}
+//  form:     { title, reason, host, fields: [{id, label, type: "text"|"email"|"tel"|"password"|"code", target}],
+//              save_available: bool, filled: string[], missing: string[], saved: "added"|"updated"|string|null }
+//            a secure form (request_form). status pending|filled|dismissed. Fill it with
+//            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
 //  event:    { kind, routine_id?, job_id?, bot_id? }   small centered line. kind: "routine-created" | "routine-run"
@@ -109,6 +113,11 @@ Settings = {
             locked: boolean,                         // saved but can't be decrypted here: no Bot gets it until re-entered
             name_problem: string | null }]           // set if the name is now reserved: no Bot gets it
                                                      // secrets are passed to the allowed Bots as env vars
+  logins: [{ id, sites: string[], username, hints, bots: string[] | null,
+             has_password: boolean, locked: boolean, updated_at }],   // never the password
+  contacts: [{ id, full_name, address1, address2, city, region, postal_code, country,
+               phones: string[], emails: string[], label, hints, bots, updated_at }],   // first phone/email = primary
+  vault_limits: { logins: number, contacts: number },
   vault_protection: string,                          // how values are saved, e.g. "Encrypted with Windows DPAPI"
   vault_reserved: { names: string[], prefixes: string[] }  // refused secret names (compared ignoring case)
   accounts: [{ id, provider: "google"|"microsoft", email, name, services: string,
@@ -184,6 +193,14 @@ Usage = {
 | DELETE | /api/accounts/:id | – (Google access is also revoked) | `Settings` |
 | GET | /oauth/callback | `?state&code` (no token; a browser page load) | HTML page. Finishes the sign-in here, or passes it to the remote computer from `/api/connection` |
 | DELETE | /api/vault/:name | – | `Settings` |
+| POST | /api/vault/logins | `{sites, username, password, hints, bots}` | `Settings`. `sites`: 1 to 10 addresses, tidied to hosts like `ucsd.edu` (`www.` dropped); a login also fills on subdomains. 400 if the Vault is full (2000) |
+| POST | /api/vault/logins/:id | same; empty `password` keeps the saved one | `Settings` |
+| DELETE | /api/vault/logins/:id | – | `Settings` |
+| POST | /api/vault/contacts | `{full_name, address1, address2, city, region, postal_code, country, phones, emails, label, hints, bots}` | `Settings` (at most 50) |
+| POST | /api/vault/contacts/:id | same | `Settings` |
+| DELETE | /api/vault/contacts/:id | – | `Settings` |
+| POST | /api/vault/import | `{rows:[{url, username, password, name}], apply}`: rows the app read from a password manager's CSV export | `{ready, duplicates, errors, skipped_full, items:[{row, title, username, status:"ready"\|"duplicate"\|"error"\|"full", error?}]}`; with `apply:true` the ready ones are added and `settings` is included. Same website + username = already in the Vault |
+| POST | /api/messages/:id/form | `{values:{<field id>: value}, save}` or `{dismiss:true}` | `Message`. Types the values into the page on the Bot's screen, only if it's still on `meta.host`; 400 with a sentence if not (the form stays open). `save` also saves the password as a Vault login |
 | GET | /api/computer | `?refresh=1` re-checks Claude Code now | `Computer` |
 | GET | /api/hello | – (no token) | `{app:"openbot", version, name}`: lets setup recognize an openbot computer |
 | GET | /api/tailscale | – | home only: `{installed, running, needs_login, state, self:{name,dns,os,online}, peers:[{name,dns,os,online}]}` |
@@ -305,6 +322,17 @@ names like `ctrl+l`), `computer_open {url}` and `computer_wait {seconds?}`. Whil
 `bot.activity.kind` is `on_its_computer`. `request_control {reason}` posts a widget message with
 `meta.screen:true` and the option "I'm done": the user opens the screen, chooses Take control,
 does the step (a login, a code, a payment), and answers.
+
+Signing in (logins.rs, secure_form.rs, page_fill.js): `list_logins {site?}` shows the Bot its Vault
+logins without passwords; `fill_login {id}` types the username and password into the page in front,
+only when that page is `https://` on one of the login's websites or a subdomain. `request_form
+{title, reason?, fields:[{label, type, target?}]}` posts a `form` message tied to the website in
+front; what the user types there is typed into the page (never shown to the Bot), optionally saved as a
+login, and the Bot then gets a note saying which boxes were filled. `list_contact_info` returns the
+Vault's contact info. openbot finds the page in front through the browser's local debugging port
+(`--remote-debugging-port=0`, 127.0.0.1 only, port read from `DevToolsActivePort`): the visible tab,
+or with several windows the one whose title matches the active window. Filling needs Node.js 22+
+inside Linux (installed with the screen setup).
 
 The app's viewer (noVNC) is view-only until the user chooses Take control.
 

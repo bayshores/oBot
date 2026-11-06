@@ -359,6 +359,9 @@ pub fn remember_values(cfg: &Config) {
     for s in &cfg.vault {
         add(&s.value);
     }
+    for l in &cfg.logins {
+        add(&l.password);
+    }
     add(&cfg.api_key);
     vals.sort_by(|a, b| b.len().cmp(&a.len()));
     vals.dedup();

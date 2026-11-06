@@ -86,6 +86,10 @@ pub struct Config {
     pub runner: String,
     /// The WSL distro used when runner = "wsl".
     pub wsl_distro: String,
+    /// Website logins in the Vault (Settings › Vault › Logins; see logins.rs).
+    pub logins: Vec<crate::logins::Login>,
+    /// Contact info in the Vault (Settings › Vault › Contact info).
+    pub contacts: Vec<crate::logins::Contact>,
     /// Connected Google / Microsoft accounts (Settings › Connections).
     pub accounts: Vec<crate::accounts::Account>,
     /// Override the built-in Google / Microsoft sign-in apps (for development).
@@ -118,6 +122,8 @@ impl Default for Config {
             devices: vec![],
             runner: "native".into(),
             wsl_distro: "Ubuntu".into(),
+            logins: vec![],
+            contacts: vec![],
             accounts: vec![],
             oauth: Default::default(),
         }
@@ -183,6 +189,9 @@ impl Config {
                        "description": s.description, "bots": s.bots, "locked": locked,
                        "name_problem": crate::vault::name_problem(&s.name)})
             }).collect::<Vec<_>>(),
+            "logins": self.logins.iter().map(crate::logins::view).collect::<Vec<_>>(),
+            "contacts": self.contacts,
+            "vault_limits": {"logins": crate::logins::MAX_LOGINS, "contacts": crate::logins::MAX_CONTACTS},
             "vault_protection": crate::vault::protection(),
             "vault_reserved": {"names": &crate::vault::RESERVED_NAMES[..], "prefixes": &crate::vault::RESERVED_PREFIXES[..]},
             "auto_review": self.auto_review,

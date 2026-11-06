@@ -168,6 +168,12 @@ fn router(state: Shared) -> Router {
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/vault", post(add_secret))
         .route("/api/vault/{name}", delete(remove_secret))
+        .route("/api/vault/logins", post(add_login))
+        .route("/api/vault/logins/{id}", post(edit_login).delete(remove_login))
+        .route("/api/vault/contacts", post(add_contact))
+        .route("/api/vault/contacts/{id}", post(edit_contact).delete(remove_contact))
+        .route("/api/vault/import", post(import_logins))
+        .route("/api/messages/{id}/form", post(submit_form))
         .route("/api/accounts/connect", post(account_connect))
         .route("/api/accounts/finish", post(account_finish))
         .route("/api/accounts/{id}", axum::routing::patch(account_patch).delete(account_remove))
@@ -1842,6 +1848,113 @@ async fn add_secret(State(st): State<Shared>, Json(s): Json<SecretIn>) -> ApiRes
     let settings = st.config.read().await.settings_json();
     st.emit("settings.updated", json!({ "settings": settings }));
     Ok(Json(settings))
+}
+
+/// Save the settings, tell every app, and return them.
+async fn settings_changed(st: &Shared) -> ApiResult<Json<Value>> {
+    st.save_config().await?;
+    let settings = st.config.read().await.settings_json();
+    st.emit("settings.updated", json!({ "settings": settings }));
+    Ok(Json(settings))
+}
+
+fn bot_ids(st: &Shared) -> ApiResult<Vec<String>> {
+    Ok(st.db.list_bots()?.into_iter().map(|b| b.id).collect())
+}
+
+async fn add_login(State(st): State<Shared>, Json(b): Json<crate::logins::LoginIn>) -> ApiResult<Json<Value>> {
+    let known = bot_ids(&st)?;
+    {
+        let mut cfg = st.config.write().await;
+        if cfg.logins.len() >= crate::logins::MAX_LOGINS {
+            return Err(bad("Your vault is full"));
+        }
+        let l = crate::logins::clean_login(b, None, &known).map_err(|e| bad(&e))?;
+        cfg.logins.push(l);
+    }
+    spawn_redact_history(st.clone());
+    settings_changed(&st).await
+}
+
+async fn edit_login(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<crate::logins::LoginIn>) -> ApiResult<Json<Value>> {
+    let known = bot_ids(&st)?;
+    let new_password = !b.password.is_empty();
+    {
+        let mut cfg = st.config.write().await;
+        let i = cfg.logins.iter().position(|l| l.id == id).ok_or_else(|| not_found("No such login"))?;
+        let l = crate::logins::clean_login(b, Some(&cfg.logins[i]), &known).map_err(|e| bad(&e))?;
+        cfg.logins[i] = l;
+    }
+    if new_password {
+        spawn_redact_history(st.clone());
+    }
+    settings_changed(&st).await
+}
+
+async fn remove_login(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    st.config.write().await.logins.retain(|l| l.id != id);
+    settings_changed(&st).await
+}
+
+async fn add_contact(State(st): State<Shared>, Json(c): Json<crate::logins::Contact>) -> ApiResult<Json<Value>> {
+    let known = bot_ids(&st)?;
+    {
+        let mut cfg = st.config.write().await;
+        if cfg.contacts.len() >= crate::logins::MAX_CONTACTS {
+            return Err(bad("You can save at most 50 contact info entries"));
+        }
+        let c = crate::logins::clean_contact(c, None, &known).map_err(|e| bad(&e))?;
+        cfg.contacts.push(c);
+    }
+    settings_changed(&st).await
+}
+
+async fn edit_contact(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(c): Json<crate::logins::Contact>) -> ApiResult<Json<Value>> {
+    let known = bot_ids(&st)?;
+    {
+        let mut cfg = st.config.write().await;
+        let i = cfg.contacts.iter().position(|x| x.id == id).ok_or_else(|| not_found("No such contact info"))?;
+        let c = crate::logins::clean_contact(c, Some(&cfg.contacts[i]), &known).map_err(|e| bad(&e))?;
+        cfg.contacts[i] = c;
+    }
+    settings_changed(&st).await
+}
+
+async fn remove_contact(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    st.config.write().await.contacts.retain(|c| c.id != id);
+    settings_changed(&st).await
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct LoginImport {
+    rows: Vec<crate::logins::ImportRow>,
+    /// false = only check the rows (the preview).
+    apply: bool,
+}
+
+/// Logins from a password manager's CSV export (the app reads the file into rows).
+async fn import_logins(State(st): State<Shared>, Json(b): Json<LoginImport>) -> ApiResult<Json<Value>> {
+    if b.rows.len() > 10_000 {
+        return Err(bad("That file has too many rows"));
+    }
+    let result = {
+        let mut cfg = st.config.write().await;
+        crate::logins::import(&mut cfg, &b.rows, b.apply)
+    };
+    if !b.apply {
+        return Ok(Json(result));
+    }
+    spawn_redact_history(st.clone());
+    let Json(settings) = settings_changed(&st).await?;
+    let mut out = result;
+    out["settings"] = settings;
+    Ok(Json(out))
+}
+
+/// The user filled in (or closed) a secure form card (secure_form.rs).
+async fn submit_form(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<crate::secure_form::Submit>) -> ApiResult<Json<Message>> {
+    Ok(Json(crate::secure_form::submit(&st, &id, b).await.map_err(|e| bad(&e))?))
 }
 
 async fn remove_secret(State(st): State<Shared>, UrlPath(name): UrlPath<String>) -> ApiResult<Json<Value>> {
