@@ -1,6 +1,7 @@
 //! openbot's own tools for bots (served to Claude Code through the `openbot` MCP server in mcp.rs).
 //! They give bots extra abilities: quick-reply buttons, sending files, showing pages,
-//! memory, routines, check-ins, a status line, and setting up or retiring the user's other Bots.
+//! memory, routines, check-ins, a status line, setting up or retiring the user's other Bots, and
+//! email + calendar of connected accounts (accounts.rs).
 
 use std::path::{Path, PathBuf};
 
@@ -174,6 +175,10 @@ pub fn definitions() -> Value {
             "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
         }
     ]);
+    // Email and calendar of the accounts the user connected (accounts.rs).
+    if let Some(a) = list.as_array_mut() {
+        a.extend(crate::accounts::tool_definitions());
+    }
     // Bots get their own screen where this computer can run one (Windows + WSL, or Linux).
     if crate::screen::platform_ok().is_ok() {
         if let Some(a) = list.as_array_mut() {
@@ -314,6 +319,16 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
         }
         return match crate::screen::computer_tool(state, bot_id, name, args).await {
             Ok(o) => ToolResult { text: o.text, is_error: false, image: o.image },
+            Err(e) => ToolResult { text: e, is_error: true, image: None },
+        };
+    }
+    if crate::accounts::is_tool(name) {
+        let bot = match state.db.get_bot(bot_id) {
+            Ok(Some(b)) => b,
+            _ => return ToolResult { text: "this bot no longer exists".into(), is_error: true, image: None },
+        };
+        return match crate::accounts::tool(state, &bot, name, args).await {
+            Ok(t) => ToolResult { text: t, is_error: false, image: None },
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
     }

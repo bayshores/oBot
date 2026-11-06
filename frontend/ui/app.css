@@ -1574,6 +1574,19 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .secret-bot.on { color: var(--text); box-shadow: inset 0 0 0 1.5px var(--text-2); }
 .secret-bot .ico { color: var(--text); }
 .secret-bot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.acct-connects { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 18px 0; }
+.acct-connects + .f-hint { margin: 8px 18px 0; }
+.acct-connect { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px 0 12px; }
+.acct-logo { display: inline-flex; width: 20px; height: 20px; flex: none; }
+.acct-name { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.acct-name > span:not(.acct-logo):not(.chip) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acct-wait-head { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.scope-pick { display: flex; flex-direction: column; align-items: flex-start; }
+.card-well.mail { display: flex; flex-direction: column; gap: 4px; }
+.mail-line { display: flex; gap: 10px; font-size: 13px; line-height: 18px; min-width: 0; }
+.mail-k { flex: none; width: 56px; color: var(--text-3); }
+.mail-v { min-width: 0; overflow-wrap: anywhere; }
+.mail-body { margin-top: 8px; padding-top: 10px; border-top: .5px solid var(--b2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 13px; line-height: 1.5; }
 .bot-inline { display: inline-flex; align-items: center; gap: 10px; }
 .bot-inline .av { width: 24px; height: 24px; }
 .usage-card { padding: 18px 18px 16px; }

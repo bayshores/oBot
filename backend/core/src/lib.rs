@@ -7,6 +7,7 @@
 //! - `config`   settings file (token, auth mode, permissions, vault, ...)
 //! - `security` device pairing, per-device tokens, Origin/Host checks, failed-login limits
 
+pub mod accounts;
 pub mod api;
 pub mod bots;
 pub mod computer;

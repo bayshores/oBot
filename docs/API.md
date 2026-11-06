@@ -99,6 +99,10 @@ Settings = {
                                                      // secrets are passed to the allowed Bots as env vars
   vault_protection: string,                          // how values are saved, e.g. "Encrypted with Windows DPAPI"
   vault_reserved: { names: string[], prefixes: string[] }  // refused secret names (compared ignoring case)
+  accounts: [{ id, provider: "google"|"microsoft", email, name, services: string,
+               bots: string[] | null,                // Bot ids that may use it; null = every Bot
+               added_at, needs_reconnect: boolean }] // Settings › Connections (tokens are never sent)
+  accounts_ready: { google: boolean, microsoft: boolean }  // can this build connect accounts?
   auto_review: boolean,                              // Settings › Permissions › Auto-Review (default true)
   review_ask: string[],   // "Always Ask" plain-language rules (max 20, 1000 chars each; wins over allow)
   review_allow: string[], // "Allow without Asking" rules
@@ -158,6 +162,11 @@ Usage = {
 | GET | /api/settings | – | `Settings` |
 | PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, workspace_root}` (`api_key:""` clears it) | `Settings` |
 | POST | /api/vault | `{name, value, description, bots}`, see below | `Settings` |
+| POST | /api/accounts/connect | `{provider:"google"\|"microsoft", redirect:"http://127.0.0.1:<port>/oauth/callback", reconnect?: account id}` | `{url}`: the sign-in page to open in the browser |
+| POST | /api/accounts/finish | `{state, code}` or `{url}` (the address the browser landed on) | `{ok, email}`; also emits `account.connected` and `settings.updated` |
+| PATCH | /api/accounts/:id | `{bots}` (null = every Bot, else a non-empty list of Bot ids) | `Settings` |
+| DELETE | /api/accounts/:id | – (Google access is also revoked) | `Settings` |
+| GET | /oauth/callback | `?state&code` (no token; a browser page load) | HTML page. Finishes the sign-in here, or passes it to the remote computer from `/api/connection` |
 | DELETE | /api/vault/:name | – | `Settings` |
 | GET | /api/computer | `?refresh=1` re-checks Claude Code now | `Computer` |
 | GET | /api/hello | – (no token) | `{app:"openbot", version, name}`: lets setup recognize an openbot computer |
@@ -204,7 +213,7 @@ Errors: non-2xx with `{error: string}`.
 * `hello {version}`
 * `bot.created {bot}` · `bot.updated {bot}` · `bot.deleted {bot_id}`
 * `message.created {message}` · `message.updated {message}` (streaming text, tool finished, approval decided) · `messages.cleared {bot_id}`
-* `usage.updated {usage}` · `settings.updated {settings}`
+* `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished)
 * `devices.updated` (a device was paired or removed; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
 * `screen.updated {bot_id, running}` (a bot's screen started or stopped)
@@ -220,7 +229,7 @@ Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday 
 
 ## Bot tools (the `openbot` MCP server)
 
-Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they never need approval except `delete_bot`.
+Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they never need approval except `delete_bot` and the email/calendar actions marked below.
 
 | Tool | What it does |
 |---|---|
@@ -235,6 +244,16 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `update_bot {bot, name?, label?, look?, instructions?, add_instructions?}` | change a bot (or itself) |
 | `delete_bot {bot, reason?}` | retire a bot. Always shows an Allow / Deny card and waits, whatever the permission mode. Not the Main Bot, not itself |
 | `set_status {text}` | status line under the bot's name |
+| `list_accounts` | the connected accounts this bot may use (Settings › Connections) |
+| `email_search {account?, query?, max?}` · `email_read {account?, id}` · `email_attachment {account?, id, attachment_id}` | find and read email; save an attachment into the bot's folder (`attachments/`) |
+| `email_send {account?, to[], cc[]?, bcc[]?, subject?, body, reply_to?, attachments[]?, draft?}` | send or reply. Always shows the whole email on an Allow / Deny card and waits (no card for `draft:true`, which only saves a draft) |
+| `email_update {account?, ids[], read?, archive?, star?, trash?, add_labels[]?, remove_labels[]?}` | organize email; `trash` asks first. Labels are Gmail only |
+| `calendar_events {account?, from?, to?, query?, max?}` | events (default the next 7 days) |
+| `calendar_create {account?, title, start, end, all_day?, location?, description?, attendees[]?}` · `calendar_update {account?, id, …}` · `calendar_delete {account?, id}` | change the calendar. Asks first when attendees get notified, and always for delete |
+
+`account` is the account's email address (it can be left out when the bot has only one). Times are the user's
+local time (`2026-11-05T14:00`, the timezone in Settings). Email/calendar approval cards carry
+`meta.input.kind` = `"email"`, `"email-trash"` or `"event"` with the fields the UI previews; they never offer "Always allow".
 
 `bot` arguments take a bot's name (any case) or id. `look` is one of the avatar skins (`violet` … `camo`).
 Actions on other bots leave an `event` message in both chats with `meta {kind, bot_id}`

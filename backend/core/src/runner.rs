@@ -143,6 +143,12 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__openbot__create_bot" => ("working", "Setting up a Bot".into()),
         "mcp__openbot__update_bot" | "mcp__openbot__move_routine" => ("working", "Updating your Bots".into()),
         "mcp__openbot__delete_bot" => ("waiting_for_you", "Waiting for your OK".into()),
+        "mcp__openbot__list_accounts" => ("thinking", "Checking accounts".into()),
+        "mcp__openbot__email_search" | "mcp__openbot__email_read" | "mcp__openbot__email_attachment" => ("reading_file", "Reading email".into()),
+        "mcp__openbot__email_send" => ("working", "Writing an email".into()),
+        "mcp__openbot__email_update" => ("working", "Organizing email".into()),
+        "mcp__openbot__calendar_events" => ("reading_file", "Checking the calendar".into()),
+        n if n.starts_with("mcp__openbot__calendar_") => ("working", "Updating the calendar".into()),
         n if n.starts_with("mcp__openbot__") => ("working", "Working".into()),
         n if n.starts_with("mcp__playwright") || n.contains("browser") => ("browsing", "Browsing the web".into()),
         n if n.starts_with("mcp__computer") => ("on_its_computer", "On its computer".into()),
@@ -271,6 +277,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
             }
         }
     }
+    s.push_str(&crate::accounts::persona(cfg, &bot.id));
     let secrets = crate::vault::for_bot(cfg, &bot.id);
     if !secrets.is_empty() {
         s.push_str("\nSecrets the user saved for you (available as environment variables in your shell; never print their values):\n");

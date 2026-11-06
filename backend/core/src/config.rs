@@ -77,6 +77,10 @@ pub struct Config {
     pub runner: String,
     /// The WSL distro used when runner = "wsl".
     pub wsl_distro: String,
+    /// Connected Google / Microsoft accounts (Settings › Connections).
+    pub accounts: Vec<crate::accounts::Account>,
+    /// Override the built-in Google / Microsoft sign-in apps (for development).
+    pub oauth: crate::accounts::OAuthApps,
 }
 
 impl Default for Config {
@@ -104,6 +108,8 @@ impl Default for Config {
             devices: vec![],
             runner: "native".into(),
             wsl_distro: "Ubuntu".into(),
+            accounts: vec![],
+            oauth: Default::default(),
         }
     }
 }
@@ -175,6 +181,8 @@ impl Config {
             "runner": self.runner,
             "wsl_distro": self.wsl_distro,
             "wsl_available": cfg!(windows),
+            "accounts": self.accounts.iter().map(crate::accounts::view).collect::<Vec<_>>(),
+            "accounts_ready": self.oauth.ready(),
         })
     }
 }

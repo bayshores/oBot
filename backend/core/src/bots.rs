@@ -126,12 +126,19 @@ pub async fn delete(st: &Shared, id: &str) -> Result<(), String> {
     st.queues.lock().await.remove(id);
     st.db.delete_bot(id).map_err(|e| e.to_string())?;
     st.db.delete_routines_of_bot(id).map_err(|e| e.to_string())?;
-    // Take the Bot off any Vault secret that was limited to certain Bots.
+    // Take the Bot off any Vault secret or connected account that was limited to certain Bots.
     let vault_changed = {
         let mut cfg = st.config.write().await;
         let mut changed = false;
         for s in cfg.vault.iter_mut() {
             if let Some(ids) = s.bots.as_mut() {
+                let before = ids.len();
+                ids.retain(|b| b != id);
+                changed |= ids.len() != before;
+            }
+        }
+        for a in cfg.accounts.iter_mut() {
+            if let Some(ids) = a.bots.as_mut() {
                 let before = ids.len();
                 ids.retain(|b| b != id);
                 changed |= ids.len() != before;

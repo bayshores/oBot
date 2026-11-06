@@ -100,6 +100,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     // Hide saved secret values in chats saved before they were in the Vault.
     spawn_redact_history(state.clone());
 
+    crate::accounts::spawn_keep_alive(state.clone());
     crate::routines::spawn_scheduler(state.clone());
     crate::screen::Screens::spawn_reaper(state.clone());
 
@@ -157,6 +158,9 @@ fn router(state: Shared) -> Router {
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/vault", post(add_secret))
         .route("/api/vault/{name}", delete(remove_secret))
+        .route("/api/accounts/connect", post(account_connect))
+        .route("/api/accounts/finish", post(account_finish))
+        .route("/api/accounts/{id}", axum::routing::patch(account_patch).delete(account_remove))
         .route("/api/computer", get(get_computer))
         .route("/api/usage", get(get_usage))
         .route("/api/search", get(search))
@@ -183,6 +187,7 @@ fn router(state: Shared) -> Router {
         .route("/api/pair", post(pair_device))
         // No token needed: lets the setup screen recognize an openbot computer (name + version only).
         .route("/api/hello", get(hello))
+        .route("/oauth/callback", get(oauth_callback))
         .merge(api)
         .layer(cors())
         .layer(middleware::from_fn(guard_origin))
@@ -1699,6 +1704,150 @@ async fn remove_secret(State(st): State<Shared>, UrlPath(name): UrlPath<String>)
     let settings = st.config.read().await.settings_json();
     st.emit("settings.updated", json!({ "settings": settings }));
     Ok(Json(settings))
+}
+
+// ---------------------------------------------------------------- connected accounts
+
+#[derive(Deserialize)]
+struct ConnectIn {
+    provider: String,
+    /// Where the browser comes back to: http://127.0.0.1:<port>/oauth/callback on the device you sign in with.
+    redirect: String,
+    /// Account id when reconnecting.
+    #[serde(default)]
+    reconnect: Option<String>,
+}
+
+async fn account_connect(State(st): State<Shared>, Json(c): Json<ConnectIn>) -> ApiResult<Json<Value>> {
+    let cfg = st.config.read().await;
+    let url = crate::accounts::start_login(&cfg, &c.provider, &c.redirect, c.reconnect).map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "url": url })))
+}
+
+#[derive(Deserialize)]
+struct FinishIn {
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    code: String,
+    /// Or the whole address the browser landed on (pasted by the user).
+    #[serde(default)]
+    url: String,
+}
+
+fn query_param(url: &str, key: &str) -> String {
+    let q = url.split_once('?').map(|x| x.1).unwrap_or(url);
+    let q = q.split('#').next().unwrap_or("");
+    q.split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| percent_decode(v))
+        .unwrap_or_default()
+}
+
+async fn account_finish(State(st): State<Shared>, Json(f): Json<FinishIn>) -> ApiResult<Json<Value>> {
+    let (state, code) = if f.url.trim().is_empty() {
+        (f.state, f.code)
+    } else {
+        let u = f.url.trim();
+        let err = query_param(u, "error");
+        if !err.is_empty() {
+            return Err(bad(&format!("The sign-in was cancelled or refused ({err})")));
+        }
+        (query_param(u, "state"), query_param(u, "code"))
+    };
+    if state.is_empty() || code.is_empty() {
+        return Err(bad("That isn't the address from the end of the sign-in. Copy the whole address from the browser's address bar."));
+    }
+    let email = crate::accounts::finish_login(&st, &state, &code).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "ok": true, "email": email })))
+}
+
+#[derive(Deserialize)]
+struct AccountPatch {
+    /// null = every Bot, else a non-empty list of Bot ids.
+    bots: Option<Vec<String>>,
+}
+
+async fn account_patch(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(p): Json<AccountPatch>) -> ApiResult<Json<Value>> {
+    let bots = match p.bots {
+        None => None,
+        Some(ids) => {
+            let known: Vec<String> = st.db.list_bots()?.into_iter().map(|b| b.id).collect();
+            let mut ids: Vec<String> = ids.into_iter().filter(|i| known.contains(i)).collect();
+            ids.dedup();
+            if ids.is_empty() {
+                return Err(bad("Pick at least one Bot, or choose All Bots"));
+            }
+            Some(ids)
+        }
+    };
+    {
+        let mut cfg = st.config.write().await;
+        let a = cfg.accounts.iter_mut().find(|a| a.id == id).ok_or_else(|| not_found("No such account"))?;
+        a.bots = bots;
+    }
+    st.save_config().await?;
+    let settings = st.config.read().await.settings_json();
+    st.emit("settings.updated", json!({ "settings": settings }));
+    Ok(Json(settings))
+}
+
+async fn account_remove(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    crate::accounts::remove(&st, &id).await.map_err(|e| bad(&e))?;
+    let settings = st.config.read().await.settings_json();
+    st.emit("settings.updated", json!({ "settings": settings }));
+    Ok(Json(settings))
+}
+
+/// Where the browser lands after signing in to Google / Microsoft (no token: it's a plain page
+/// load). If this server started the sign-in it finishes it; otherwise, when the app is connected
+/// to another computer, it passes the code on to that computer, which started it.
+async fn oauth_callback(State(st): State<Shared>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let page = |ok: bool, text: &str| axum::response::Html(crate::accounts::landing_page(ok, text)).into_response();
+    let state = q.get("state").cloned().unwrap_or_default();
+    let code = q.get("code").cloned().unwrap_or_default();
+    if let Some(err) = q.get("error") {
+        let detail = q.get("error_description").cloned().unwrap_or_default();
+        let why = if err == "access_denied" { "The sign-in was cancelled.".to_string() } else { format!("{err} {detail}") };
+        return page(false, &format!("{} You can close this tab and try again in openbot.", why.trim()));
+    }
+    if state.is_empty() || code.is_empty() {
+        return page(false, "This page is only used at the end of signing in to an account.");
+    }
+    if crate::accounts::is_pending(&state) {
+        return match crate::accounts::finish_login(&st, &state, &code).await {
+            Ok(email) => page(true, &format!("{email} is connected. You can close this tab and go back to openbot.")),
+            Err(e) => page(false, &e),
+        };
+    }
+    let conn = st.config.read().await.connection.clone();
+    if conn.mode != "remote" || conn.url.trim().is_empty() {
+        return page(false, "This sign-in expired or was already used. Start again from Settings › Connections.");
+    }
+    let url = format!("{}/api/accounts/finish", conn.url.trim().trim_end_matches('/'));
+    let token = conn.token.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .post(&url)
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_json(json!({ "state": state, "code": code }))
+    })
+    .await;
+    match res {
+        Ok(Ok(r)) => {
+            let v: Value = r.into_json().unwrap_or(Value::Null);
+            let email = v.get("email").and_then(Value::as_str).unwrap_or("The account");
+            page(true, &format!("{email} is connected. You can close this tab and go back to openbot."))
+        }
+        Ok(Err(ureq::Error::Status(_, r))) => {
+            let v: Value = r.into_json().unwrap_or(Value::Null);
+            page(false, v.get("error").and_then(Value::as_str).unwrap_or("The other computer couldn't finish the sign-in."))
+        }
+        _ => page(false, "Couldn't reach the computer your Bots run on. Check that it's online and try again."),
+    }
 }
 
 // ---------------------------------------------------------------- misc

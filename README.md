@@ -165,6 +165,15 @@ Secrets (API keys, tokens) your Bots can use in commands as environment variable
 * If the key can't be read (for example `vault.key` was deleted), the values stay saved but **Locked**:
   no Bot gets them, and Settings › Vault asks you to enter them again.
 
+## Connections (Settings › Connections)
+
+Connect Gmail / Google Calendar or Outlook mail / calendar, as many accounts as you like, and pick
+which Bots can use each one. You sign in once: openbot keeps the sign-in (encrypted) on the computer
+your Bots run on and renews it by itself. Bots can search and read email, save attachments, send and
+reply, organize (read, archive, star, labels, trash) and manage calendar events. Sending, inviting
+people and deleting always show you an Allow / Deny card first. Setting up the Google and Microsoft
+sign-in apps for a build: [docs/connections-setup.md](docs/connections-setup.md).
+
 ## Building Windows/Mac installers automatically
 
 Push this folder to a GitHub repository. `.github/workflows/build.yml` builds `openbot-server.exe`,

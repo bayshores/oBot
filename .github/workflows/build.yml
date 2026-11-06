@@ -13,6 +13,12 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # The Google / Microsoft sign-in apps for Settings › Connections (repository secrets,
+      # see docs/connections-setup.md). Builds without them just can't connect accounts.
+      OPENBOT_GOOGLE_CLIENT_ID: ${{ secrets.OPENBOT_GOOGLE_CLIENT_ID }}
+      OPENBOT_GOOGLE_CLIENT_SECRET: ${{ secrets.OPENBOT_GOOGLE_CLIENT_SECRET }}
+      OPENBOT_MICROSOFT_CLIENT_ID: ${{ secrets.OPENBOT_MICROSOFT_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

@@ -156,6 +156,9 @@
     sparkle: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
     external: '<path d="M9 15L18 6M10.5 6H18v7.5"/><path d="M18 16.5V18a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h1.5"/>',
     reset: '<path d="M4 12a8 8 0 108-8 8.3 8.3 0 00-6 2.6L4 8.5"/><path d="M4 4v4.5h4.5"/>',
+    mail: '<rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/><path d="M4 7.5l8 5.5 8-5.5"/>',
+    calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+    plug: '<path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 01-10 0zM12 16v5"/>',
     link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',
     image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.8"/><path d="M20.5 16l-5-5-9 8.5"/>',
     lock: '<rect x="5" y="11" width="14" height="10" rx="2.2"/><path d="M8 11V8a4 4 0 018 0v3"/>',
@@ -1100,6 +1103,13 @@
       case 'settings.updated':
         S.settings = e.settings;
         if (S.settingsUI) rerenderSettings();
+        break;
+      case 'account.connected':
+        if (S.settingsUI && S.settingsUI.connect) {
+          S.settingsUI.connect = null;
+          rerenderSettings(true);
+        }
+        toast(`${e.email} is connected`);
         break;
       case 'devices.updated':
         if (S.devicesUI) {
@@ -2607,6 +2617,11 @@
     WebFetch: ['globe', 'Web', 'open a web page'],
     WebSearch: ['globe', 'Web', 'search the web'],
     mcp__openbot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
+    mcp__openbot__email_send: ['mail', 'Email', 'send an email'],
+    mcp__openbot__email_update: ['trash', 'Email', 'move email to the trash'],
+    mcp__openbot__calendar_create: ['calendar', 'Calendar', 'add an event and invite people'],
+    mcp__openbot__calendar_update: ['calendar', 'Calendar', 'change an event'],
+    mcp__openbot__calendar_delete: ['calendar', 'Calendar', 'delete an event'],
   };
   // Approval card (settings-and-bots.md 2.3.1)
   const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
@@ -2615,6 +2630,26 @@
     const keep = Math.floor((max - 30) / 2);
     const omitted = text.length - keep * 2;
     return text.slice(0, keep) + `...[${omitted} chars omitted]...` + text.slice(text.length - keep);
+  }
+  // What an email / calendar change looks like, on its approval card.
+  function approvalPreview(x) {
+    const line = (k, v) => (v && (!Array.isArray(v) || v.length) ? h('div', { class: 'mail-line' }, h('span', { class: 'mail-k' }, k), h('span', { class: 'mail-v' }, Array.isArray(v) ? v.join(', ') : v)) : null);
+    if (x.kind === 'email')
+      return h(
+        'div',
+        { class: 'card-well mail' },
+        line('From', x.account),
+        line('To', x.to),
+        line('Cc', x.cc),
+        line('Bcc', x.bcc),
+        line('Subject', x.subject),
+        line('Files', x.attachments),
+        h('div', { class: 'mail-body' }, x.body || '')
+      );
+    if (x.kind === 'email-trash') return h('div', { class: 'card-well mail' }, line('Account', x.account), ...(x.subjects || []).map((t) => h('div', { class: 'mail-line' }, h('span', { class: 'mail-v' }, t))));
+    if (x.kind === 'event')
+      return h('div', { class: 'card-well mail' }, line('Calendar', x.account), line('Event', x.title), line('When', x.when), line('Where', x.location), line('Guests', x.attendees), x.description ? h('div', { class: 'mail-body' }, x.description) : null);
+    return null;
   }
   function approvalCard(m) {
     const meta = m.meta || {};
@@ -2633,6 +2668,10 @@
       const v = input.command || input.file_path || input.notebook_path || input.url || input.query || input.pattern || null;
       if (typeof v === 'string') well = h('div', { class: 'card-well mono' }, v.length > 340 ? cutMiddle(v) : v);
       full = typeof v === 'string' && Object.keys(input).length === 1 ? v : JSON.stringify(input, null, 2);
+    }
+    if (input && input.kind) {
+      well = approvalPreview(input);
+      full = '';
     }
     if (!well && (meta.summary || m.text)) well = h('div', { class: 'card-well' }, meta.summary || m.text);
     const reason = (meta.reason || '').trim();
@@ -4171,6 +4210,7 @@
     ['computer', 'Computer', 'monitor'],
     ['permissions', 'Permissions', 'shield'],
     ['vault', 'Vault', 'vault'],
+    ['connections', 'Connections', 'plug'],
     ['usage', 'Usage & Billing', 'bars'],
     ['updates', 'Updates', 'updates'],
   ];
@@ -4263,7 +4303,7 @@
     ui.body.textContent = '';
     const tabDef = TABS.find((t) => t[0] === ui.tab) || TABS[0];
     ui.body.append(h('h1', { class: 'set-title' }, tabDef[1]));
-    const render = { general: tabGeneral, computer: tabComputer, permissions: tabPermissions, vault: tabVault, usage: tabUsage, updates: tabUpdates }[tabDef[0]];
+    const render = { general: tabGeneral, computer: tabComputer, permissions: tabPermissions, vault: tabVault, connections: tabConnections, usage: tabUsage, updates: tabUpdates }[tabDef[0]];
     try {
       ui.body.append(render());
     } catch (e) {
@@ -5334,14 +5374,6 @@
     if (p) return `Names starting with ${p} are reserved: Claude Code or the computer uses them. Pick another name.`;
     return '';
   }
-  // "All Bots", "Food Bot and Mail Bot", "No Bots"
-  function secretAccessText(v) {
-    if (!v.bots) return 'All Bots can use it';
-    const names = v.bots.map((id) => S.bots.get(id)).filter(Boolean).map((b) => b.name);
-    if (!names.length) return 'No Bots can use it. Use Edit to pick some.';
-    const list = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
-    return 'Only ' + list + ' can use it';
-  }
   function secretValueProblem(v) {
     if (!v) return 'Paste the secret';
     if (v.length < 8) return 'Too short. Minimum length is 8.';
@@ -5384,7 +5416,7 @@
               'span',
               null,
               v.description ? h('span', { class: 'secret-desc' }, v.description) : null,
-              h('span', { class: 'secret-access' }, secretAccessText(v)),
+              h('span', { class: 'secret-access' }, scopeText(v.bots, 'Edit')),
               v.locked && h('span', { class: 'secret-problem' }, 'This value can’t be unlocked on this computer, so no Bot gets it. Use Edit to enter it again.'),
               v.name_problem && h('span', { class: 'secret-problem' }, v.name_problem + ' Bots don’t get it until you remove it and add it under another name.')
             )
@@ -5419,37 +5451,7 @@
     // Which Bots can use it: null = all, else a list of Bot ids.
     if (!('bots' in form)) form.bots = existing && existing.bots ? existing.bots.slice() : null;
     const botsErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
-    const botList = h('div', { class: 'secret-bots', role: 'group', 'aria-label': 'Bots that can use this secret' });
-    const drawBots = () => {
-      botList.hidden = form.bots === null;
-      botList.replaceChildren(
-        ...orderedBots().map((b) => {
-          const on = form.bots !== null && form.bots.includes(b.id);
-          return h(
-            'button',
-            {
-              type: 'button',
-              class: 'secret-bot' + (on ? ' on' : ''),
-              'aria-pressed': on ? 'true' : 'false',
-              onclick: () => {
-                form.bots = on ? form.bots.filter((x) => x !== b.id) : [...form.bots, b.id];
-                botsErr.hidden = true;
-                drawBots();
-              },
-            },
-            avatar(b, 20),
-            h('span', null, b.name),
-            on ? icon('check', 14) : null
-          );
-        })
-      );
-    };
-    const scopeSel = selectEl(form.bots === null ? 'all' : 'some', [['all', 'All Bots'], ['some', 'Only the Bots I pick']], (v) => {
-      form.bots = v === 'all' ? null : form.bots || [];
-      botsErr.hidden = true;
-      drawBots();
-    });
-    drawBots();
+    const picker = botScopePicker(form, () => (botsErr.hidden = true));
     const nameErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
     const valErr = h('div', { class: 'f-err', role: 'alert', hidden: true });
     nameIn.addEventListener('input', () => {
@@ -5511,11 +5513,220 @@
       valIn,
       valErr,
       h('label', { class: 'f-label' }, 'Which Bots can use it'),
-      scopeSel,
-      botList,
+      picker,
       botsErr,
       h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(existing ? 'Save' : 'Add secret', save, 'primary'))
     );
+  }
+
+  // ── Connections: Google and Microsoft accounts (accounts.rs) ──
+  const PROVIDER_LOGO = {
+    google:
+      '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M22.6 12.3c0-.8-.1-1.5-.2-2.3H12v4.3h5.9a5 5 0 01-2.2 3.3v2.8h3.6c2.1-1.9 3.3-4.8 3.3-8.1z"/><path fill="#34A853" d="M12 23c3 0 5.5-1 7.3-2.7l-3.6-2.8c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.1v2.9A11 11 0 0012 23z"/><path fill="#FBBC05" d="M5.8 14.1a6.6 6.6 0 010-4.2V7H2.1a11 11 0 000 10z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 002.1 7l3.7 2.9C6.7 7.3 9.1 5.4 12 5.4z"/></svg>',
+    microsoft:
+      '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#F25022" d="M2 2h9.5v9.5H2z"/><path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z"/><path fill="#00A4EF" d="M2 12.5h9.5V22H2z"/><path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z"/></svg>',
+  };
+  const PROVIDER_NAME = { google: 'Google', microsoft: 'Microsoft' };
+  function providerLogo(p) {
+    const el = h('span', { class: 'acct-logo' });
+    el.innerHTML = PROVIDER_LOGO[p] || '';
+    return el;
+  }
+  // Where the browser comes back after signing in: this device's own openbot (the desktop app's
+  // local server), which passes it on to the computer your Bots run on.
+  function signInReturn() {
+    const local = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
+    return local ? location.origin + '/oauth/callback' : null;
+  }
+  async function connectAccount(provider, reconnect) {
+    const ui = S.settingsUI;
+    const back = signInReturn() || 'http://127.0.0.1:1/oauth/callback';
+    try {
+      const r = await api('/api/accounts/connect', { method: 'POST', body: { provider, redirect: back, reconnect: reconnect || null } });
+      ui.connect = { provider, reconnect: reconnect || null, url: r.url, paste: '', manual: !signInReturn(), err: '' };
+      openExternal(r.url);
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    rerenderSettings(true);
+  }
+  // "All Bots can use it", "Only Food Bot and Mail Bot can use it". button = where to change it.
+  function scopeText(bots, button) {
+    if (!bots) return 'All Bots can use it';
+    const names = bots.map((id) => S.bots.get(id)).filter(Boolean).map((b) => b.name);
+    if (!names.length) return `No Bots can use it. Use ${button} to pick some.`;
+    const list = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+    return `Only ${list} can use it`;
+  }
+  // Shared "All Bots / Only the Bots I pick" picker. st.bots: null = all, else ids.
+  function botScopePicker(st, onChange) {
+    const wrap = h('div', { class: 'scope-pick' });
+    const list = h('div', { class: 'secret-bots', role: 'group', 'aria-label': 'Bots that can use it' });
+    const draw = () => {
+      list.hidden = st.bots === null;
+      list.replaceChildren(
+        ...orderedBots().map((b) => {
+          const on = st.bots !== null && st.bots.includes(b.id);
+          return h(
+            'button',
+            {
+              type: 'button',
+              class: 'secret-bot' + (on ? ' on' : ''),
+              'aria-pressed': on ? 'true' : 'false',
+              onclick: () => {
+                st.bots = on ? st.bots.filter((x) => x !== b.id) : [...st.bots, b.id];
+                draw();
+                onChange && onChange();
+              },
+            },
+            avatar(b, 20),
+            h('span', null, b.name),
+            on ? icon('check', 14) : null
+          );
+        })
+      );
+    };
+    const sel = selectEl(st.bots === null ? 'all' : 'some', [['all', 'All Bots'], ['some', 'Only the Bots I pick']], (v) => {
+      st.bots = v === 'all' ? null : st.bots || [];
+      draw();
+      onChange && onChange();
+    });
+    draw();
+    wrap.append(sel, list);
+    return wrap;
+  }
+  function tabConnections() {
+    const s = S.settings;
+    if (!s) return notConnected();
+    const ui = S.settingsUI;
+    const ready = s.accounts_ready || {};
+    const accounts = s.accounts || [];
+    const out = h('div');
+    const busy = !!ui.connect || !!ui.acctEdit;
+    const connectBtn = (p) =>
+      h('button', { class: 'btn pill acct-connect', disabled: busy || !ready[p], onclick: () => connectAccount(p) }, providerLogo(p), h('span', null, p === 'google' ? 'Connect Google' : 'Connect Microsoft'));
+    out.append(
+      h(
+        'div',
+        { class: 'set-section' },
+        h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Email and calendar'), h('div', { class: 'set-explain' }, 'Connect Gmail or Outlook so your Bots can read, write and organize email and manage your calendar. You sign in once and stay connected.'))),
+        h('div', { class: 'acct-connects' }, connectBtn('google'), connectBtn('microsoft')),
+        !ready.google || !ready.microsoft ? h('div', { class: 'f-hint' }, `${[!ready.google && 'Google', !ready.microsoft && 'Microsoft'].filter(Boolean).join(' and ')} sign-in isn’t set up in this version of openbot yet.`) : null
+      )
+    );
+    if (ui.connect) out.append(connectingCard(ui.connect));
+    const rows = accounts.map((a) => {
+      if (ui.acctEdit && ui.acctEdit.id === a.id) return accountScopeForm(a);
+      return row(
+        h('span', { class: 'acct-name' }, providerLogo(a.provider), h('span', null, a.email), a.needs_reconnect && h('span', { class: 'chip warn' }, 'Signed out')),
+        h(
+          'div',
+          { class: 'secret-ctl' },
+          a.needs_reconnect && pillBtn('Reconnect', () => connectAccount(a.provider, a.id), { disabled: busy }),
+          pillBtn('Bots', () => ((ui.acctEdit = { id: a.id, bots: a.bots ? a.bots.slice() : null }), rerenderSettings(true)), { disabled: busy, 'aria-label': `Which Bots can use ${a.email}` }),
+          pillBtn('Remove', () => removeAccount(a), { disabled: busy, 'aria-label': `Remove ${a.email}` })
+        ),
+        h(
+          'span',
+          null,
+          h('span', { class: 'secret-desc' }, a.services),
+          h('span', { class: 'secret-access' }, scopeText(a.bots, 'Bots')),
+          a.needs_reconnect && h('span', { class: 'secret-problem' }, `${PROVIDER_NAME[a.provider]} stopped accepting openbot’s sign-in (for example after a password change). Click Reconnect and sign in again.`)
+        )
+      );
+    });
+    out.append(h('div', { class: 'set-section' }, h('div', { class: 'set-label' }, 'Connected accounts'), rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No accounts connected yet'))));
+    out.append(note('Sending email, inviting people to events and deleting always ask you first with an Allow / Deny card. openbot keeps the sign-in encrypted on the computer your Bots run on.'));
+    return out;
+  }
+  function connectingCard(c) {
+    const ui = S.settingsUI;
+    const name = PROVIDER_NAME[c.provider];
+    const pasteIn = h('input', { class: 'field mono', value: c.paste || '', placeholder: 'http://127.0.0.1:…/oauth/callback?state=…&code=…', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Address from the browser' });
+    const err = h('div', { class: 'f-err', role: 'alert', hidden: !c.err }, c.err || '');
+    pasteIn.addEventListener('input', () => ((c.paste = pasteIn.value), (err.hidden = true)));
+    const finish = async (e) => {
+      const url = pasteIn.value.trim();
+      if (!url) return pasteIn.focus();
+      e.currentTarget.disabled = true;
+      try {
+        const r = await api('/api/accounts/finish', { method: 'POST', body: { url } });
+        ui.connect = null;
+        toast(`${r.email} is connected`);
+      } catch (x) {
+        c.err = x.message;
+        e.currentTarget.disabled = false;
+        err.textContent = x.message;
+        err.hidden = false;
+        return;
+      }
+      rerenderSettings(true);
+    };
+    return h(
+      'div',
+      { class: 'set-section' },
+      card(
+        h(
+          'div',
+          { class: 'set-row stack acct-wait' },
+          h('div', { class: 'acct-wait-head' }, spinner('xs'), h('span', null, `Sign in to ${name} in your browser`)),
+          h('div', { class: 'f-hint' }, c.manual ? 'When you finish, the browser shows an error page. That’s expected: copy the whole address from its address bar and paste it below.' : `Choose your account and allow access. This page updates by itself when you’re done.`),
+          h('label', { class: 'f-label' }, c.manual ? 'Address from the browser' : 'Didn’t come back? Paste the address from your browser’s address bar'),
+          pasteIn,
+          err,
+          h(
+            'div',
+            { class: 'row-actions' },
+            btn('Open sign-in again', () => openExternal(c.url)),
+            btn('Cancel', () => ((ui.connect = null), rerenderSettings(true))),
+            btn('Finish', finish, 'primary')
+          )
+        )
+      )
+    );
+  }
+  function accountScopeForm(a) {
+    const ui = S.settingsUI;
+    const ed = ui.acctEdit;
+    const err = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    const save = async (e) => {
+      if (ed.bots !== null && !ed.bots.length) {
+        err.textContent = 'Pick at least one Bot, or choose All Bots';
+        err.hidden = false;
+        return;
+      }
+      e.currentTarget.disabled = true;
+      try {
+        S.settings = await api('/api/accounts/' + encodeURIComponent(a.id), { method: 'PATCH', body: { bots: ed.bots } });
+        ui.acctEdit = null;
+      } catch (x) {
+        e.currentTarget.disabled = false;
+        err.textContent = x.message;
+        err.hidden = false;
+        return;
+      }
+      rerenderSettings(true);
+    };
+    return h(
+      'div',
+      { class: 'set-row stack secret-form' },
+      h('div', { class: 'acct-name' }, providerLogo(a.provider), h('span', null, a.email)),
+      h('label', { class: 'f-label' }, 'Which Bots can use it'),
+      botScopePicker(ed, () => (err.hidden = true)),
+      err,
+      h('div', { class: 'row-actions' }, btn('Cancel', () => ((ui.acctEdit = null), rerenderSettings(true))), btn('Save', save, 'primary'))
+    );
+  }
+  async function removeAccount(a) {
+    const ok = await confirmDialog({ title: `Remove ${a.email}?`, body: 'Bots can no longer use this account. openbot signs out of it and forgets the sign-in.', confirmText: 'Remove', danger: true });
+    if (!ok) return;
+    try {
+      S.settings = await api('/api/accounts/' + encodeURIComponent(a.id), { method: 'DELETE' });
+    } catch (e) {
+      fail(e);
+    }
+    rerenderSettings(true);
   }
 
   // ── Usage & Billing (1.4 / 6) ──
