@@ -56,12 +56,28 @@ ob_killgroup() {
   for i in $(seq 60); do kill -0 -- -"$1" 2>/dev/null || return 0; sleep 0.1; done
   kill -KILL -- -"$1" 2>/dev/null; sleep 0.2
 }
+# Turn on "Continue where you left off". Without it Chrome deletes session cookies (which most
+# school/work sign-ins use) every time it starts, so the bot was logged out after each restart.
+ob_keep_logins() {
+  local pf="$OBPROF/Default/Preferences"; mkdir -p "$OBPROF/Default"
+  [ -s "$pf" ] || { echo '{"session":{"restore_on_startup":1}}' >"$pf"; return 0; }
+  command -v python3 >/dev/null || return 0
+  python3 - "$pf" <<'PY' 2>/dev/null || true
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+if d.get("session", {}).get("restore_on_startup") != 1:
+    d.setdefault("session", {})["restore_on_startup"] = 1
+    json.dump(d, open(p, "w"), separators=(",", ":"))
+PY
+}
 # Open a URL in the bot's browser (starts it if needed; otherwise a new tab).
 ob_browser() {
   [ -n "$B" ] || { echo "No browser is installed for the screen" >&2; return 1; }
   if ! pgrep -f -- "--user-data-dir=$OBPROF" >/dev/null; then
     rm -f "$OBPROF"/Singleton* 2>/dev/null
     [ -f "$OBPROF/Default/Preferences" ] && sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/; s/"exited_cleanly":false/"exited_cleanly":true/' "$OBPROF/Default/Preferences"
+    ob_keep_logins
   fi
   setsid -f "$B" --user-data-dir="$OBPROF" --no-first-run --no-default-browser-check --disable-dev-shm-usage \
     --hide-crash-restore-bubble --password-store=basic --disable-features=Translate \
