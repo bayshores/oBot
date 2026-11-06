@@ -589,6 +589,10 @@ struct Turn {
     /// messages currently streaming in
     live: HashMap<String, (Message, bool /*saved*/, Instant /*last emit*/)>,
     streamed_api_msgs: HashSet<String>,
+    /// Text Claude Code made up itself (model "<synthetic>"), e.g. "You've hit your weekly limit".
+    /// Held back until the run's result: an error result shows the same text as an error, so
+    /// showing it as a Bot reply too would print it twice.
+    synthetic: Vec<String>,
     /// tool_use_id -> tool message
     tools: HashMap<String, Message>,
     got_result: bool,
@@ -653,6 +657,7 @@ impl Turn {
             blocks: HashMap::new(),
             live: HashMap::new(),
             streamed_api_msgs: HashSet::new(),
+            synthetic: Vec::new(),
             tools: HashMap::new(),
             got_result: false,
             resume_failed: false,
@@ -788,9 +793,28 @@ impl Turn {
         }
     }
 
+    /// Show a finished Bot reply that wasn't streamed live.
+    fn add_bot_text(&mut self, text: &str) {
+        let m = self.new_msg("bot", text, "done", json!({}));
+        let _ = self.state.db.upsert_message(&m);
+        self.state.emit_message(true, &m);
+        let st = self.state.clone();
+        let (bid, t) = (self.bot_id.clone(), m.text.clone());
+        tokio::spawn(async move {
+            if let Ok(Some(mut bot)) = st.db.get_bot(&bid) {
+                bot.last_preview = preview(&t);
+                bot.updated_at = now_ms();
+                bot.unread += 1;
+                let _ = st.db.upsert_bot(&bot);
+                st.emit_bot(&bid).await;
+            }
+        });
+    }
+
     fn assistant(&mut self, msg: &Value) {
         let api_id = msg.get("id").and_then(Value::as_str).unwrap_or("").to_string();
         let Some(blocks) = msg.get("content").and_then(Value::as_array) else { return };
+        let synthetic = msg.get("model").and_then(Value::as_str) == Some("<synthetic>");
         for b in blocks {
             match b.get("type").and_then(Value::as_str).unwrap_or("") {
                 "text" => {
@@ -802,20 +826,11 @@ impl Turn {
                     if text.is_empty() {
                         continue;
                     }
-                    let m = self.new_msg("bot", text, "done", json!({}));
-                    let _ = self.state.db.upsert_message(&m);
-                    self.state.emit_message(true, &m);
-                    let st = self.state.clone();
-                    let (bid, t) = (self.bot_id.clone(), m.text.clone());
-                    tokio::spawn(async move {
-                        if let Ok(Some(mut bot)) = st.db.get_bot(&bid) {
-                            bot.last_preview = preview(&t);
-                            bot.updated_at = now_ms();
-                            bot.unread += 1;
-                            let _ = st.db.upsert_bot(&bot);
-                            st.emit_bot(&bid).await;
-                        }
-                    });
+                    if synthetic {
+                        self.synthetic.push(text.to_string());
+                        continue;
+                    }
+                    self.add_bot_text(text);
                 }
                 "tool_use" => {
                     let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_string();
@@ -892,6 +907,12 @@ impl Turn {
 
         let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false)
             || v.get("subtype").and_then(Value::as_str).map_or(false, |s| s != "success");
+        // On an error the same text is shown once, as the error below.
+        for t in std::mem::take(&mut self.synthetic) {
+            if !is_error {
+                self.add_bot_text(&t);
+            }
+        }
         if is_error {
             let mut text = v
                 .get("result")
@@ -934,6 +955,11 @@ impl Turn {
     }
 
     async fn finish(&mut self, stopped: bool, success: bool, stderr: &str) {
+        if !self.got_result {
+            for t in std::mem::take(&mut self.synthetic) {
+                self.add_bot_text(&t);
+            }
+        }
         let ids: Vec<String> = self.live.keys().cloned().collect();
         for id in ids {
             self.finalize(&id).await;
