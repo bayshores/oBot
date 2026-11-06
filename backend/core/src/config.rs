@@ -7,6 +7,12 @@ use serde_json::{json, Value};
 
 use crate::util::{hint, random_token};
 
+/// The model Bots use unless Settings or the Bot says otherwise.
+pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
+/// Claude Code's effort level unless Settings says otherwise.
+pub const DEFAULT_EFFORT: &str = "xhigh";
+pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Secret {
     pub name: String,
@@ -51,8 +57,11 @@ pub struct Config {
     /// "ask" | "auto" | "accept_edits" | "allow_all"
     pub permission_mode: String,
     pub allow_rules: Vec<String>,
-    /// "" | "opus" | "sonnet" | "haiku"
+    /// Model for every Bot that doesn't pick its own: a full model name or an alias ("opus",
+    /// "sonnet", "haiku", "fable"). "" = DEFAULT_MODEL.
     pub default_model: String,
+    /// Claude Code effort level for every run: "low" | "medium" | "high" | "xhigh" | "max".
+    pub effort: String,
     /// Folder that holds one sub-folder per bot.
     pub workspace_root: String,
     pub vault: Vec<Secret>,
@@ -95,6 +104,7 @@ impl Default for Config {
             permission_mode: "ask".into(),
             allow_rules: vec![],
             default_model: String::new(),
+            effort: DEFAULT_EFFORT.into(),
             workspace_root: root.to_string_lossy().into_owned(),
             vault: vec![],
             connection: Connection::default(),
@@ -164,6 +174,8 @@ impl Config {
             "permission_mode": self.permission_mode,
             "allow_rules": self.allow_rules,
             "default_model": self.default_model,
+            "model_default": DEFAULT_MODEL,
+            "effort": self.effort,
             "workspace_root": self.workspace_root,
             "vault": self.vault.iter().map(|s| {
                 let locked = crate::vault::is_locked(&s.value);

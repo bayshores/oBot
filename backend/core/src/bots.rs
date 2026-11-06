@@ -122,6 +122,7 @@ pub async fn delete(st: &Shared, id: &str) -> Result<(), String> {
         return Err("Your Main Bot can't be deleted. Make another Bot your Main Bot first.".into());
     }
     crate::runner::stop(st, id).await;
+    crate::jobs::stop_for_bot(st, id);
     st.screens.stop(st, id).await;
     st.queues.lock().await.remove(id);
     st.db.delete_bot(id).map_err(|e| e.to_string())?;

@@ -60,6 +60,10 @@ fn main() -> anyhow::Result<()> {
     if args.get(1).map(String::as_str) == Some("mcp-approve") {
         return openbot_core::mcp::run_approval_mcp();
     }
+    // ...and with `hook <event>` at certain moments of a run (see hooks.rs).
+    if args.get(1).map(String::as_str) == Some("hook") {
+        std::process::exit(openbot_core::hooks::run(&args[2..]));
+    }
 
     let mut port: u16 = 7777;
     let mut host = "127.0.0.1".to_string();

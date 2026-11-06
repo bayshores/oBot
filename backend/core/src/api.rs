@@ -102,6 +102,12 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
 
     crate::accounts::spawn_keep_alive(state.clone());
     crate::routines::spawn_scheduler(state.clone());
+    crate::memory_tidy::spawn(state.clone());
+    runner::recover_queued(&state);
+    {
+        let st = state.clone();
+        tokio::spawn(async move { crate::jobs::recover(&st).await });
+    }
     crate::screen::Screens::spawn_reaper(state.clone());
 
     let app = router(state.clone());
@@ -126,6 +132,10 @@ fn router(state: Shared) -> Router {
         .route("/api/bots/{id}/unread", post(unread_bot))
         .route("/api/bots/{id}/messages", get(list_messages).post(send_message))
         .route("/api/bots/{id}/stop", post(stop_bot))
+        .route("/api/bots/{id}/steer", post(steer_bot))
+        .route("/api/bots/{id}/retry", post(retry_bot))
+        .route("/api/bots/{id}/new-conversation", post(new_conversation))
+        .route("/api/bots/{id}/rollback", post(rollback_bot))
         .route(
             "/api/bots/{id}/upload",
             post(upload).layer(DefaultBodyLimit::max(512 * 1024 * 1024)),
@@ -798,7 +808,18 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody) -> ApiResult<Mess
     st.db.upsert_message(&m)?;
     st.emit_message(true, &m);
 
-    let mut prompt = text.clone();
+    let mut prompt = String::new();
+    // After "Edit and resend", the withdrawn message may still be in Claude Code's conversation.
+    if let Some(old) = st.db.kv_get(&format!("withdrawn:{id}")) {
+        st.db.kv_set(&format!("withdrawn:{id}"), "");
+        if !old.is_empty() {
+            prompt.push_str(&format!(
+                "[openbot: The user withdrew their previous message (it failed) and sent the one below instead. Ignore the withdrawn one: \"{}\"]\n",
+                crate::util::truncate_chars(&old, 300)
+            ));
+        }
+    }
+    prompt.push_str(&text);
     let files: Vec<String> = b
         .attachments
         .iter()
@@ -817,8 +838,72 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody) -> ApiResult<Mess
     st.db.upsert_bot(&bot)?;
     st.emit_bot(&id).await;
 
-    runner::enqueue(&st, &id, prompt).await;
-    Ok(m)
+    runner::enqueue_user(&st, &id, prompt, &m.id).await;
+    // Fresh from the database: if the bot is busy it's marked "Queued" (with a "Send now" button),
+    // and the bot may already have picked it up again.
+    Ok(st.db.get_message(&m.id)?.unwrap_or(m))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct SteerBody {
+    message_id: String,
+}
+
+/// "Send now" on a queued message: stop the current turn and send the waiting messages.
+async fn steer_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<SteerBody>) -> ApiResult<Json<Value>> {
+    get_bot(&st, &id).await?;
+    Ok(Json(json!({ "ok": runner::steer(&st, &id, &b.message_id).await })))
+}
+
+/// "Try again" on an error card.
+async fn retry_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    get_bot(&st, &id).await?;
+    runner::retry(&st, &id).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// "New conversation": Claude Code starts over; memory, files, routines and the chat stay.
+async fn new_conversation(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    get_bot(&st, &id).await?;
+    runner::stop(&st, &id).await;
+    // Wait for a stopping run to finish, so it can't save its old conversation id afterwards.
+    for _ in 0..100 {
+        if !st.runs.lock().await.contains_key(&id) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let mut bot = get_bot(&st, &id).await?;
+    bot.session_id.clear();
+    st.db.upsert_bot(&bot)?;
+    runner::add_event(
+        &st,
+        &id,
+        "Started a new conversation. The Bot's memory, files, routines and settings are kept.",
+        json!({"kind": "conversation-reset"}),
+    );
+    st.emit_bot(&id).await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// "Edit and resend": remove the last user message and everything after it from the chat, and
+/// hand its text back for the message box.
+async fn rollback_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    get_bot(&st, &id).await?;
+    if st.runs.lock().await.contains_key(&id) {
+        return Err(bad("Wait until the Bot is done, or stop it first"));
+    }
+    let msgs = st.db.last_exchange(&id)?;
+    let Some(first) = msgs.first() else { return Err(bad("There's no message to edit")) };
+    let (text, attachments) = (first.text.clone(), first.meta.get("attachments").cloned().unwrap_or(json!([])));
+    let ids: Vec<String> = msgs.iter().map(|m| m.id.clone()).collect();
+    for mid in &ids {
+        st.db.delete_message(mid)?;
+    }
+    st.db.kv_set(&format!("withdrawn:{id}"), &text);
+    st.emit("messages.deleted", json!({ "bot_id": id, "ids": ids }));
+    Ok(Json(json!({ "text": text, "attachments": attachments })))
 }
 
 async fn stop_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
@@ -920,6 +1005,59 @@ fn rule_for(tool: &str, input: &Value) -> String {
 
 /// Called by the MCP helper. Shows an approval card and waits for the user's answer.
 async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprove>) -> ApiResult<Json<Value>> {
+    let allowed = decide(&st, &b.bot_id, &b.tool_name, &b.input).await?;
+    Ok(Json(if allowed {
+        json!({ "behavior": "allow", "updatedInput": b.input })
+    } else {
+        json!({ "behavior": "deny", "message": "The user said no to this action. Don't retry it; ask them in the chat if you're unsure what to do." })
+    }))
+}
+
+/// Does a Settings › Permissions rule ("Bash", "Bash(npm test)", "Bash(npm run:*)") allow this command?
+pub(crate) fn rule_allows(rules: &[String], tool: &str, command: &str) -> bool {
+    rules.iter().any(|r| {
+        let r = r.trim();
+        if r == tool {
+            return true;
+        }
+        let Some(inner) = r.strip_prefix(tool).and_then(|x| x.strip_prefix('(')).and_then(|x| x.strip_suffix(')')) else {
+            return false;
+        };
+        match inner.strip_suffix(":*") {
+            // A prefix rule never covers chained or redirected commands ("git log; rm -rf ~").
+            Some(_) if command.contains([';', '&', '|', '\n', '\r', '`', '<', '>']) || command.contains("$(") => false,
+            Some(prefix) => command == prefix || command.starts_with(&format!("{prefix} ")),
+            None => command == inner,
+        }
+    })
+}
+
+/// openbot's own permission check for an action a Bot asks for outside Claude Code (for example a
+/// background job): permission mode, saved rules, auto-review, then an Allow / Deny card.
+/// `always_ask`: the action runs outside the sandbox the saved rules were meant for, so skip the
+/// rules and auto-review and always show the card (without "Always allow").
+pub(crate) async fn check_permission(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, always_ask: bool) -> anyhow::Result<bool> {
+    let cfg = st.config.read().await.clone();
+    let command = input.get("command").and_then(Value::as_str).unwrap_or("");
+    match cfg.permission_mode.as_str() {
+        "allow_all" => return Ok(true),
+        "never" => return Ok(false),
+        _ => {}
+    }
+    if always_ask {
+        let summary = runner::tool_summary(tool_name, input, false);
+        let reason = "This runs outside the Bot's sandbox, so openbot always asks.";
+        return ask_approval(st, bot_id, tool_name, &summary, input, "", reason).await;
+    }
+    if rule_allows(&cfg.allow_rules, tool_name, command) {
+        return Ok(true);
+    }
+    decide(st, bot_id, tool_name, input).await
+}
+
+/// Auto-review, then (if it doesn't wave the action through) an Allow / Deny card.
+async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> anyhow::Result<bool> {
+    let b = InternalApprove { bot_id: bot_id.to_string(), tool_name: tool_name.to_string(), input: input.clone() };
     let summary = runner::tool_summary(&b.tool_name, &b.input, false);
 
     // Auto-review: let a fast model wave through routine actions so the user isn't pestered.
@@ -933,7 +1071,7 @@ async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprov
             if let Some(v) = &verdict {
                 if v.allow {
                     tracing::info!("auto-review allowed {} for {}: {}", b.tool_name, bot.name, v.reason);
-                    return Ok(Json(json!({ "behavior": "allow", "updatedInput": b.input })));
+                    return Ok(true);
                 }
             }
         }
@@ -944,12 +1082,7 @@ async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprov
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| crate::review::fallback_rule(&b.tool_name, &b.input));
     let reason = verdict.as_ref().map(|v| v.reason.clone()).unwrap_or_default();
-    let allowed = ask_approval(&st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason).await?;
-    Ok(Json(if allowed {
-        json!({ "behavior": "allow", "updatedInput": b.input })
-    } else {
-        json!({ "behavior": "deny", "message": "The user said no to this action. Don't retry it; ask them in the chat if you're unsure what to do." })
-    }))
+    ask_approval(st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason).await
 }
 
 /// Show an Allow / Deny card in the bot's chat and wait for the user's answer.
@@ -1203,11 +1336,7 @@ async fn patch_routine(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
 async fn run_routine_now(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let r = st.db.get_routine(&id)?.ok_or_else(|| not_found("No such routine"))?;
     runner::add_event(&st, &r.bot_id, &format!("Testing routine: {}", r.name), json!({"kind": "routine-run", "routine_id": r.id}));
-    let prompt = format!(
-        "[openbot] The user asked you to test your routine \"{}\" now. Task: {}\nDo it, then send the user what's worth their attention.",
-        r.name, r.prompt
-    );
-    runner::enqueue(&st, &r.bot_id, prompt).await;
+    runner::enqueue(&st, &r.bot_id, crate::routines::routine_prompt(&r, true)).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1284,11 +1413,17 @@ async fn import_memories(State(st): State<Shared>, Json(b): Json<ImportBody>) ->
             bot_id: None,
             text: crate::util::truncate_chars(fact, 500),
             created_at: now_ms(),
+            // Imports can be long, so they start in the searchable log; the next memory tidy-up
+            // moves the lasting facts into the profile.
+            tier: crate::db::LOG.into(),
         })?;
         n += 1;
         if n >= 300 {
             break;
         }
+    }
+    if n > 0 {
+        st.db.kv_set(crate::memory_tidy::IMPORTED_KEY, &now_ms().to_string());
     }
     st.emit("memories.updated", json!({}));
     Ok(Json(json!({ "imported": n })))
@@ -1495,6 +1630,7 @@ struct SettingsBody {
     permission_mode: Option<String>,
     allow_rules: Option<Vec<String>>,
     default_model: Option<String>,
+    effort: Option<String>,
     workspace_root: Option<String>,
     claude_path: Option<String>,
     runner: Option<String>,
@@ -1556,7 +1692,17 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
             cfg.allow_rules = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         }
         if let Some(v) = b.default_model {
+            let v = v.trim().to_string();
+            if v.len() > 80 || v.contains(char::is_whitespace) {
+                return Err(bad("That isn't a model name"));
+            }
             cfg.default_model = v;
+        }
+        if let Some(v) = b.effort {
+            if !crate::config::EFFORTS.contains(&v.as_str()) {
+                return Err(bad("Effort must be low, medium, high, xhigh or max"));
+            }
+            cfg.effort = v;
         }
         if let Some(v) = b.workspace_root {
             let v = v.trim().to_string();
@@ -1931,6 +2077,22 @@ async fn ws_loop(st: Shared, mut socket: WebSocket) {
             _ = ping.tick() => {
                 if socket.send(WsMessage::Ping(Vec::new().into())).await.is_err() { break; }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    #[test]
+    fn rules_match_commands() {
+        let rules = vec!["Bash(npm test)".to_string(), "Bash(git log:*)".to_string()];
+        assert!(super::rule_allows(&rules, "Bash", "npm test"));
+        assert!(super::rule_allows(&rules, "Bash", "git log --oneline"));
+        assert!(!super::rule_allows(&rules, "Bash", "git logout"));
+        assert!(!super::rule_allows(&rules, "Bash", "rm -rf /"));
+        assert!(super::rule_allows(&["Bash".to_string()], "Bash", "anything"));
+        for sneaky in ["git log; rm -rf ~", "git log && curl x", "git log | sh", "git log $(rm x)", "git log `rm x`", "git log > ~/.bashrc", "git log\nrm x"] {
+            assert!(!super::rule_allows(&rules, "Bash", sneaky), "{sneaky}");
         }
     }
 }

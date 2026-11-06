@@ -53,6 +53,11 @@ fn main() {
         }
         return;
     }
+    // ...and with `hook <event>` at certain moments of a run (see openbot_core::hooks).
+    if std::env::args().nth(1).as_deref() == Some("hook") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        std::process::exit(openbot_core::hooks::run(&args));
+    }
 
     openbot_core::util::fix_path_env();
 

@@ -71,15 +71,25 @@ Message = {
   created_at: number
 }
 // meta by role:
-//  user:     { attachments: [{ name, path, mime, size, url }] }     url is relative: "/api/bots/{id}/files/{path}" (append ?token=)
+//  user:     { attachments: [{ name, path, mime, size, url }],    url is relative: "/api/bots/{id}/files/{path}" (append ?token=)
+//              queued?: bool,     sent while the bot was busy; waiting ("Send now" = POST /api/bots/:id/steer)
+//              not_sent?: bool }  the user pressed Stop (or openbot restarted) before the bot read it
 //  tool:     { tool_use_id, name, summary, output }            summary e.g. "Ran `ls -la`", output truncated text
 //  approval: { approval_id, tool_name, summary, input }        status pending|allowed|denied
-//  error / system: {}
+//  error:    { code, actions[] }  code: "usage_limit"|"rate_limit"|"overloaded"|"too_long"|"auth"|"setup"|"crashed"|"other"
+//            actions (buttons, shown on the newest error only): "retry" (POST /api/bots/:id/retry),
+//            "new_conversation" (POST /api/bots/:id/new-conversation), "edit" (only for the user's own turns; POST /api/bots/:id/rollback,
+//            then put the returned text/attachments back in the message box). rate_limit / overloaded /
+//            crashed are retried automatically 3 times (after 5, 20 and 60 s; bot.activity kind "retrying")
+//            before the card appears.
+//  system:   {}
 //  widget:   { question, options: string[], allow_custom: bool, answer: string|null }   quick-reply buttons;
 //            answer with POST /api/messages/:id/answer {value}
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
-//  event:    { kind: "routine-created"|"routine-run"|"routine-paused", routine_id }   small centered line
+//  event:    { kind, routine_id?, job_id?, bot_id? }   small centered line. kind: "routine-created" | "routine-run"
+//            | "routine-paused" | "memory-tidy" | "compacted" (older messages summarized) | "conversation-reset"
+//            | "retry" | "steered" (stopped by "Send now") | "job-started" | "job-done" | "job-failed" | "job-stopped" | bot-…
 // While an approval card is open, bot.activity = {kind:"waiting_for_you", label:"Waiting for your OK"}.
 // NOTE: "tool" rows are hidden by default; show bot.activity instead.
 
@@ -89,7 +99,9 @@ Settings = {
   api_key_locked: boolean,                           // saved but can't be decrypted on this computer
   permission_mode: "ask" | "auto" | "accept_edits" | "allow_all",
   allow_rules: string[],                             // e.g. ["Bash(git status)", "WebFetch"]
-  default_model: string,                             // "" | "opus" | "sonnet" | "haiku"
+  default_model: string,                             // "" = model_default, or a model name / alias ("claude-opus-5-5", "opus"...)
+  model_default: string,                             // the built-in default: "claude-sonnet-5-5"
+  effort: "low" | "medium" | "high" | "xhigh" | "max", // Claude Code --effort for every run (default "xhigh")
   workspace_root: string,
   vault: [{ name: string, hint: string,              // hint: "••••abcd" (last 4 only; "••••" for values of 8 characters or fewer)
             description: string,
@@ -155,12 +167,16 @@ Usage = {
 | POST | /api/bots/:id/unread | – | `{ok:true}` ("Mark as Unread": unread → 1) |
 | GET | /api/bots/:id/messages?before=<ms>&limit=200 | – | `[Message]` oldest→newest |
 | POST | /api/bots/:id/messages | `{text, attachments:[{name,path,mime,url}]}` | `Message` (the user message) |
-| POST | /api/bots/:id/stop | – | `{ok:true}` |
+| POST | /api/bots/:id/stop | – | `{ok:true}` (also drops the user's queued messages: they get `meta.not_sent`; openbot's own queued turns still run) |
+| POST | /api/bots/:id/steer | `{message_id}` | `{ok}` "Send now": stops the current turn and runs the queued messages right away. `ok:false` if that message is no longer queued |
+| POST | /api/bots/:id/retry | – | `{ok:true}` "Try again": runs the last turn's prompt again (400 if there is none or the bot is busy) |
+| POST | /api/bots/:id/new-conversation | – | `{ok:true}` Claude Code starts a new conversation; chat, memory, files, routines stay |
+| POST | /api/bots/:id/rollback | – | `{text, attachments}` "Edit and resend": deletes the last user message and everything after it (`messages.deleted`); the next message tells the bot the old one was withdrawn. 400 while the bot is working |
 | POST | /api/bots/:id/upload | multipart, field `file` (one or more) | `[{name,path,mime,url}]` |
 | GET | /api/bots/:id/files/*path | – | file bytes |
 | POST | /api/approvals/:approval_id | `{decision:"allow"|"always"|"deny"}` | `{ok:true}` |
 | GET | /api/settings | – | `Settings` |
-| PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, workspace_root}` (`api_key:""` clears it) | `Settings` |
+| PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, effort, workspace_root}` (`api_key:""` clears it) | `Settings` |
 | POST | /api/vault | `{name, value, description, bots}`, see below | `Settings` |
 | POST | /api/accounts/connect | `{provider:"google"\|"microsoft", redirect:"http://127.0.0.1:<port>/oauth/callback", reconnect?: account id}` | `{url}`: the sign-in page to open in the browser |
 | POST | /api/accounts/finish | `{state, code}` or `{url}` (the address the browser landed on) | `{ok, email}`; also emits `account.connected` and `settings.updated` |
@@ -212,7 +228,7 @@ Errors: non-2xx with `{error: string}`.
 
 * `hello {version}`
 * `bot.created {bot}` · `bot.updated {bot}` · `bot.deleted {bot_id}`
-* `message.created {message}` · `message.updated {message}` (streaming text, tool finished, approval decided) · `messages.cleared {bot_id}`
+* `message.created {message}` · `message.updated {message}` (streaming text, tool finished, approval decided, queued mark changed) · `messages.cleared {bot_id}` · `messages.deleted {bot_id, ids[]}`
 * `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished)
 * `devices.updated` (a device was paired or removed; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
@@ -235,9 +251,10 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 |---|---|
 | `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message) |
 | `send_file {path, caption?}` · `show_page {title, html \| path}` | file in the chat · sandboxed HTML page |
-| `remember {fact, about?: "user"\|"me", bot?}` | save a fact. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
-| `recall {bot?}` · `forget {id}` | list facts (own or another bot's) · delete one |
+| `remember {fact, tier?: "profile"\|"log", about?: "user"\|"me", bot?}` | save a fact. `profile` (standing instructions, core identity) is in the bot's prompt every turn; `log` (default: everything else) is searched with `recall`, and only its newest 15 entries are in the prompt. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
+| `recall {query?, bot?}` · `update_memory {id, fact?, tier?}` · `forget {id}` | search facts by words (no query: profile + newest log) · fix one or move it between tiers · delete one |
 | `check_back_later {note, in_minutes \| at}` | one-time wake-up |
+| `run_in_background {command, name, note?, max_minutes?}` · `background_jobs {id?}` · `stop_background_job {id}` | a long command run by the openbot server (not Claude Code), output in `<data>/bots/<id>/jobs/<job>.log`. Goes through the same permission check as a shell command (mode, saved rules, auto-review, then an Allow / Deny card); with `runner = "wsl"` jobs run outside Claude Code's sandbox, so they always get a card. Saved prefix rules like `Bash(git log:*)` never cover commands with `; & | $( \` < >` or newlines. Anything the command leaves running is stopped when it ends. When it ends (or openbot restarts while it runs) the bot gets a wake-up turn with the exit code and last 40 lines. Max 5 running per bot, 24 h each |
 | `create_routine {name, prompt, schedule, bot?}` · `list_routines {bot?, all?}` · `update_routine {id, …}` · `delete_routine {id}` · `move_routine {id, to_bot}` | routines, for this bot or another |
 | `list_bots` · `get_bot {bot}` | see the user's bots (instructions, private memories, routines) |
 | `create_bot {name, instructions, label?, look?, memories?[], routines?[], briefing?}` | new bot, ready from its first message; it says hello in its own chat. Names must be unique; max 50 bots |
@@ -250,6 +267,19 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `email_update {account?, ids[], read?, archive?, star?, trash?, add_labels[]?, remove_labels[]?}` | organize email; `trash` asks first. Labels are Gmail only |
 | `calendar_events {account?, from?, to?, query?, max?}` | events (default the next 7 days) |
 | `calendar_create {account?, title, start, end, all_day?, location?, description?, attendees[]?}` · `calendar_update {account?, id, …}` · `calendar_delete {account?, id}` | change the calendar. Asks first when attendees get notified, and always for delete |
+
+### How a turn runs
+
+* Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`).
+* Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with two Claude Code hooks that start the openbot program as
+  `<openbot> hook stop|precompact --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
+  * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself.
+  * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event.
+* Turns openbot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
+  (`<openbot_routine>`, `<openbot_wakeup>`, `<openbot_task>`) with numbered instructions; the chat only shows a short event line.
+* Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn
+  (`backend/core/src/memory_tidy.rs`): merge duplicates, fix stale facts, keep the profile small. One bot per hour; a copy of
+  the memories is saved first to `<data>/bots/<id>/memory-backup.json`. Overdue after 9 days, it runs at any hour.
 
 `account` is the account's email address (it can be left out when the bot has only one). Times are the user's
 local time (`2026-11-05T14:00`, the timezone in Settings). Email/calendar approval cards carry

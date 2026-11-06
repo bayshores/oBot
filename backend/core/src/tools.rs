@@ -55,19 +55,30 @@ pub fn definitions() -> Value {
         },
         {
             "name": "remember",
-            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Use for preferences, names, routines, important details. Keep each fact short. To hand a fact to another of the user's Bots, give its name in \"bot\": it becomes that Bot's own memory.",
+            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Keep each fact short and self-contained. Pick the tier: \"profile\" is only for standing instructions and core identity (name, location, role, family, strong preferences, how they want you to work); it's in your prompt every time, so keep it small. Everything else (events, plans, one-off details, things you did, what you learned) goes in \"log\", which you search with recall. To hand a fact to another of the user's Bots, give its name in \"bot\": it becomes that Bot's own memory.",
             "inputSchema": {"type": "object", "properties": {
                 "fact": {"type": "string"},
+                "tier": {"type": "string", "enum": ["profile", "log"], "description": "Default log"},
                 "about": {"type": "string", "enum": ["user", "me"], "description": "'user' = about the user (shared with all bots), 'me' = only for this bot"},
                 "bot": {"type": "string", "description": "Optional: another Bot's name or id to save this for (only that Bot sees it)"}
             }, "required": ["fact"]}
         },
         {
             "name": "recall",
-            "description": "List everything you remember (with ids, so you can forget outdated facts). Give \"bot\" to see what another Bot remembers.",
+            "description": "Search your memory. Give \"query\" (a few words) to find matching facts in your profile and log; leave it out to list the profile and the newest log entries. Results have ids, so you can update_memory or forget them. Search before saying you don't know something about the user. Give \"bot\" to look in another Bot's memory.",
             "inputSchema": {"type": "object", "properties": {
+                "query": {"type": "string"},
                 "bot": {"type": "string", "description": "Optional: another Bot's name or id"}
             }}
+        },
+        {
+            "name": "update_memory",
+            "description": "Fix a remembered fact's text, or move it between \"profile\" and \"log\".",
+            "inputSchema": {"type": "object", "properties": {
+                "id": {"type": "string"},
+                "fact": {"type": "string", "description": "New text (leave out to keep it)"},
+                "tier": {"type": "string", "enum": ["profile", "log"]}
+            }, "required": ["id"]}
         },
         {
             "name": "forget",
@@ -178,6 +189,7 @@ pub fn definitions() -> Value {
     // Email and calendar of the accounts the user connected (accounts.rs).
     if let Some(a) = list.as_array_mut() {
         a.extend(crate::accounts::tool_definitions());
+        a.extend(crate::jobs::tool_definitions());
     }
     // Bots get their own screen where this computer can run one (Windows + WSL, or Linux).
     if crate::screen::platform_ok().is_ok() {
@@ -311,6 +323,55 @@ pub struct ToolResult {
     pub image: Option<(String, String)>, // (base64, mime type)
 }
 
+/// How many log entries go into the Bot's prompt (newest first) and into a plain `recall`.
+pub const RECENT_LOG: usize = 15;
+
+/// `recall`: with a query, the best word matches across profile and log; without one, the
+/// profile plus the newest log entries.
+pub fn recall_text(mems: &[Memory], query: &str) -> String {
+    let line = |m: &Memory| format!("[{}] ({}, {}) {}", m.id, m.tier, if m.bot_id.is_some() { "me" } else { "user" }, m.text);
+    let words: Vec<String> = query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 2)
+        .map(str::to_string)
+        .collect();
+    if words.is_empty() {
+        let profile: Vec<_> = mems.iter().filter(|m| m.tier != crate::db::LOG).collect();
+        let logs: Vec<_> = mems.iter().filter(|m| m.tier == crate::db::LOG).collect();
+        let mut out = String::from("Profile:\n");
+        if profile.is_empty() {
+            out.push_str("(empty)\n");
+        }
+        for m in &profile {
+            out.push_str(&line(m));
+            out.push('\n');
+        }
+        out.push_str(&format!("\nNewest log entries ({} of {}; search with query for older ones):\n", logs.len().min(30), logs.len()));
+        for m in logs.iter().rev().take(30) {
+            out.push_str(&line(m));
+            out.push('\n');
+        }
+        return out;
+    }
+    // Score = how many query words appear (a word also matches the start of a longer word);
+    // newer entries win ties.
+    let mut scored: Vec<(usize, &Memory)> = mems
+        .iter()
+        .filter_map(|m| {
+            let text: Vec<String> = m.text.to_lowercase().split(|c: char| !c.is_alphanumeric()).map(str::to_string).collect();
+            let n = words.iter().filter(|w| text.iter().any(|t| t.starts_with(w.as_str()))).count();
+            (n > 0).then_some((n, m))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.created_at.cmp(&a.1.created_at)));
+    if scored.is_empty() {
+        return format!("Nothing in memory matches \"{query}\". Try other words, or recall with no query to list the newest entries.");
+    }
+    scored.iter().take(20).map(|(_, m)| line(m)).collect::<Vec<_>>().join("\n")
+}
+
+
 /// Run one openbot tool.
 pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> ToolResult {
     if name.starts_with("computer_") {
@@ -322,12 +383,17 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
     }
-    if crate::accounts::is_tool(name) {
+    if crate::accounts::is_tool(name) || crate::jobs::is_tool(name) {
         let bot = match state.db.get_bot(bot_id) {
             Ok(Some(b)) => b,
             _ => return ToolResult { text: "this bot no longer exists".into(), is_error: true, image: None },
         };
-        return match crate::accounts::tool(state, &bot, name, args).await {
+        let out = if crate::jobs::is_tool(name) {
+            crate::jobs::tool(state, &bot, name, args).await
+        } else {
+            crate::accounts::tool(state, &bot, name, args).await
+        };
+        return match out {
             Ok(t) => ToolResult { text: t, is_error: false, image: None },
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
@@ -440,18 +506,20 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             let target = target_bot(state, &bot, args)?;
             let for_other = target.id != bot_id;
             let about_user = !for_other && s(args, "about") != "me";
+            let tier = if s(args, "tier") == crate::db::PROFILE { crate::db::PROFILE } else { crate::db::LOG };
             let m = Memory {
                 id: new_id()[..8].to_string(),
                 bot_id: if about_user { None } else { Some(target.id.clone()) },
                 text: truncate_chars(fact, 500),
                 created_at: now_ms(),
+                tier: tier.into(),
             };
             state.db.add_memory(&m).map_err(|e| e.to_string())?;
             state.emit("memories.updated", json!({"bot_id": target.id}));
             if for_other {
-                Ok(format!("Saved for {} (id {}). They'll know it from their next message.", target.name, m.id))
+                Ok(format!("Saved for {} (id {}, {tier}). They'll know it from their next message.", target.name, m.id))
             } else {
-                Ok(format!("Remembered (id {}).", m.id))
+                Ok(format!("Remembered in your {tier} (id {}).", m.id))
             }
         }
 
@@ -461,11 +529,24 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             if mems.is_empty() {
                 return Ok(if target.id == bot_id { "You don't have any saved memories yet.".into() } else { format!("{} has no saved memories yet.", target.name) });
             }
-            Ok(mems
-                .iter()
-                .map(|m| format!("[{}] ({}) {}", m.id, if m.bot_id.is_some() { "me" } else { "user" }, m.text))
-                .collect::<Vec<_>>()
-                .join("\n"))
+            Ok(recall_text(&mems, s(args, "query")))
+        }
+
+        "update_memory" => {
+            let id = s(args, "id");
+            let fact = s(args, "fact");
+            let tier = match s(args, "tier") {
+                "" => None,
+                t if t == crate::db::PROFILE || t == crate::db::LOG => Some(t),
+                _ => return Err("tier must be profile or log".into()),
+            };
+            let fact = (!fact.is_empty()).then(|| truncate_chars(fact, 500));
+            if state.db.update_memory(id, fact.as_deref(), tier).map_err(|e| e.to_string())? {
+                state.emit("memories.updated", json!({"bot_id": bot_id}));
+                Ok("Updated.".into())
+            } else {
+                Err("No memory with that id".into())
+            }
         }
 
         "forget" => {
@@ -691,7 +772,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             for f in &facts {
                 state
                     .db
-                    .add_memory(&Memory { id: new_id()[..8].to_string(), bot_id: Some(new.id.clone()), text: truncate_chars(f, 500), created_at: now_ms() })
+                    .add_memory(&Memory { id: new_id()[..8].to_string(), bot_id: Some(new.id.clone()), text: truncate_chars(f, 500), created_at: now_ms(), tier: crate::db::PROFILE.into() })
                     .map_err(|e| e.to_string())?;
             }
             for mut r in planned {
@@ -816,5 +897,29 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
         }
 
         other => Err(format!("Unknown openbot tool {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mem(id: &str, text: &str, tier: &str, at: i64) -> Memory {
+        Memory { id: id.into(), bot_id: None, text: text.into(), created_at: at, tier: tier.into() }
+    }
+
+    #[test]
+    fn recall_searches_and_lists() {
+        let m = vec![
+            mem("a", "Lives in San Diego", "profile", 1),
+            mem("b", "Dentist appointment on Friday", "log", 2),
+            mem("c", "Allergic to peanuts", "profile", 3),
+            mem("d", "Booked a dentist cleaning for December", "log", 4),
+        ];
+        let found = recall_text(&m, "dentist");
+        assert!(found.starts_with("[d]") && found.contains("[b]") && !found.contains("[a]"), "{found}");
+        assert!(recall_text(&m, "zebra").starts_with("Nothing in memory matches"));
+        let all = recall_text(&m, "");
+        assert!(all.starts_with("Profile:") && all.contains("Newest log entries (2 of 2"), "{all}");
     }
 }

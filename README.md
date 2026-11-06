@@ -40,6 +40,24 @@ That's how Claude Code is meant to be scripted, and it's for your own personal u
 **Settings › Claude Account** lets you switch to an Anthropic API key instead (billed per use by Anthropic).
 
 Each bot is one long Claude Code conversation (`--resume`), with its own folder for files.
+Bots use **Sonnet 5.5 at extra-high effort** unless you pick another model or effort in
+**Settings › General › Bot** (a Bot can also pick its own model in its settings).
+
+## How Bots work
+
+* **Memory.** Bots save facts in two tiers: a small **profile** (who you are, how you want things
+  done) that they always see, and a **log** of everything else that they search when needed. Once a
+  week, at night, each Bot tidies its memory (merges duplicates, drops stale facts). The Bot panel
+  shows both lists; delete anything with the trash icon.
+* **When something fails.** Temporary problems (Claude busy, too many requests) are retried by
+  themselves. If a turn still fails you get one error card with **Try again**, **Edit and resend**
+  or **Start a new conversation** (keeps memory, files and routines).
+* **Messages while a Bot is busy** wait as **Queued**. Tap **Send now** to stop what it's doing and
+  have it read your message right away; **Stop** drops queued messages.
+* **Long jobs.** A Bot can start a long command in the background (after the same permission check as
+  any command) and is woken up with the result when it ends, even hours later.
+* **Follow-ups.** If a Bot says "I'll check back" without scheduling it, openbot sends it back to
+  schedule the check-in.
 
 ## Run it on this Mac
 

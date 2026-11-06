@@ -359,12 +359,27 @@
   }
 
   // ───────────────────────────── constants ─────────────────────────────
-  const MODELS = [
-    ['', 'Default'],
-    ['opus', 'Opus'],
-    ['sonnet', 'Sonnet'],
-    ['haiku', 'Haiku'],
+  const MODEL_CHOICES = [
+    ['claude-sonnet-5-5', 'Sonnet 5.5'],
+    ['claude-opus-5-5', 'Opus 5.5'],
+    ['claude-fable-5-1', 'Fable 5.1'],
+    ['claude-haiku-5-5', 'Haiku 5.5'],
   ];
+  const OLD_MODELS = { opus: 'Opus (latest)', sonnet: 'Sonnet (latest)', haiku: 'Haiku (latest)', fable: 'Fable (latest)' };
+  const EFFORTS = [
+    ['low', 'Low'],
+    ['medium', 'Medium'],
+    ['high', 'High'],
+    ['xhigh', 'Extra high'],
+    ['max', 'Max'],
+  ];
+  // Model menus. `first` is the "not set" choice; a value from an older version stays selectable.
+  function modelOptions(first, current) {
+    const opts = [['', first]].concat(MODEL_CHOICES);
+    if (current && !opts.some(([v]) => v === current)) opts.push([current, OLD_MODELS[current] || current]);
+    return opts;
+  }
+  const modelName = (v) => (MODEL_CHOICES.find(([m]) => m === v) || [v, OLD_MODELS[v] || v])[1];
   const TEMPLATES = [
     {
       name: 'General Bot',
@@ -1090,6 +1105,12 @@
         if (e.state === 'done') toast('Bot screens are set up');
         if (e.state === 'error') toast('Setting up Bot screens didn’t finish', 'error');
         break;
+      case 'messages.deleted': {
+        const gone = new Set(e.ids || []);
+        if (S.msgs.has(e.bot_id)) S.msgs.set(e.bot_id, S.msgs.get(e.bot_id).filter((x) => !gone.has(x.id)));
+        if (e.bot_id === S.current) renderMessages(false);
+        break;
+      }
       case 'messages.cleared':
         if (S.msgs.has(e.bot_id)) S.msgs.set(e.bot_id, []);
         S.hasMore.set(e.bot_id, false);
@@ -2089,6 +2110,8 @@
           bubbleEnd = true;
           bubbleStart = !imgs.length && !files.length;
         }
+        const qrow = queuedRow(m);
+        if (qrow) stack.append(qrow);
         break;
       }
       case 'bot': {
@@ -2120,6 +2143,7 @@
         break;
       case 'error':
         stack.append(h('div', { class: 'bwrap' }, h('div', { class: 'bubble err', role: 'alert' }, icon('alert', 15), h('span', null, m.text || 'Something went wrong.'))));
+        if (m.meta && Array.isArray(m.meta.actions) && m.meta.actions.length && isLastError(m)) stack.append(errorActions(m));
         break;
       case 'event':
         stack.append(eventLine(m));
@@ -2726,6 +2750,73 @@
       );
     }
     return card;
+  }
+  // Under a message sent while the Bot was busy: "Queued · Send now", or "Not sent" after Stop.
+  function queuedRow(m) {
+    const meta = m.meta || {};
+    if (meta.not_sent) return h('div', { class: 'q-row' }, h('span', { class: 'q-label' }, 'Not sent. The Bot was stopped first.'));
+    if (!meta.queued) return null;
+    const btn = h('button', { class: 'q-send' }, 'Send now');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        await api(`/api/bots/${m.bot_id}/steer`, { method: 'POST', body: { message_id: m.id } });
+      } catch (e) {
+        btn.disabled = false;
+        fail(e);
+      }
+    };
+    return h('div', { class: 'q-row' }, h('span', { class: 'q-label' }, 'Queued. The Bot will read this when it’s done.'), btn);
+  }
+  // Buttons only on the newest error of the chat (older ones are history).
+  function isLastError(m) {
+    const list = S.msgs.get(m.bot_id) || [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const x = list[i];
+      if (x.role === 'error') return x.id === m.id;
+      if (x.role === 'user' || x.role === 'bot') return false;
+    }
+    return false;
+  }
+  function errorActions(m) {
+    const row = h('div', { class: 'err-actions' });
+    const busy = (on) => row.querySelectorAll('button').forEach((b) => (b.disabled = on));
+    const act = (label, fn) =>
+      h('button', {
+        class: 'err-btn',
+        onclick: async () => {
+          busy(true);
+          try {
+            await fn();
+          } catch (e) {
+            busy(false); // only after a failure: a second click would run it twice
+            fail(e);
+          }
+        },
+      }, label);
+    for (const a of m.meta.actions) {
+      if (a === 'retry') row.append(act('Try again', () => api(`/api/bots/${m.bot_id}/retry`, { method: 'POST' })));
+      if (a === 'new_conversation')
+        row.append(
+          act('Start a new conversation', async () => {
+            await api(`/api/bots/${m.bot_id}/new-conversation`, { method: 'POST' });
+            toast('New conversation started. Memory, files and routines are kept');
+          })
+        );
+      if (a === 'edit')
+        row.append(
+          act('Edit and resend', async () => {
+            const r = await api(`/api/bots/${m.bot_id}/rollback`, { method: 'POST' });
+            if (S.current !== m.bot_id) return;
+            input.value = r.text || '';
+            S.pending = (r.attachments || []).map((x) => Object.assign({}, x));
+            renderAttachRow();
+            updateComposer();
+            input.focus();
+          })
+        );
+    }
+    return row;
   }
   function eventLine(m) {
     const meta = m.meta || {};
@@ -3390,7 +3481,7 @@
     });
     notif.classList.add('sm');
     notif.setAttribute('aria-label', 'Notifications');
-    const model = selectEl(b.model || '', MODELS, (v) => patchBot(b.id, { model: v }));
+    const model = selectEl(b.model || '', modelOptions('Same as Settings', b.model), (v) => patchBot(b.id, { model: v }));
     model.classList.add('p-select');
     const local = S.conn.mode !== 'remote';
     const hideBtn = h('button', { class: 'p-action', onclick: () => setHidden(S.bots.get(b.id), !S.bots.get(b.id).hidden) }, icon(b.hidden ? 'eye' : 'eyeOff', 16), b.hidden ? 'Show in sidebar' : 'Hide from sidebar');
@@ -3782,32 +3873,34 @@
     box.textContent = '';
     if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load memories.'));
     if (!list.length) return box.append(h('div', { class: 'p-empty' }, 'Nothing remembered yet. Say “remember that…” and it shows up here.'));
-    for (const mm of list) {
-      box.append(
-        h(
-          'div',
-          { class: 'p-row' },
-          h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, mm.text), h('div', { class: 'p-row-sub' }, mm.bot_id ? `Saved ${timeLabel(mm.created_at || Date.now())}` : 'About you · shared with all Bots')),
-          h(
-            'button',
-            {
-              class: 'ghost-btn danger',
-              'aria-label': 'Forget this',
-              'data-tip': 'Forget',
-              onclick: async () => {
-                try {
-                  await api(`/api/memories/${encodeURIComponent(mm.id)}`, { method: 'DELETE' });
-                  loadPanelLists('memories');
-                } catch (e) {
-                  fail(e);
-                }
-              },
-            },
-            icon('trash', 15)
-          )
-        )
-      );
+    // Profile facts (always in the Bot's mind) first, then the searchable log, newest first.
+    const profile = list.filter((mm) => mm.tier !== 'log');
+    const log = list.filter((mm) => mm.tier === 'log').reverse();
+    const groups = [
+      ['Always remembered', profile],
+      ['Notes (the Bot searches these when needed)', log],
+    ].filter(([, l]) => l.length);
+    for (const [label, items] of groups) {
+      if (groups.length > 1 || label !== 'Always remembered') box.append(h('div', { class: 'p-group' }, label));
+      for (const mm of items) box.append(memoryRow(mm));
     }
+  }
+  function memoryRow(mm) {
+    const forget = async () => {
+      try {
+        await api(`/api/memories/${encodeURIComponent(mm.id)}`, { method: 'DELETE' });
+        loadPanelLists('memories');
+      } catch (e) {
+        fail(e);
+      }
+    };
+    const sub = mm.bot_id ? `Saved ${timeLabel(mm.created_at || Date.now())}` : 'About you · shared with all Bots';
+    return h(
+      'div',
+      { class: 'p-row' },
+      h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, mm.text), h('div', { class: 'p-row-sub' }, sub)),
+      h('button', { class: 'ghost-btn danger', 'aria-label': 'Forget this', 'data-tip': 'Forget', onclick: forget }, icon('trash', 15))
+    );
   }
 
   // ───────────────────────────── avatar picker (skin grids) ─────────────────────────────
@@ -4554,7 +4647,8 @@
         'Bot',
         card(
           row('Timezone', tz),
-          s ? row('Model', selectEl(s.default_model || '', MODELS, (v) => putSettings({ default_model: v }, 'model')), null, '', 'model') : row('Model', null, 'Connect to a computer to change this.'),
+          s ? row('Model', selectEl(s.default_model || '', modelOptions(modelName(s.model_default || 'claude-sonnet-5-5') + ' (default)', s.default_model), (v) => putSettings({ default_model: v }, 'model')), 'Used by every Bot that doesn’t pick its own', '', 'model') : row('Model', null, 'Connect to a computer to change this.'),
+          s ? row('Effort', selectEl(s.effort || 'xhigh', EFFORTS, (v) => putSettings({ effort: v }, 'effort')), 'How hard Bots think before answering. Higher is smarter but slower and uses more of your plan', '', 'effort') : null,
           row(
             'Show Tool Activity',
             toggleEl(S.prefs.showTools === true, (v) => {

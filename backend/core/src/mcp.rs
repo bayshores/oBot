@@ -42,7 +42,7 @@ fn ask_server(url: &str, token: &str, bot_id: &str, args: &Value) -> Value {
 /// Returns (text, is_error, optional (base64 image, mime type)).
 fn call_tool(url: &str, token: &str, bot_id: &str, name: &str, args: &Value) -> (String, bool, Option<(String, String)>) {
     // These wait for the user's Allow / Deny, which can take a while.
-    let agent = if name == "delete_bot" || crate::accounts::waits_for_user(name) {
+    let agent = if name == "delete_bot" || crate::accounts::waits_for_user(name) || crate::jobs::waits_for_user(name) {
         ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).build()
     } else {
         ureq::AgentBuilder::new().timeout(Duration::from_secs(120)).build()

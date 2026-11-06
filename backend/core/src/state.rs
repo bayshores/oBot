@@ -10,9 +10,14 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify, RwLock};
 use crate::config::Config;
 use crate::db::{Bot, Db, Message};
 
-/// A message the user sent that is waiting for the bot.
+/// Something waiting for the bot: a user message, or a turn openbot starts (routine, wake-up...).
 pub struct Job {
+    /// What the model is told.
     pub prompt: String,
+    /// The user's chat message, when this is one (shown as "Queued" while it waits).
+    pub user_msg: Option<String>,
+    /// True when it arrived while the bot was working on something else.
+    pub while_busy: bool,
 }
 
 /// A permission request waiting for the user to click Allow / Deny.
@@ -27,6 +32,8 @@ pub struct PendingApproval {
 /// Handle to a running `claude` process.
 pub struct RunHandle {
     pub stop: Arc<Notify>,
+    /// Set by "Send now": the run stops so the waiting message can go right away (the queue is kept).
+    pub steer: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub struct AppState {

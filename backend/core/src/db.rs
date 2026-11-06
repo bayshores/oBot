@@ -66,7 +66,13 @@ pub struct Memory {
     pub bot_id: Option<String>,
     pub text: String,
     pub created_at: i64,
+    /// "profile" (standing instructions and core facts: always in the Bot's prompt) or "log"
+    /// (everything else: found with `recall`).
+    pub tier: String,
 }
+
+pub const PROFILE: &str = "profile";
+pub const LOG: &str = "log";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Routine {
@@ -190,6 +196,20 @@ impl Db {
                 text TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                bot_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                command TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,     -- running | done | failed | stopped | timed_out | interrupted
+                exit_code INTEGER,
+                log_path TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                ended_at INTEGER,
+                pid INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_jobs_bot ON jobs(bot_id, started_at);
             CREATE TABLE IF NOT EXISTS routines (
                 id TEXT PRIMARY KEY,
                 bot_id TEXT NOT NULL,
@@ -204,17 +224,20 @@ impl Db {
             );
             "#,
         )?;
-        // Columns added after the first release.
-        for (col, def) in [
-            ("label", "TEXT NOT NULL DEFAULT ''"),
-            ("pinned", "INTEGER NOT NULL DEFAULT 0"),
-            ("notifications", "INTEGER NOT NULL DEFAULT 1"),
+        // Columns added after the first release. Memories saved before tiers existed were all in
+        // the prompt, so they start as "profile".
+        for (table, col, def) in [
+            ("bots", "label", "TEXT NOT NULL DEFAULT ''"),
+            ("bots", "pinned", "INTEGER NOT NULL DEFAULT 0"),
+            ("bots", "notifications", "INTEGER NOT NULL DEFAULT 1"),
+            ("memories", "tier", "TEXT NOT NULL DEFAULT 'profile'"),
+            ("jobs", "pid", "INTEGER"),
         ] {
             let exists: bool = conn
-                .prepare("SELECT 1 FROM pragma_table_info('bots') WHERE name = ?1")?
+                .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
                 .exists([col])?;
             if !exists {
-                conn.execute_batch(&format!("ALTER TABLE bots ADD COLUMN {col} {def}"))?;
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {def}"))?;
             }
         }
         Ok(Db { conn: Mutex::new(conn) })
@@ -257,6 +280,7 @@ impl Db {
         let c = self.c();
         c.execute("DELETE FROM messages WHERE bot_id = ?1", [id])?;
         c.execute("DELETE FROM memories WHERE bot_id = ?1", [id])?;
+        c.execute("DELETE FROM jobs WHERE bot_id = ?1", [id])?;
         c.execute("DELETE FROM bots WHERE id = ?1", [id])?;
         Ok(())
     }
@@ -334,6 +358,34 @@ impl Db {
     pub fn delete_message(&self, id: &str) -> anyhow::Result<()> {
         self.c().execute("DELETE FROM messages WHERE id = ?1", [id])?;
         Ok(())
+    }
+
+    /// User messages still marked "Queued" (see runner::recover_queued).
+    pub fn queued_messages(&self) -> anyhow::Result<Vec<Message>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT * FROM messages WHERE role = 'user' AND meta LIKE '%\"queued\":true%'")?;
+        let v = st.query_map([], row_to_msg)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(v)
+    }
+
+    /// The bot's last user message and every message after it (oldest first), for "Edit and resend".
+    pub fn last_exchange(&self, bot_id: &str) -> anyhow::Result<Vec<Message>> {
+        let c = self.c();
+        let Some((at, seq)) = c
+            .query_row(
+                "SELECT created_at, seq FROM messages WHERE bot_id = ?1 AND role = 'user' ORDER BY created_at DESC, seq DESC LIMIT 1",
+                [bot_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        else {
+            return Ok(vec![]);
+        };
+        let mut st = c.prepare(
+            "SELECT * FROM messages WHERE bot_id = ?1 AND (created_at > ?2 OR (created_at = ?2 AND seq >= ?3)) ORDER BY created_at, seq",
+        )?;
+        let v = st.query_map(params![bot_id, at, seq], row_to_msg)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(v)
     }
 
     /// Messages oldest -> newest. `before` = only messages created before this time (for paging).
@@ -420,6 +472,56 @@ impl Db {
         );
     }
 
+    // ---------- background jobs (see jobs.rs) ----------
+
+    pub fn upsert_job(&self, j: &crate::jobs::JobRow) -> anyhow::Result<()> {
+        self.c().execute(
+            r#"INSERT INTO jobs (id,bot_id,name,command,note,status,exit_code,log_path,started_at,ended_at,pid)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+               ON CONFLICT(id) DO UPDATE SET status=?6, exit_code=?7, ended_at=?10"#,
+            params![j.id, j.bot_id, j.name, crate::vault::redact(&j.command), j.note, j.status, j.exit_code, j.log_path, j.started_at, j.ended_at, j.pid],
+        )?;
+        Ok(())
+    }
+
+    fn jobs_where(&self, sql: &str, p: &[&dyn rusqlite::ToSql]) -> anyhow::Result<Vec<crate::jobs::JobRow>> {
+        let c = self.c();
+        let mut st = c.prepare(&format!(
+            "SELECT id,bot_id,name,command,note,status,exit_code,log_path,started_at,ended_at,pid FROM jobs {sql}"
+        ))?;
+        let v = st
+            .query_map(p, |r| {
+                Ok(crate::jobs::JobRow {
+                    id: r.get(0)?,
+                    bot_id: r.get(1)?,
+                    name: r.get(2)?,
+                    command: r.get(3)?,
+                    note: r.get(4)?,
+                    status: r.get(5)?,
+                    exit_code: r.get(6)?,
+                    log_path: r.get(7)?,
+                    started_at: r.get(8)?,
+                    ended_at: r.get(9)?,
+                    pid: r.get(10)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(v)
+    }
+
+    pub fn get_job(&self, id: &str) -> anyhow::Result<Option<crate::jobs::JobRow>> {
+        Ok(self.jobs_where("WHERE id = ?1", &[&id])?.into_iter().next())
+    }
+
+    /// A bot's newest jobs first.
+    pub fn jobs_for(&self, bot_id: &str, limit: i64) -> anyhow::Result<Vec<crate::jobs::JobRow>> {
+        self.jobs_where("WHERE bot_id = ?1 ORDER BY started_at DESC LIMIT ?2", &[&bot_id, &limit])
+    }
+
+    pub fn running_jobs(&self) -> anyhow::Result<Vec<crate::jobs::JobRow>> {
+        self.jobs_where("WHERE status = 'running'", &[])
+    }
+
     // ---------- memories ----------
 
     pub fn last_user_text(&self, bot_id: &str) -> Option<String> {
@@ -436,8 +538,8 @@ impl Db {
 
     pub fn add_memory(&self, m: &Memory) -> anyhow::Result<()> {
         self.c().execute(
-            "INSERT INTO memories (id, bot_id, text, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![m.id, m.bot_id, crate::vault::redact(&m.text), m.created_at],
+            "INSERT INTO memories (id, bot_id, text, created_at, tier) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![m.id, m.bot_id, crate::vault::redact(&m.text), m.created_at, if m.tier == LOG { LOG } else { PROFILE }],
         )?;
         Ok(())
     }
@@ -446,14 +548,30 @@ impl Db {
     pub fn memories_for(&self, bot_id: &str) -> anyhow::Result<Vec<Memory>> {
         let c = self.c();
         let mut st = c.prepare(
-            "SELECT id, bot_id, text, created_at FROM memories WHERE bot_id IS NULL OR bot_id = ?1 ORDER BY created_at",
+            "SELECT id, bot_id, text, created_at, tier FROM memories WHERE bot_id IS NULL OR bot_id = ?1 ORDER BY created_at",
         )?;
         let v = st
             .query_map([bot_id], |r| {
-                Ok(Memory { id: r.get(0)?, bot_id: r.get(1)?, text: r.get(2)?, created_at: r.get(3)? })
+                Ok(Memory { id: r.get(0)?, bot_id: r.get(1)?, text: r.get(2)?, created_at: r.get(3)?, tier: r.get(4)? })
             })?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(v)
+    }
+
+    /// Change a memory's text and/or tier. False if there's no memory with this id.
+    pub fn update_memory(&self, id: &str, text: Option<&str>, tier: Option<&str>) -> anyhow::Result<bool> {
+        let c = self.c();
+        let mut n = 0;
+        if let Some(t) = text {
+            n += c.execute("UPDATE memories SET text = ?2 WHERE id = ?1", params![id, crate::vault::redact(t)])?;
+        }
+        if let Some(t) = tier {
+            n += c.execute("UPDATE memories SET tier = ?2 WHERE id = ?1", params![id, if t == LOG { LOG } else { PROFILE }])?;
+        }
+        if text.is_none() && tier.is_none() {
+            n = c.query_row("SELECT COUNT(*) FROM memories WHERE id = ?1", [id], |r| r.get::<_, i64>(0))? as usize;
+        }
+        Ok(n > 0)
     }
 
     pub fn delete_memory(&self, id: &str) -> anyhow::Result<bool> {

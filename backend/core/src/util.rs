@@ -130,6 +130,11 @@ pub fn from_local(n: chrono::NaiveDateTime) -> Option<i64> {
     }
 }
 
+/// A unix-ms time in the user's timezone (falls back to UTC).
+pub fn local_time(ms: i64) -> chrono::NaiveDateTime {
+    to_local(ms).unwrap_or_else(|| chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default().naive_utc())
+}
+
 pub fn now_local() -> chrono::NaiveDateTime {
     to_local(now_ms()).unwrap_or_else(|| chrono::Local::now().naive_local())
 }
