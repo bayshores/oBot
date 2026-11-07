@@ -68,6 +68,9 @@ pub struct AppState {
     /// Bots taking a turn in a group chat right now: Bot id → group id. While it's there, what the
     /// Bot posts (replies, tool rows, cards) goes to the group.
     pub group_turns: std::sync::Mutex<HashMap<String, String>>,
+    /// Bots whose reply is done while Claude Code wraps up (end-of-turn hooks, exit). They show as
+    /// not working, so the "working" line doesn't linger under the reply.
+    pub finishing: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -82,6 +85,11 @@ impl AppState {
 
     pub async fn is_running(&self, bot_id: &str) -> bool {
         self.runs.lock().await.contains_key(bot_id)
+    }
+
+    /// Working, as the app shows it: running and not just wrapping up.
+    async fn shows_working(&self, bot_id: &str) -> bool {
+        self.is_running(bot_id).await && !self.finishing.lock().map(|f| f.contains(bot_id)).unwrap_or(false)
     }
 
     /// Where a Bot's messages go right now: the group it's answering in, or its own chat. Also
@@ -110,7 +118,7 @@ impl AppState {
         if b.is_group() {
             return self.group_view(b);
         }
-        b.running = self.is_running(&b.id).await;
+        b.running = self.shows_working(&b.id).await;
         b.main = self.db.kv_get("main_bot").as_deref() == Some(b.id.as_str());
         b.conversation_id = b.session_id.clone();
         b.last_preview = crate::vault::redact(&b.last_preview);
@@ -129,7 +137,8 @@ impl AppState {
     fn group_view(&self, mut b: Bot) -> Bot {
         let working: Vec<String> = {
             let g = self.group_turns.lock().unwrap_or_else(|e| e.into_inner());
-            b.members.iter().filter(|m| g.get(*m) == Some(&b.id)).cloned().collect()
+            let done = self.finishing.lock().unwrap_or_else(|e| e.into_inner());
+            b.members.iter().filter(|m| g.get(*m) == Some(&b.id) && !done.contains(*m)).cloned().collect()
         };
         b.running = !working.is_empty();
         b.last_preview = crate::vault::redact(&b.last_preview);

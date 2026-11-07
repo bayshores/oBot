@@ -75,7 +75,9 @@ async fn push(state: &Shared, bot_id: &str, prompt: String, user_msg: Option<Str
         tracing::warn!("ignored a turn queued for group chat {bot_id}");
         return false;
     }
-    let busy = state.runs.lock().await.contains_key(bot_id);
+    // A Bot that's only wrapping up isn't busy: the message goes next without a "Queued" mark.
+    let finishing = state.finishing.lock().map(|f| f.contains(bot_id)).unwrap_or(false);
+    let busy = state.runs.lock().await.contains_key(bot_id) && !finishing;
     let mut queues = state.queues.lock().await;
     let needs_worker = queues.get(bot_id).map_or(true, |tx| tx.is_closed());
     if needs_worker {
@@ -503,6 +505,7 @@ async fn run_turn(
     }
 
     state.runs.lock().await.remove(bot_id);
+    state.finishing.lock().unwrap_or_else(|e| e.into_inner()).remove(bot_id);
     if let Ok(mut map) = state.activity.lock() {
         map.remove(bot_id);
     }
@@ -1602,6 +1605,12 @@ impl Turn {
             } else {
                 text
             });
+        } else {
+            // The reply is done; Claude Code still runs its end-of-turn hooks and exits. Show the
+            // Bot as done now, so the "working" line doesn't stay under the reply.
+            self.flush_held().await;
+            self.state.finishing.lock().unwrap_or_else(|e| e.into_inner()).insert(self.bot_id.clone());
+            self.state.emit_bot(&self.bot_id).await;
         }
     }
 

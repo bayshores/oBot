@@ -90,6 +90,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         pair_lock: Mutex::new(()),
         screens: Default::default(),
         group_turns: Default::default(),
+        finishing: Default::default(),
     });
 
     // Look up Claude Code in the background so the first screen loads fast.

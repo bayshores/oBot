@@ -47,7 +47,8 @@ Bot = {
   created_at: number, updated_at: number,   // unix ms; updated_at = last activity (sort desc)
   last_preview: string,   // short text of last message for the sidebar
   unread: number,
-  running: boolean,       // agent is working right now (show typing dots + stop button)
+  running: boolean,       // agent is working right now (show typing dots + stop button); false once its reply
+                          // is done, while Claude Code finishes up (a message sent then isn't marked queued)
   activity: null | { kind: string, label: string },  // live status line while running, e.g.
                           // {kind:"searching_web", label:"Searching the web"}. kinds: thinking, searching_web,
                           // reading_web, reading_file, writing_file, running_commands, browsing, on_its_computer,

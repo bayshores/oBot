@@ -309,9 +309,25 @@
       el.append(s);
     });
   }
+  // Each look stays at least this long, so quick steps (thinking → running → thinking) don't
+  // make the picture or the status text flicker.
+  const HOLD_MS = 1200;
   function setAvatarState(el, state, force) {
-    if (!el || !el._av || (!force && el._state === state)) return;
+    if (!el || !el._av) return;
+    el._want = state;
+    if (!force && el._state === state) return;
+    const wait = (el._stateAt || 0) + HOLD_MS - Date.now();
+    if (!force && wait > 0) {
+      if (!el._stateT) {
+        el._stateT = setTimeout(() => {
+          el._stateT = null;
+          if (el._av && el._want !== el._state) setAvatarState(el, el._want);
+        }, wait);
+      }
+      return;
+    }
     el._state = state;
+    el._stateAt = Date.now();
     try {
       if (el._av.set) el._av.set({ state });
     } catch {}
@@ -1410,10 +1426,14 @@
     syncAvatar(parts.av, b, layout === 'tile' ? 60 : 36, { live: true, state: botState(b), badge: b.main ? 'main' : null });
     if (layout === 'row') {
       const p = previewOf(b);
-      parts.preview.textContent = '';
-      parts.preview.classList.toggle('warn', !!p.warn);
-      if (p.draft != null) parts.preview.append(h('span', { class: 'draft-label' }, 'Draft:'), ' ' + p.draft);
-      else parts.preview.textContent = p.text;
+      const key = (p.warn ? 'w:' : '') + (p.draft != null ? 'd:' + p.draft : p.text);
+      if (parts.previewKey !== key) {
+        parts.previewKey = key;
+        parts.preview.textContent = '';
+        parts.preview.classList.toggle('warn', !!p.warn);
+        if (p.draft != null) parts.preview.append(h('span', { class: 'draft-label' }, 'Draft:'), ' ' + p.draft);
+        else parts.preview.textContent = p.text;
+      }
       parts.dot.hidden = !(unread || waiting);
       parts.dot.classList.toggle('warn', waiting);
       parts.dot.setAttribute('aria-label', waiting ? 'Needs attention' : 'Unread activity');
@@ -1455,7 +1475,8 @@
       const el = botRowEl(b, 'row');
       const c = rowCache.get('row:' + b.id);
       const n = pins.length + i + 1;
-      c.parts.kbd.textContent = n <= 9 ? MOD + n : '';
+      const kbd = n <= 9 ? MOD + n : '';
+      if (c.parts.kbd.textContent !== kbd) c.parts.kbd.textContent = kbd;
       want.push(el);
     });
     if (hid.length) {
@@ -1857,7 +1878,7 @@
     }
     syncAvatar(islandAv, b, 24);
     const nm = $('.island-name', pill);
-    nm.textContent = b.name;
+    if (nm.textContent !== b.name) nm.textContent = b.name;
     pill.title = b.name;
     pill.setAttribute('aria-expanded', S.panelOpen ? 'true' : 'false');
     pill.dataset.tip = isGroup(b) ? 'Group settings' : 'Bot settings';
@@ -2117,23 +2138,39 @@
     if (av._bot !== b.id) {
       av._bot = b.id;
       av._look = null;
+      phrase.textContent = '';
+      phrase._at = 0;
     }
     // In a group: the pictures of the Bots still working.
     const working = isGroup(b) && b.activity && Array.isArray(b.activity.members) ? Object.assign({}, b, { members: b.activity.members }) : b;
     syncAvatar(av, working, 28, { live: true, state: botState(b) });
     const start = S.runStart.get(b.id) || Date.now();
     const text = (b.activity && b.activity.label) || WORK_PHRASES[Math.floor(start / 1000) % WORK_PHRASES.length];
-    if (phrase.textContent !== text) {
-      const had = !!phrase.textContent;
-      phrase.textContent = text;
-      if (had) {
-        phrase.classList.remove('swap');
-        void phrase.offsetWidth;
-        phrase.classList.add('swap');
-      }
-    }
+    setPhrase(phrase, text);
     tickActivity();
     return actEl;
+  }
+  function setPhrase(phrase, text) {
+    phrase._want = text;
+    if (phrase.textContent === text) return;
+    const wait = (phrase._at || 0) + HOLD_MS - Date.now();
+    if (phrase.textContent && wait > 0) {
+      if (!phrase._t) {
+        phrase._t = setTimeout(() => {
+          phrase._t = null;
+          setPhrase(phrase, phrase._want);
+        }, wait);
+      }
+      return;
+    }
+    const had = !!phrase.textContent;
+    phrase.textContent = text;
+    phrase._at = Date.now();
+    if (had) {
+      phrase.classList.remove('swap');
+      void phrase.offsetWidth;
+      phrase.classList.add('swap');
+    }
   }
   function tickActivity() {
     if (!actEl || !actEl.isConnected) return;
@@ -3339,6 +3376,7 @@
     if (idx < 0 && m.role === 'user') {
       const t = list.findIndex((x) => x._tmp && x.text === m.text);
       if (t >= 0) {
+        adoptRow(list[t].id, m.id);
         list.splice(t, 1);
         idx = -1;
       }
@@ -3358,6 +3396,21 @@
     }
     if (m.role === 'user' && isNew) S.pinned = true;
     scheduleRender();
+  }
+  // The server confirmed a message shown while sending: it keeps the same row, so it doesn't
+  // slide in a second time.
+  function adoptRow(tmpId, id) {
+    const c = S.nodes.get(tmpId);
+    if (c && !S.nodes.has(id)) {
+      S.nodes.delete(tmpId);
+      c.el.classList.remove('enter');
+      S.nodes.set(id, c);
+    }
+    const sep = S.seps.get('t:' + tmpId);
+    if (sep && !S.seps.has('t:' + id)) {
+      S.seps.delete('t:' + tmpId);
+      S.seps.set('t:' + id, sep);
+    }
   }
   function removeMessage(botId, id) {
     const list = S.msgs.get(botId);
@@ -3579,7 +3632,10 @@
       const m = await api(`/api/bots/${b.id}/messages`, { method: 'POST', body: { text, attachments: atts, reply_to: reply ? reply.id : '' } });
       const list = S.msgs.get(b.id) || [];
       const i = list.findIndex((x) => x.id === tmp.id);
-      if (i >= 0) list.splice(i, 1);
+      if (i >= 0) {
+        if (m && m.id) adoptRow(tmp.id, m.id);
+        list.splice(i, 1);
+      }
       if (m && m.id) upsertMessage(m, true);
       else scheduleRender();
     } catch (e) {
