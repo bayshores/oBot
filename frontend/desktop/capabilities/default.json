@@ -1,12 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the openbot page (served by the built-in local server) drag the window, notify and badge.",
+  "description": "Lets the openbot page (served by the built-in local server) drag the window, notify, set the badge, check focus and open links in the browser.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "notification:default"
+    "notification:default",
+    "allow-notify",
+    "allow-set-badge",
+    "allow-is-focused",
+    "allow-open-url"
   ]
 }
