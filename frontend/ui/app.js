@@ -1866,7 +1866,7 @@
   }, 120);
 
   const isShown = (m) => {
-    if (m.role === 'tool') return S.prefs.showTools === true;
+    if (m.role === 'tool' || m.role === 'note') return S.prefs.showTools === true;
     return true;
   };
   const speakerOf = (role) => (role === 'user' ? 'user' : role === 'event' || role === 'system' || role === 'relay' ? 'center' : 'bot');
@@ -2156,6 +2156,9 @@
         break;
       case 'relay':
         stack.append(relayRow(m));
+        break;
+      case 'note':
+        stack.append(h('div', { class: 'note-line', title }, m.text || ''));
         break;
       default:
         stack.append(h('div', { class: 'event-line', title }, m.text));

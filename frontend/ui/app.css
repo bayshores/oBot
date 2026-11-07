@@ -690,6 +690,8 @@ b, strong { font-weight: var(--w-semibold); }
 .event-line .ico { color: var(--icon-3); }
 .event-open { margin-left: 2px; padding: 0 6px; height: 20px; border-radius: 6px; font-size: 12px; font-weight: var(--w-medium); color: var(--accent-text); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
 .event-open:hover { background: var(--hover); }
+/* a Bot's status note while it worked (shown with tool rows) */
+.note-line { font-size: 12.5px; line-height: 18px; color: var(--text-3); padding: 2px 4px; max-width: min(88%, 560px); }
 /* Bot-to-Bot messages and @Bot mentions */
 .relay { align-self: center; width: min(88%, 560px, calc(100% - 82px)); display: flex; flex-direction: column; align-items: center; }
 .relay-toggle { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: 6px; color: var(--text-2); font-size: 12px; }

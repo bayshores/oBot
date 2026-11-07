@@ -63,7 +63,7 @@ Bot = {
 Message = {
   id: string, bot_id: string,
   role: "user" | "bot" | "tool" | "approval" | "error" | "system"
-      | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "event",
+      | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "note" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
   status: "done" | "running" | "ok" | "failed" | "stopped" | "declined" | "pending" | "allowed" | "denied" | "expired" | "skipped" | "replaced",
@@ -94,6 +94,8 @@ Message = {
 //            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
+//  note:     {}   a short line the Bot wrote right before a tool call ("Checking the syllabus."); hidden like tool rows,
+//            and shown as bot.activity.label while it works. Longer text (lists, paragraphs, questions) stays a "bot" message.
 //  relay:    { direction: "to"|"from", bot_id, name }   a message one Bot passed to another (message_bot); it is in
 //            both chats ("Messaged <name>" / "Message from <name>"); text = the message
 //  calendar: an event the Bot added or changed without asking (a calendar card): { action: "create"|"update",

@@ -152,6 +152,18 @@ fn with_time(prompt: &str) -> String {
     format!("[openbot: It's {} now.]\n{prompt}", crate::util::now_local().format("%A %Y-%m-%d %H:%M"))
 }
 
+/// A short bit of narration ("Checking the syllabus now.") rather than something the user needs to read.
+fn is_note(t: &str) -> bool {
+    !t.is_empty()
+        && t.chars().count() <= 280
+        && !t.contains("\n\n")
+        && !t.lines().any(|l| {
+            let l = l.trim_start();
+            l.starts_with("- ") || l.starts_with("* ") || l.starts_with('|') || l.starts_with("```") || l.starts_with('#') || l.chars().next().is_some_and(|c| c.is_ascii_digit()) && l.contains(". ")
+        })
+        && !t.trim_end().ends_with('?')
+}
+
 /// The prompt for another try: the failed attempt may already be in the conversation.
 fn retry_prompt(prompt: &str) -> String {
     let original = prompt.strip_prefix(RETRY_NOTE).unwrap_or(prompt);
@@ -538,6 +550,8 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
         "You are \"{name}\", a personal AI assistant that lives in the openbot app.\n\
          The user chats with you like in a messaging app, so reply like a helpful friend texting: \
          warm, clear and to the point, in short paragraphs. Use Markdown only when it helps (lists, code, tables).\n\
+         While you work, a short line before a tool call (like \"Checking the syllabus.\") shows as your status, not \
+         as a message, so don't narrate every step. Put everything the user needs in your reply at the end.\n\
          You run on the user's computer \"{host}\" ({os}) and can use its tools (shell, files, web) to actually get \
          things done instead of only giving advice. Your own working folder is: {workdir}\n\
          Files the user attaches are saved in the \"uploads\" folder inside your working folder.\n\
@@ -1004,6 +1018,9 @@ struct Turn {
     blocks: HashMap<u64, String>,
     /// Bot replies still being written. Each is shown once, when it's finished.
     live: HashMap<String, Message>,
+    /// Finished replies of the current API message, held until we know whether a tool call follows
+    /// (then a short one is a status note, not a chat bubble).
+    held: Vec<String>,
     streamed_api_msgs: HashSet<String>,
     /// Text Claude Code made up itself (model "<synthetic>"), e.g. "You've hit your weekly limit".
     /// Held back until the run's result: an error result shows the same text as an error, so
@@ -1118,6 +1135,7 @@ impl Turn {
             cur_api_msg: String::new(),
             blocks: HashMap::new(),
             live: HashMap::new(),
+            held: Vec::new(),
             streamed_api_msgs: HashSet::new(),
             synthetic: Vec::new(),
             tools: HashMap::new(),
@@ -1191,9 +1209,11 @@ impl Turn {
         let idx = ev.get("index").and_then(Value::as_u64).unwrap_or(0);
         match ev.get("type").and_then(Value::as_str).unwrap_or("") {
             "message_start" => {
+                self.flush_held().await;
                 self.cur_api_msg = ev.pointer("/message/id").and_then(Value::as_str).unwrap_or("").to_string();
                 self.blocks.clear();
             }
+            "message_stop" => self.flush_held().await,
             "content_block_start" => {
                 let bt = ev.pointer("/content_block/type").and_then(Value::as_str).unwrap_or("");
                 if bt == "thinking" {
@@ -1201,6 +1221,9 @@ impl Turn {
                 } else if bt == "tool_use" {
                     let name = ev.pointer("/content_block/name").and_then(Value::as_str).unwrap_or("");
                     let (kind, label) = activity_for(name);
+                    // A short "Checking the syllabus." right before the tool is the status line instead.
+                    let note = self.notes_before_tool().await;
+                    let label = note.map(|n| truncate_chars(&n, 90)).unwrap_or(label);
                     set_activity(&self.state, &self.bot_id, Some((kind, &label))).await;
                 }
                 if bt == "text" {
@@ -1223,12 +1246,41 @@ impl Turn {
             }
             "content_block_stop" => {
                 if let Some(id) = self.blocks.remove(&idx) {
-                    self.finalize(&id).await;
+                    self.held.push(id);
                     set_activity(&self.state, &self.bot_id, Some(("thinking", "Thinking"))).await;
                 }
             }
             _ => {}
         }
+    }
+
+    /// Show the held replies as chat messages.
+    async fn flush_held(&mut self) {
+        for id in std::mem::take(&mut self.held) {
+            self.finalize(&id).await;
+        }
+    }
+
+    /// A tool call follows the held replies: short ones become status notes (hidden in the chat like
+    /// tool rows; the last one is the status line), longer ones stay messages. Returns the last note.
+    async fn notes_before_tool(&mut self) -> Option<String> {
+        let mut last = None;
+        for id in std::mem::take(&mut self.held) {
+            let Some(m) = self.live.get(&id) else { continue };
+            let t = m.text.trim().to_string();
+            if is_note(&t) {
+                let mut m = self.live.remove(&id).unwrap_or_else(|| self.new_msg("note", "", "done", json!({})));
+                m.role = "note".into();
+                m.text = t.clone();
+                m.html = String::new();
+                let _ = self.state.db.upsert_message(&m);
+                self.state.emit_message(true, &m);
+                last = Some(t);
+            } else {
+                self.finalize(&id).await;
+            }
+        }
+        last
     }
 
     async fn finalize(&mut self, id: &str) {
@@ -1422,6 +1474,7 @@ impl Turn {
                 self.add_bot_text(&t);
             }
         }
+        self.flush_held().await;
         let ids: Vec<String> = self.live.keys().cloned().collect();
         for id in ids {
             self.finalize(&id).await;
