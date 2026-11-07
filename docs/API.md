@@ -332,7 +332,9 @@ Each bot can have its own Linux screen: a virtual display (Xvfb, 1280×800) with
 window manager, a Chrome/Chromium window with the bot's own profile
 (`~/.openbot/screens/<bot>/profile` inside Linux), and an x11vnc server on 127.0.0.1 only.
 On Windows hosts it runs inside WSL (`wsl_distro`); on Linux hosts directly. Screens start on
-first use and stop after 30 minutes with no bot run and no viewer.
+first use and stop after 30 minutes with no bot run and no viewer. A starting screen waits for the browser
+window (it reopens the last tabs), and the first computer tool result then tells the bot its screen was off
+and its logins are kept.
 
 The bot gets these MCP tools (each returns a screenshot): `computer_screenshot`,
 `computer_click {x,y,button?,count?}`, `computer_move {x,y}`, `computer_drag {from_x,from_y,to_x,to_y}`,

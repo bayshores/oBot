@@ -180,6 +180,9 @@ x11vnc -display ":$N" -rfbport "$P" -localhost -rfbauth "$DIR/vncpass" -forever 
 ok=0; for i in $(seq 100); do (exec 3<>"/dev/tcp/127.0.0.1/$P") 2>/dev/null && { ok=1; break; }; sleep 0.1; done
 [ $ok = 1 ] || { echo "ERROR the screen sharing server didn't start"; exit 1; }
 ob_browser about:blank || true
+# Wait for the browser window (it reopens the last tabs), so the first screenshot isn't a blank screen.
+for i in $(seq 150); do xdotool search --onlyvisible --class '[Cc]hrom' >/dev/null 2>&1 && break; sleep 0.1; done
+sleep 1
 echo READY
 wait
 "#;
@@ -209,6 +212,8 @@ pub struct Info {
     pub display: u16,
     pub port: u16,
     pub password: String,
+    /// The screen was off and was started just now.
+    pub started: bool,
 }
 
 fn port_of(display: u16) -> u16 {
@@ -356,7 +361,7 @@ impl Screens {
         if let Some(s) = map.get_mut(bot_id) {
             if matches!(s.child.try_wait(), Ok(None)) {
                 s.last_used = now_ms();
-                return Ok(Info { display: s.display, port: port_of(s.display), password: s.password.clone() });
+                return Ok(Info { display: s.display, port: port_of(s.display), password: s.password.clone(), started: false });
             }
             map.remove(bot_id);
         }
@@ -410,7 +415,7 @@ impl Screens {
         tokio::spawn(async move {
             let _ = browser_run(&c, display, &b, json!({"mode": "trim", "keep": START_TABS})).await;
         });
-        Ok(Info { display, port: port_of(display), password })
+        Ok(Info { display, port: port_of(display), password, started: true })
     }
 
     /// Bots whose screen is running now.
@@ -514,9 +519,21 @@ fn valid_keys(keys: &str) -> bool {
         && keys.split_whitespace().all(|combo| combo.split('+').all(|k| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')))
 }
 
+/// Told to the Bot when its screen had to be started again, so it doesn't think its browser crashed.
+const RESTARTED: &str = "Your screen was off (screens switch off after 30 minutes without use) and just started again. \
+    The browser reopened its last tabs and your logins are kept.";
+
 /// Run one computer_* tool for a bot. The screen is started on first use.
 pub async fn computer_tool(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<ToolOut, String> {
     let info = state.screens.ensure(state, bot_id).await?;
+    let mut out = computer_action(state, bot_id, &info, name, args).await?;
+    if info.started {
+        out.text = format!("{RESTARTED} {}", out.text);
+    }
+    Ok(out)
+}
+
+async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, args: &Value) -> Result<ToolOut, String> {
     let cfg = state.config.read().await.clone();
     let d = ("OB_DISPLAY", info.display.to_string());
     let act = |script: &'static str, extra: Vec<(&'static str, String)>| {
