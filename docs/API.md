@@ -66,9 +66,10 @@ Message = {
       | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
-  status: "done" | "running" | "ok" | "failed" | "stopped" | "pending" | "allowed" | "denied" | "expired" | "replaced",
-          // expired = approval left open when openbot restarted; stopped = a tool cut off by Stop or by a new
-          // message; replaced = a secure form closed because the Bot asked again with a newer one
+  status: "done" | "running" | "ok" | "failed" | "stopped" | "declined" | "pending" | "allowed" | "denied" | "expired" | "skipped" | "replaced",
+          // expired = approval left open when the turn ended or openbot restarted; skipped = approval closed because the
+          // user pressed Stop or sent a new message (a new message while a card waits stops the turn and is read right away); stopped = a tool cut off by Stop or by a new
+          // message; declined = a tool that didn't run because the user said no (or moved on) at its card; replaced = a secure form closed because the Bot asked again with a newer one
   meta: object,           // see below
   created_at: number
 }

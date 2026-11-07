@@ -83,8 +83,10 @@ fn merge(jobs: &[Job], steered: bool) -> String {
         }
         if j.user_msg.is_some() && (j.while_busy || steered) && !said_busy {
             out.push_str(if steered {
-                "[openbot: The user sent this while you were working and chose \"Send now\", so your previous turn was \
-                 stopped partway. Take this into account, then finish whatever still matters from before.]\n"
+                "[openbot: The user sent this while you were working (with \"Send now\", or while a card of yours waited \
+                 for their answer), so your previous turn was stopped partway. A card that was waiting was skipped, not \
+                 answered: ask again only if it still matters. Take this message into account, then finish whatever still \
+                 matters from before.]\n"
             } else {
                 "[openbot: The user sent this while you were working on the previous request.]\n"
             });
@@ -173,7 +175,15 @@ pub async fn stop(state: &Shared, bot_id: &str) {
     if let Some(h) = state.runs.lock().await.get(bot_id) {
         h.stop.notify_one();
     }
-    deny_pending(state, bot_id).await;
+    deny_pending(state, bot_id, "skipped").await;
+}
+
+/// The user sent a message while the Bot waits on an approval card: they moved on, so the card is
+/// skipped and the Bot reads the message now instead of after the card is answered.
+pub async fn skip_card_for(state: &Shared, bot_id: &str, msg_id: &str) {
+    if state.approvals.lock().await.values().any(|p| p.bot_id == bot_id) {
+        steer(state, bot_id, msg_id).await;
+    }
 }
 
 /// "Send now" on a queued message: stop the current turn and run the waiting messages right away.
@@ -189,11 +199,13 @@ pub async fn steer(state: &Shared, bot_id: &str, msg_id: &str) -> bool {
     h.steer.store(true, Ordering::SeqCst);
     h.stop.notify_one();
     drop(runs);
-    deny_pending(state, bot_id).await;
+    deny_pending(state, bot_id, "skipped").await;
     true
 }
 
-async fn deny_pending(state: &Shared, bot_id: &str) {
+/// Close the Bot's open approval cards without a yes: "skipped" (Stop, or the user sent a new message)
+/// or "expired" (the turn ended).
+async fn deny_pending(state: &Shared, bot_id: &str, status: &str) {
     let mut approvals = state.approvals.lock().await;
     let ids: Vec<String> = approvals
         .iter()
@@ -204,7 +216,7 @@ async fn deny_pending(state: &Shared, bot_id: &str) {
         if let Some(p) = approvals.remove(&id) {
             let _ = p.reply.send(false);
             if let Ok(Some(mut m)) = state.db.get_message(&p.message_id) {
-                m.status = "denied".into();
+                m.status = status.into();
                 let _ = state.db.upsert_message(&m);
                 state.emit_message(false, &m);
             }
@@ -382,7 +394,7 @@ async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, s
     if let Ok(mut map) = state.activity.lock() {
         map.remove(bot_id);
     }
-    deny_pending(state, bot_id).await;
+    deny_pending(state, bot_id, "expired").await;
     state.emit_bot(bot_id).await;
 }
 
@@ -999,6 +1011,8 @@ struct Turn {
     synthetic: Vec<String>,
     /// tool_use_id -> tool message
     tools: HashMap<String, Message>,
+    /// Each tool call's input, to relabel a row that didn't run or finish ("Add …" instead of "Added …").
+    tool_inputs: HashMap<String, Value>,
     got_result: bool,
     /// Claude Code started properly (sent its "init" event).
     saw_init: bool,
@@ -1022,6 +1036,13 @@ enum End {
     Stopped,
     /// The user pressed "Send now" on a waiting message.
     Steered,
+}
+
+/// The tool didn't run because the user said no, or moved on, at its approval card.
+/// (Every "not allowed" result in openbot starts with one of these.)
+fn was_declined(out: &str) -> bool {
+    let out = out.trim_start();
+    out.starts_with("The user said no") || out.starts_with("The user didn't allow") || out.contains("The user said no to this action.")
 }
 
 pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
@@ -1100,6 +1121,7 @@ impl Turn {
             streamed_api_msgs: HashSet::new(),
             synthetic: Vec::new(),
             tools: HashMap::new(),
+            tool_inputs: HashMap::new(),
             got_result: false,
             saw_init: false,
             resume_failed: false,
@@ -1287,6 +1309,7 @@ impl Turn {
                     );
                     let _ = self.state.db.upsert_message(&m);
                     self.state.emit_message(true, &m);
+                    self.tool_inputs.insert(id.clone(), input);
                     self.tools.insert(id, m);
                 }
                 _ => {}
@@ -1303,13 +1326,20 @@ impl Turn {
             let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
             let Some(m) = self.tools.get_mut(id) else { continue };
             let is_error = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+            let out = result_text(b.get("content").unwrap_or(&Value::Null));
             m.status = match (is_error, self.cutting) {
+                _ if was_declined(&out) => "declined",
                 (false, _) => "ok",
                 (true, true) => "stopped",
                 (true, false) => "failed",
             }
             .into();
-            let out = result_text(b.get("content").unwrap_or(&Value::Null));
+            if m.status == "declined" {
+                let name = m.meta.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                let now = tool_summary(&name, self.tool_inputs.get(id).unwrap_or(&Value::Null), false);
+                m.text = now.clone();
+                m.meta["summary"] = json!(now);
+            }
             m.meta["output"] = json!(truncate_chars(&out, 4000));
             let _ = self.state.db.upsert_message(m);
             self.state.emit_message(false, m);
@@ -1399,9 +1429,14 @@ impl Turn {
         // Tools still running when the turn ends: cut off by Stop or by a new message ("stopped"),
         // or the run broke ("failed").
         let cut_off = if matches!(end, End::Stopped | End::Steered) { "stopped" } else { "failed" };
-        for (_, m) in self.tools.iter_mut() {
+        for (id, m) in self.tools.iter_mut() {
             if m.status == "running" {
                 m.status = cut_off.into();
+                // It didn't finish, so "Add …" rather than "Added …".
+                let name = m.meta.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                let now = tool_summary(&name, self.tool_inputs.get(id).unwrap_or(&Value::Null), false);
+                m.text = now.clone();
+                m.meta["summary"] = json!(now);
                 let _ = self.state.db.upsert_message(m);
                 self.state.emit_message(false, m);
             }

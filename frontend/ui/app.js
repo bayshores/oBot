@@ -2941,14 +2941,14 @@
       card.append(h('div', { class: 'card-actions' }, buttons), errLine);
     } else {
       const calAct = cal && CAL_ACTION[cal.action];
-      const label = status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? (calAct ? 'Not sent' : 'Denied') : status === 'allowed' ? (calAct ? calAct.done : 'Allowed once') : 'Status unavailable';
+      const label = status === 'skipped' ? 'Skipped' : status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? (calAct ? 'Not sent' : 'Denied') : status === 'allowed' ? (calAct ? calAct.done : 'Allowed once') : 'Status unavailable';
       const ok = status === 'allowed';
       card.append(
         h(
           'div',
           { class: 'card-settled' },
           h('span', { class: 'settled-pill ' + (ok ? 'ok' : status === 'denied' ? 'no' : '') }, ok ? icon('check', 13, '', 2.2) : status === 'denied' ? icon('x', 13, '', 2.2) : null, label),
-          decided === 'always' && rule ? h('span', { class: 'settled-note' }, `Allowed from now on: ${rule}`) : decided === 'deny' ? h('span', { class: 'settled-note' }, `${botName} won’t do this`) : null
+          status === 'skipped' ? h('span', { class: 'settled-note' }, 'You moved on without answering') : decided === 'always' && rule ? h('span', { class: 'settled-note' }, `Allowed from now on: ${rule}`) : decided === 'deny' ? h('span', { class: 'settled-note' }, `${botName} won’t do this`) : null
         )
       );
     }
@@ -3090,7 +3090,7 @@
     const meta = m.meta || {};
     const open = S.expanded.has(m.id);
     const hasOut = !!(meta.output && String(meta.output).trim());
-    const box = h('div', { class: 'tool-row' + (open ? ' open' : '') + (m.status === 'failed' ? ' failed' : '') + (m.status === 'stopped' ? ' stopped' : '') });
+    const box = h('div', { class: 'tool-row' + (open ? ' open' : '') + (m.status === 'failed' ? ' failed' : '') + (m.status === 'stopped' || m.status === 'declined' ? ' stopped' : '') });
     box.append(
       h(
         'button',
@@ -3106,6 +3106,7 @@
         m.status === 'running' ? spinner('xs') : icon(toolIconName(meta.name), 14),
         h('span', { class: 'tool-sum' }, meta.summary || m.text || meta.name || 'Tool'),
         m.status === 'stopped' ? h('span', { class: 'tool-note' }, 'stopped') : null,
+        m.status === 'declined' ? h('span', { class: 'tool-note' }, 'not done') : null,
         hasOut ? icon('chevronRight', 12, 'chev', 2.2) : null
       )
     );

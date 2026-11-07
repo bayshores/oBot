@@ -844,7 +844,9 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody) -> ApiResult<Mess
     st.db.upsert_bot(&bot)?;
     st.emit_bot(&id).await;
 
-    runner::enqueue_user(&st, &id, prompt, &m.id).await;
+    if runner::enqueue_user(&st, &id, prompt, &m.id).await {
+        runner::skip_card_for(&st, &id, &m.id).await;
+    }
     // Fresh from the database: if the bot is busy it's marked "Queued" (with a "Send now" button),
     // and the bot may already have picked it up again.
     Ok(st.db.get_message(&m.id)?.unwrap_or(m))
