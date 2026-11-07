@@ -793,6 +793,8 @@ fn persona_keys(bot: &str, group: Option<&str>) -> (String, String) {
 
 /// Longest note about changed instructions; a bigger change starts from fresh instructions instead.
 const MAX_CHANGE_NOTE: usize = 6000;
+/// Tokens a conversation may reach before Claude Code summarizes its older messages.
+const COMPACT_WINDOW: u32 = 200_000;
 
 /// What changed in a Bot's instructions, as a note for its next message ("" = nothing).
 fn persona_changes(old: &str, new: &str) -> String {
@@ -1046,6 +1048,13 @@ fn build_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .env("OPENBOT", "1");
+    // Summarize older messages once a conversation reaches about COMPACT_WINDOW tokens. Without
+    // this a 1M-token model only does it near 1M, and every message re-reads the whole thing: a
+    // Bot that had collected 460k tokens of screenshots and files paid about $2 per check-in.
+    // Someone who set their own window for openbot-server keeps it.
+    if std::env::var_os("CLAUDE_CODE_AUTO_COMPACT_WINDOW").is_none() {
+        cmd.env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", COMPACT_WINDOW.to_string());
+    }
 
     // A locked key (still encrypted, see vault.rs) is useless, so it counts as not set.
     let api_key_ok = cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() && !crate::vault::is_locked(&cfg.api_key);
@@ -1055,7 +1064,7 @@ fn build_command(
         // Use the Claude subscription login of this computer.
         cmd.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
     }
-    let mut passed: Vec<String> = vec!["OPENBOT".into()];
+    let mut passed: Vec<String> = vec!["OPENBOT".into(), "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into()];
     if api_key_ok {
         passed.push("ANTHROPIC_API_KEY".into());
     }

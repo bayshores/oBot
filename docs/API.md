@@ -335,6 +335,9 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
   new routines, another Bot's tagline), the Bot gets the changed lines as a note at the start of its next message
   (`[openbot: Your setup changed since this conversation started …]`). A new conversation, or Claude Code summarizing
   the old one, starts from the current instructions.
+* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` (unless openbot-server was started with its own value), so Claude
+  Code summarizes older messages once a conversation reaches about 200k tokens instead of near the model's 1M limit.
+  Every message re-reads the whole conversation, so a long one makes every message cost more.
 * Bots don't load any Claude Code settings files: runs use `--strict-mcp-config` and `--setting-sources=` (none). So the
   only MCP servers are `openbot` plus Settings › Computer › Plugins, and the computer's personal setup (`~/.claude`: plugins,
   skills, hooks, permission rules, CLAUDE.md, output style) is skipped. The bot folder's own `.claude/settings*.json` and
