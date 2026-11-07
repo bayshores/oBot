@@ -793,6 +793,11 @@ fn persona_keys(bot: &str, group: Option<&str>) -> (String, String) {
 
 /// Longest note about changed instructions; a bigger change starts from fresh instructions instead.
 const MAX_CHANGE_NOTE: usize = 6000;
+
+/// The user message as Claude Code's `--input-format stream-json` expects it: one JSON line.
+fn stdin_message(text: &str) -> String {
+    format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": text } }))
+}
 /// Tokens a conversation may reach before Claude Code summarizes its older messages.
 const COMPACT_WINDOW: u32 = 200_000;
 
@@ -897,6 +902,12 @@ fn build_command(
 
     let mut args: Vec<String> = vec![
         "-p".into(),
+        // The message goes in as one JSON line on stdin (see `stdin_message`), not as plain text.
+        // With plain text, Claude Code sometimes decides the run's mode only after it has written its
+        // tool descriptions, so a timeout in them came out as 600000 one run and 1800000 the next. Any
+        // change there makes the model re-read the whole conversation at full price.
+        "--input-format".into(),
+        "stream-json".into(),
         "--output-format".into(),
         "stream-json".into(),
         "--verbose".into(),
@@ -1133,7 +1144,7 @@ async fn drive(
 
     if let Some(mut stdin) = child.stdin.take() {
         // If Claude Code exits right away, its error output says why; the write error doesn't.
-        let _ = stdin.write_all(with_time(&format!("{change_note}{prompt}")).as_bytes()).await;
+        let _ = stdin.write_all(stdin_message(&with_time(&format!("{change_note}{prompt}"))).as_bytes()).await;
         stdin.shutdown().await.ok();
         drop(stdin);
     }
@@ -1773,6 +1784,15 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_goes_in_as_one_json_line() {
+        let line = stdin_message("hi \"there\"\nsecond line");
+        assert!(line.ends_with('\n') && line.matches('\n').count() == 1);
+        let v: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["type"], "user");
+        assert_eq!(v["message"]["content"], "hi \"there\"\nsecond line");
+    }
 
     #[test]
     fn errors_are_sorted() {
