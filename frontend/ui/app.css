@@ -892,6 +892,8 @@ b, strong { font-weight: var(--w-semibold); }
 .tool-line .ico { color: var(--icon-3); }
 .tool-sum { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool-row.failed .tool-line { color: var(--danger-text); }
+.tool-row.stopped .tool-line { opacity: 0.65; }
+.tool-note { margin-left: 6px; font-size: 12px; color: var(--text-3); }
 .tool-row .chev { transition: transform .15s; }
 .tool-row.open .chev { transform: rotate(90deg); }
 .tool-out { display: none; margin: 2px 0 4px 10px; padding: 8px 10px; border-radius: 8px; background: var(--secondary); font-size: 12px; line-height: 17px; color: var(--text-2); max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

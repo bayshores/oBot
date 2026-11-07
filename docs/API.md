@@ -66,7 +66,9 @@ Message = {
       | "widget" | "form" | "attachment" | "visualization" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
-  status: "streaming" | "done" | "running" | "ok" | "failed" | "pending" | "allowed" | "denied" | "expired",  // expired = approval left open when openbot restarted
+  status: "streaming" | "done" | "running" | "ok" | "failed" | "stopped" | "pending" | "allowed" | "denied" | "expired" | "replaced",
+          // expired = approval left open when openbot restarted; stopped = a tool cut off by Stop or by a new
+          // message; replaced = a secure form closed because the Bot asked again with a newer one
   meta: object,           // see below
   created_at: number
 }
@@ -87,7 +89,7 @@ Message = {
 //            answer with POST /api/messages/:id/answer {value}
 //  form:     { title, reason, host, fields: [{id, label, type: "text"|"email"|"tel"|"password"|"code", target}],
 //              save_available: bool, filled: string[], missing: string[], saved: "added"|"updated"|string|null }
-//            a secure form (request_form). status pending|filled|dismissed. Fill it with
+//            a secure form (request_form). status pending|filled|dismissed|replaced (a newer form from the Bot closes older open ones). Fill it with
 //            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">

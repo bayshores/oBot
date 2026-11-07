@@ -927,6 +927,7 @@ async fn drive(
             },
             _ = stop.notified(), if deadline.is_none() => {
                 stopped.store(true, Ordering::SeqCst);
+                turn.cutting = true;
                 interrupt(pid);
                 deadline = Some(tokio::time::Instant::now() + Duration::from_secs(5));
             },
@@ -984,6 +985,8 @@ struct Turn {
     /// Claude Code started properly (sent its "init" event).
     saw_init: bool,
     resume_failed: bool,
+    /// Stop or "Send now" was pressed: tools that end from here on were cut off, not failed.
+    cutting: bool,
     /// The run's error result, if any (shown by run_turn after any retries).
     error: Option<String>,
 }
@@ -1074,6 +1077,7 @@ impl Turn {
             got_result: false,
             saw_init: false,
             resume_failed: false,
+            cutting: false,
             error: None,
         }
     }
@@ -1288,7 +1292,12 @@ impl Turn {
             let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
             let Some(m) = self.tools.get_mut(id) else { continue };
             let is_error = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-            m.status = if is_error { "failed" } else { "ok" }.into();
+            m.status = match (is_error, self.cutting) {
+                (false, _) => "ok",
+                (true, true) => "stopped",
+                (true, false) => "failed",
+            }
+            .into();
             let out = result_text(b.get("content").unwrap_or(&Value::Null));
             m.meta["output"] = json!(truncate_chars(&out, 4000));
             let _ = self.state.db.upsert_message(m);
@@ -1380,9 +1389,12 @@ impl Turn {
         for id in ids {
             self.finalize(&id).await;
         }
+        // Tools still running when the turn ends: cut off by Stop or by a new message ("stopped"),
+        // or the run broke ("failed").
+        let cut_off = if matches!(end, End::Stopped | End::Steered) { "stopped" } else { "failed" };
         for (_, m) in self.tools.iter_mut() {
             if m.status == "running" {
-                m.status = "failed".into();
+                m.status = cut_off.into();
                 let _ = self.state.db.upsert_message(m);
                 self.state.emit_message(false, m);
             }

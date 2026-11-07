@@ -2404,6 +2404,7 @@
     if (!pending) {
       let done;
       if (m.status === 'dismissed') done = 'You closed this form.';
+      else if (m.status === 'replaced') done = 'The Bot asked again with a newer form.';
       else {
         done = `Filled in ${(meta.filled || []).join(', ')} on ${meta.host}.`;
         if (meta.saved === 'added') done += ' Saved to the Vault.';
@@ -2919,7 +2920,7 @@
     const meta = m.meta || {};
     const open = S.expanded.has(m.id);
     const hasOut = !!(meta.output && String(meta.output).trim());
-    const box = h('div', { class: 'tool-row' + (open ? ' open' : '') + (m.status === 'failed' ? ' failed' : '') });
+    const box = h('div', { class: 'tool-row' + (open ? ' open' : '') + (m.status === 'failed' ? ' failed' : '') + (m.status === 'stopped' ? ' stopped' : '') });
     box.append(
       h(
         'button',
@@ -2934,6 +2935,7 @@
         },
         m.status === 'running' ? spinner('xs') : icon(toolIconName(meta.name), 14),
         h('span', { class: 'tool-sum' }, meta.summary || m.text || meta.name || 'Tool'),
+        m.status === 'stopped' ? h('span', { class: 'tool-note' }, 'stopped') : null,
         hasOut ? icon('chevronRight', 12, 'chev', 2.2) : null
       )
     );

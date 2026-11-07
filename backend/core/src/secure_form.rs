@@ -78,6 +78,13 @@ pub async fn tool(st: &Shared, bot_id: &str, args: &Value) -> Result<String, Str
         format!("The page in front on your screen ({}) isn't a secure https:// page. Open the page that needs the values first.", page.url)
     })?;
     let save = fields.iter().any(|f| f["type"] == "password" && (f["target"] == "password" || f["target"] == "new_password"));
+    // Only the newest form can be filled: older open ones from this Bot are closed.
+    for mut old in st.db.list_messages(bot_id, None, 200).unwrap_or_default().into_iter().filter(|m| m.role == "form" && m.status == "pending") {
+        old.status = "replaced".into();
+        if st.db.upsert_message(&old).is_ok() {
+            st.emit_message(false, &old);
+        }
+    }
     let m = Message {
         id: new_id(),
         bot_id: bot_id.to_string(),
@@ -112,6 +119,9 @@ pub struct Submit {
 /// card stays open so they can try again.
 pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, String> {
     let mut m = st.db.get_message(msg_id).map_err(|e| e.to_string())?.filter(|m| m.role == "form").ok_or("No such form")?;
+    if m.status == "replaced" {
+        return Err("The Bot asked again with a newer form. Use that one.".into());
+    }
     if m.status != "pending" {
         return Err("This form was already used".into());
     }
