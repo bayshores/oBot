@@ -387,8 +387,9 @@ screen starts only the 3 newest of the reopened tabs are kept. While it uses the
 does the step (a login, a code, a payment), and answers.
 
 Signing in (logins.rs, secure_form.rs, browser.js): `list_logins {site?}` shows the Bot its Vault
-logins without passwords; `fill_login {id}` types the username and password into the page in front,
-only when that page is `https://` on one of the login's websites or a subdomain. `request_form
+logins without passwords; `fill_login {id?}` types the username and password into the page in front,
+only when that page is `https://` on one of the login's websites or a subdomain. Without an id (or with
+an unknown one) it uses the only login for that website, and lists the choices when there are several. `request_form
 {title, reason?, fields:[{label, type, target?}]}` posts a `form` message tied to the website in
 front; what the user types there is typed into the page (never shown to the Bot), optionally saved as a
 login, and the Bot then gets a note saying which boxes were filled. `list_contact_info` returns the

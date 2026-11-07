@@ -335,8 +335,8 @@ pub fn tool_definitions() -> Vec<Value> {
                "description": "List the website logins the user saved for you in the Vault: id, websites, username and hints (never the password). Give \"site\" (like ucsd.edu) to see only logins for that website.",
                "inputSchema": {"type": "object", "properties": {"site": {"type": "string"}}}}),
         json!({"name": "fill_login",
-               "description": "Sign in with a saved login: openbot types its username and password into the login page in front on your screen. You never see the password. Works only on https pages of that login's websites (or their subdomains). Open the login page first; on a two-step login (username first, password on the next page) call it again on each page. Then click the sign-in button yourself.",
-               "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "The login's id from list_logins"}}, "required": ["id"]}}),
+               "description": "Sign in with a saved login: openbot types its username and password into the login page in front on your screen. You never see the password. Works only on https pages of that login's websites (or their subdomains). Open the login page first; on a two-step login (username first, password on the next page) call it again on each page. Then click the sign-in button yourself. Leave out \"id\" when only one saved login is for this website: openbot picks it.",
+               "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "The login's id from list_logins (needed only when several logins are for this website)"}}}}),
         json!({"name": "list_contact_info",
                "description": "The user's saved contact info from the Vault (name, address, phone numbers, emails), for filling in forms. Type it in yourself with computer_type.",
                "inputSchema": {"type": "object", "properties": {}}}),
@@ -381,16 +381,13 @@ pub async fn tool(st: &Shared, bot_id: &str, name: &str, args: &Value) -> Result
         }
         "fill_login" => {
             let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim();
-            let l = for_bot(&cfg, bot_id).into_iter().find(|l| l.id == id).cloned().ok_or("No saved login with that id. Use list_logins.")?;
+            let mine = for_bot(&cfg, bot_id);
+            if mine.is_empty() {
+                return Err("The user hasn't saved any logins for you. Open the login page and call request_form to ask for it securely.".into());
+            }
             let page = crate::screen::page_inspect(st, bot_id).await?;
             let host = page.host.ok_or_else(|| format!("The page in front ({}) isn't a secure https:// page, so the login can't be filled there.", page.url))?;
-            if !site_allowed(&l.sites, &host) {
-                return Err(format!(
-                    "This login is for {}, but the page in front is on {host}, so nothing was filled. If {host} really is that \
-                     website's login page, ask the user to add it to the login in Settings › Vault.",
-                    l.sites.join(", ")
-                ));
-            }
+            let (l, note) = pick(&mine, id, &host)?;
             let mut fields = vec![];
             if !l.username.is_empty() {
                 fields.push(crate::screen::Fill { target: "username".into(), value: l.username.clone() });
@@ -401,7 +398,7 @@ pub async fn tool(st: &Shared, bot_id: &str, name: &str, args: &Value) -> Result
                 return Err(format!("Couldn't find a username or password box on the page on {host}. Make sure the login form is showing."));
             }
             let missing = if r.missing.is_empty() { String::new() } else { format!(" No {} box on this page (normal for a two-step login: call fill_login again on the next page).", r.missing.join(" or ")) };
-            Ok(format!("Filled the {} on {host}.{missing} Now click the sign-in button and check the result with computer_screenshot.", r.filled.join(" and ")))
+            Ok(format!("{note}Filled the {} on {host}.{missing} Now click the sign-in button and check the result with computer_screenshot.", r.filled.join(" and ")))
         }
         "list_contact_info" => {
             let mine = contacts_for(&cfg, bot_id);
@@ -411,6 +408,37 @@ pub async fn tool(st: &Shared, bot_id: &str, name: &str, args: &Value) -> Result
             Ok(mine.iter().map(|c| contact_text(c)).collect::<Vec<_>>().join("\n\n"))
         }
         _ => Err(format!("Unknown tool {name}")),
+    }
+}
+
+/// Which login `fill_login` uses on a page on `host`: the one with `id`, or, when the id is left out
+/// or unknown (an old id remembered from before, say), the only login for that website. The note
+/// tells the Bot which one it got when its id didn't match.
+fn pick(mine: &[&Login], id: &str, host: &str) -> Result<(Login, String), String> {
+    if let Some(l) = mine.iter().find(|l| !id.is_empty() && l.id == id) {
+        if !site_allowed(&l.sites, host) {
+            return Err(format!(
+                "This login is for {}, but the page in front is on {host}, so nothing was filled. If {host} really is that \
+                 website's login page, ask the user to add it to the login in Settings › Vault.",
+                l.sites.join(", ")
+            ));
+        }
+        return Ok(((*l).clone(), String::new()));
+    }
+    let fits: Vec<&&Login> = mine.iter().filter(|l| site_allowed(&l.sites, host)).collect();
+    let unknown = if id.is_empty() { String::new() } else { format!("No saved login has the id {id}. ") };
+    match fits.as_slice() {
+        [] => Err(format!(
+            "{unknown}No saved login is for {host}, so nothing was filled. Call request_form to ask the user for it securely."
+        )),
+        [l] => {
+            let note = if id.is_empty() { String::new() } else { format!("{unknown}Used the login for {host} ({}, id {}). ", l.username, l.id) };
+            Ok(((**l).clone(), note))
+        }
+        many => Err(format!(
+            "{unknown}Several saved logins are for {host}; call fill_login again with one of these ids:\n{}",
+            many.iter().map(|l| describe(l)).collect::<Vec<_>>().join("\n")
+        )),
     }
 }
 
@@ -452,6 +480,25 @@ fn count(n: usize, one: &str, many: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fill_login_picks_the_login_for_the_page() {
+        let mk = |id: &str, site: &str, user: &str| Login { id: id.into(), sites: vec![site.into()], username: user.into(), ..Default::default() };
+        let (a, b, c) = (mk("a1", "ucsd.edu", "sesla"), mk("b2", "ucsd.edu", "seesla"), mk("c3", "shop.com", "me"));
+        // The right id works, an id for another website doesn't.
+        assert_eq!(pick(&[&a, &c], "a1", "a5.ucsd.edu").unwrap().0.id, "a1");
+        assert!(pick(&[&a, &c], "c3", "a5.ucsd.edu").is_err());
+        // No id, or an old one: the only login for the page is used, and the Bot is told which.
+        let (l, note) = pick(&[&a, &c], "", "a5.ucsd.edu").unwrap();
+        assert_eq!((l.id.as_str(), note.as_str()), ("a1", ""));
+        let (l, note) = pick(&[&a, &c], "885758", "a5.ucsd.edu").unwrap();
+        assert_eq!(l.id, "a1");
+        assert!(note.contains("No saved login has the id 885758") && note.contains("id a1"));
+        // Two logins for the page: it lists them instead of guessing.
+        let e = pick(&[&a, &b, &c], "", "a5.ucsd.edu").unwrap_err();
+        assert!(e.contains("[a1]") && e.contains("[b2]") && !e.contains("[c3]"));
+        assert!(pick(&[&c], "", "a5.ucsd.edu").is_err());
+    }
 
     #[test]
     fn sites_match_only_their_own_pages() {
