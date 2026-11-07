@@ -1019,7 +1019,13 @@ fn build_command(
         }
         json!([{ "hooks": [{ "type": "command", "command": c, "timeout": 30 }] }])
     };
-    let mut settings = json!({ "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact") } });
+    // autoCompactEnabled: someone who turned off summarizing for their own Claude Code on this
+    // computer (it's kept in ~/.claude.json, which --setting-sources= doesn't skip) would turn it off
+    // for every Bot too, and then COMPACT_WINDOW never applies.
+    let mut settings = json!({
+        "autoCompactEnabled": true,
+        "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact") }
+    });
     if wsl {
         // Claude Code's sandbox (bubblewrap) works in WSL2: commands can only write inside the bot's folder.
         settings["sandbox"] = json!({ "enabled": true, "autoAllowBashIfSandboxed": true });
