@@ -1436,7 +1436,7 @@ async fn import_memories(State(st): State<Shared>, Json(b): Json<ImportBody>) ->
 }
 
 fn skill_dir(bot: &Bot) -> PathBuf {
-    PathBuf::from(&bot.workdir).join(".claude").join("skills")
+    crate::skills::dir(&bot.workdir)
 }
 
 fn valid_skill_name(n: &str) -> bool {

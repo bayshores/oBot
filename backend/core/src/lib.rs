@@ -26,6 +26,7 @@ pub mod runner;
 pub mod screen;
 pub mod secure_form;
 pub mod security;
+pub mod skills;
 pub mod state;
 pub mod tools;
 pub mod util;

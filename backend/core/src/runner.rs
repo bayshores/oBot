@@ -732,13 +732,22 @@ fn build_command(
     args.push("--mcp-config".into());
     args.push(p(&mcp_path));
     // Bots get only what openbot gives them. Without these two, Claude Code would also load this
-    // computer's personal Claude Code setup (~/.claude): its MCP servers and claude.ai connectors,
-    // plugins, skills, hooks, permission rules, CLAUDE.md and output style. That duplicates openbot's
-    // own tools (browser, Connections) and lets personal permission rules apply to bots.
-    // Skills openbot saves in the bot's folder (.claude/skills) are "project" ones, so they still load.
+    // computer's personal Claude Code setup (~/.claude: MCP servers, claude.ai connectors, plugins,
+    // skills, hooks, permission rules, CLAUDE.md, output style) and the settings files in the bot's
+    // own folder. A bot can write those itself, for example an "allow" rule or a helper agent that
+    // skips approvals, so none are loaded. "--setting-sources=" (one argument) survives wsl.exe,
+    // an empty separate argument may not. Settings from --settings below still apply.
     args.push("--strict-mcp-config".into());
-    args.push("--setting-sources".into());
-    args.push("project,local".into());
+    args.push("--setting-sources=".into());
+    // The bot's skills, cleaned and copied into openbot's data folder (see skills.rs).
+    match crate::skills::build_plugin(&bot.workdir, &bot_dir) {
+        Ok(Some(dir)) => {
+            args.push("--plugin-dir".into());
+            args.push(p(&dir));
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("couldn't prepare the skills of bot {}: {e}", bot.id),
+    }
     // Hooks (see hooks.rs): Claude Code runs this same program at the end of each turn and before
     // it summarizes older messages. Forward slashes work in every shell Claude Code uses; quotes
     // only where needed (a quoted program name doesn't run in PowerShell).
@@ -1013,7 +1022,7 @@ pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
         "WebSearch" => format!("{} the web for “{}”", verb("Searched", "Search"), truncate_chars(&s("query"), 60)),
         "TodoWrite" => verb("Updated its to-do list", "Update its to-do list"),
         "Task" | "Agent" => format!("{} a helper: {}", verb("Started", "Start"), truncate_chars(&s("description"), 60)),
-        "Skill" => format!("{} the {} skill", verb("Used", "Use"), s("skill")),
+        "Skill" => format!("{} the {} skill", verb("Used", "Use"), crate::skills::display_name(&s("skill"))),
         n if n.starts_with("mcp__") => {
             let mut p = n.splitn(3, "__").skip(1);
             let server = p.next().unwrap_or("");

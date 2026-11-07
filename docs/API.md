@@ -288,11 +288,15 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 ### How a turn runs
 
 * Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`).
-* Bots don't load the computer's personal Claude Code setup (`~/.claude`): runs use `--strict-mcp-config` and
-  `--setting-sources project,local`. So the only MCP servers are `openbot` plus Settings › Computer › Plugins (no personal
-  MCP servers or claude.ai connectors), and personal plugins, skills, hooks, permission rules, CLAUDE.md and output
-  style are skipped. Skills in the bot's folder (`.claude/skills`, see `/api/bots/:id/skills`) still load. The
-  auto-review check uses `--setting-sources ""` (no settings at all).
+* Bots don't load any Claude Code settings files: runs use `--strict-mcp-config` and `--setting-sources=` (none). So the
+  only MCP servers are `openbot` plus Settings › Computer › Plugins, and the computer's personal setup (`~/.claude`: plugins,
+  skills, hooks, permission rules, CLAUDE.md, output style) is skipped. The bot folder's own `.claude/settings*.json` and
+  `.claude/agents` are skipped too, because a bot can write those itself to give itself permissions. Only openbot's
+  `--settings` file below applies. The auto-review check uses the same `--setting-sources=`.
+* Skills in the bot folder (`.claude/skills/<name>/SKILL.md`, see `/api/bots/:id/skills`) are copied before each run into
+  `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
+  `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
+  skill folder is limited to 200 files and 5 MB.
 * Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with two Claude Code hooks that start the openbot program as
   `<openbot> hook stop|precompact --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself.
