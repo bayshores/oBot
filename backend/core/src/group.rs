@@ -260,7 +260,18 @@ pub fn turn_prompt(st: &Shared, group: &str, bot: &str, winding_down: bool) -> O
     let mut last = seen;
     for m in &msgs {
         let who = match m.role.as_str() {
-            "user" => "The user".to_string(),
+            "user" => match m.meta.get("reply_to") {
+                Some(r) => format!(
+                    "The user (replying to {} \"{}\")",
+                    match r.get("bot").and_then(Value::as_str) {
+                        Some(b) if b == bot => "you".to_string(),
+                        Some(_) => r.get("who").and_then(Value::as_str).unwrap_or("a Bot").to_string(),
+                        None => "their own message".to_string(),
+                    },
+                    r.get("quote").and_then(Value::as_str).unwrap_or("")
+                ),
+                None => "The user".to_string(),
+            },
             "bot" => match m.meta.get("speaker").and_then(Value::as_str) {
                 Some(s) if s == bot => continue,
                 Some(s) => name_of(st, s),
@@ -284,7 +295,8 @@ pub fn turn_prompt(st: &Shared, group: &str, bot: &str, winding_down: bool) -> O
     }
     st.db.kv_set(&format!("{}:prev", seen_key(group, bot)), &seen.to_string());
     st.db.kv_set(&seen_key(group, bot), &last.to_string());
-    let mut p = format!("<openbot_group name=\"{}\">\n{}\n</openbot_group>", g.name.replace('"', "'"), lines.join("\n\n"));
+    let mut p = crate::reactions::take_notes(st, group, bot);
+    p.push_str(&format!("<openbot_group name=\"{}\">\n{}\n</openbot_group>", g.name.replace('"', "'"), lines.join("\n\n")));
     if winding_down {
         p.push_str(
             "\n[openbot: Another Bot in the group named you. Answer if it asked you something; otherwise reply PASS. \

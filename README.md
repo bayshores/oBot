@@ -24,6 +24,8 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
 * **Work in the background.** Routines, check-ins and long commands wake the Bot up when it's time.
 * **Work together.** A Bot tells you when another of your Bots fits a task better and passes it on when
   you say so; the other Bot picks it up in its own chat.
+* **Reactions and replies.** React to any message with an emoji or reply to it with a quote; Bots see
+  both, and can react to your messages too.
 * **Group chats.** Put up to 6 Bots in one chat. Each answers when the message is for it (or you name it
   with @), stays quiet otherwise, and can bring in another Bot with @Name.
 * **Email, calendar and files.** Connected Gmail / Google Calendar / Google Drive and Outlook accounts.

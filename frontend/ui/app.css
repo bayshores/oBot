@@ -2050,3 +2050,29 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .g-member-name:hover { text-decoration: underline; }
 .g-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; font-size: 14px; }
 .p-note { font-size: 12px; line-height: 17px; color: var(--text-3); margin: 0 4px; }
+
+/* reactions (tapback pills on a bubble's top corner) and replies (quote above a message, pill in the composer) */
+.row.reacted { padding-top: 16px; }
+.react-pills { position: absolute; top: -15px; right: -16px; display: flex; gap: 4px; z-index: 1; }
+.row.user .react-pills { right: auto; left: -16px; }
+.react-pill { height: 30px; min-width: 30px; padding: 0 10px 0 8px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; background: var(--elevated); box-shadow: inset 0 0 0 .5px var(--b2), 0 0 0 2.8px var(--bg); font-size: 15px; animation: pill-pop .5s cubic-bezier(.34, 1.56, .64, 1); }
+.react-pill:only-child:not(:has(.rp-count)) { padding: 0 7px; }
+.react-pill:hover { background: var(--secondary-hover); }
+.react-pill:active { transform: scale(.95); }
+.react-pill.on { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 2.8px var(--bg); }
+.rp-count { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-2); }
+@keyframes pill-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.react-box { padding: 2px; }
+.react-bar { display: flex; gap: 2px; }
+.react-grid { display: grid; grid-template-columns: repeat(6, 32px); gap: 2px; margin-top: 4px; }
+.react-q { width: 32px; height: 32px; border-radius: 8px; font-size: 18px; display: inline-flex; align-items: center; justify-content: center; color: var(--icon-2); }
+.react-q:hover, .react-q.on { background: var(--hover); }
+.quote-pill { display: inline-flex; align-items: center; gap: 6px; max-width: min(80%, 480px); height: 26px; padding: 0 10px; border-radius: 10px; background: var(--secondary); color: var(--text-3); font-size: 12px; margin-bottom: 2px; }
+.quote-pill:hover { color: var(--text-2); }
+.qp-who { font-weight: var(--w-medium); color: var(--text-2); flex: none; }
+.qp-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.c-reply { display: flex; align-items: center; gap: 6px; border-radius: 10px; background: var(--secondary); padding: 4px 4px 4px 10px; }
+.c-reply[hidden] { display: none; }
+.c-reply-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); text-align: left; }
+.c-reply-who { font-weight: var(--w-medium); color: var(--text-2); flex: none; }
+.c-reply-quote { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }

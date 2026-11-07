@@ -154,6 +154,7 @@ fn router(state: Shared) -> Router {
         .route("/api/bots/{id}/screen/stop", post(bot_screen_stop))
         .route("/api/bots/{id}/screen/ws", get(bot_screen_ws))
         .route("/api/messages/{id}/answer", post(answer_widget))
+        .route("/api/messages/{id}/react", post(react_message))
         .route("/api/bots/{id}/routines", get(list_routines))
         .route("/api/routines/{id}", axum::routing::patch(patch_routine).delete(delete_routine))
         .route("/api/routines/{id}/run", post(run_routine_now))
@@ -820,6 +821,21 @@ async fn list_messages(
 struct SendBody {
     text: String,
     attachments: Vec<Value>,
+    /// The message the user is replying to (its id), if any.
+    reply_to: String,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ReactBody {
+    emoji: String,
+    /// false = take the reaction back
+    on: bool,
+}
+
+/// The user tapped an emoji on a message, or tapped their own again to remove it.
+async fn react_message(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<ReactBody>) -> ApiResult<Json<Message>> {
+    Ok(Json(crate::reactions::user_react(&st, &id, &b.emoji, b.on).await.map_err(|e| bad(&e))?))
 }
 
 async fn send_message(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<SendBody>) -> ApiResult<Json<Message>> {
@@ -835,6 +851,11 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody, only: Option<&str
     if text.is_empty() && b.attachments.is_empty() {
         return Err(bad("Type a message first"));
     }
+    let reply = if b.reply_to.is_empty() { None } else { crate::reactions::reply_meta(&st, &id, &b.reply_to) };
+    let mut meta = json!({ "attachments": b.attachments });
+    if let Some(r) = &reply {
+        meta["reply_to"] = r.clone();
+    }
     let m = Message {
         id: new_id(),
         bot_id: id.clone(),
@@ -842,7 +863,7 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody, only: Option<&str
         text: text.clone(),
         html: String::new(),
         status: "done".into(),
-        meta: json!({ "attachments": b.attachments }),
+        meta,
         created_at: now_ms(),
     };
     st.db.upsert_message(&m)?;
@@ -858,7 +879,10 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody, only: Option<&str
         return Ok(m);
     }
 
-    let mut prompt = String::new();
+    let mut prompt = crate::reactions::take_notes(&st, &id, &id);
+    if let Some(r) = &reply {
+        prompt.push_str(&crate::reactions::reply_note(r, &id));
+    }
     // After "Edit and resend", the withdrawn message may still be in Claude Code's conversation.
     if let Some(old) = st.db.kv_get(&format!("withdrawn:{id}")) {
         st.db.kv_set(&format!("withdrawn:{id}"), "");
@@ -1365,7 +1389,7 @@ async fn answer_widget(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
     st.db.upsert_message(&m)?;
     st.emit_message(false, &m);
     let speaker = m.meta.get("speaker").and_then(Value::as_str).map(str::to_string);
-    let user = post_user_message(&st, &m.bot_id, SendBody { text: value, attachments: vec![] }, speaker.as_deref()).await?;
+    let user = post_user_message(&st, &m.bot_id, SendBody { text: value, attachments: vec![], reply_to: String::new() }, speaker.as_deref()).await?;
     Ok(Json(user))
 }
 

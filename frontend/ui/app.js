@@ -174,6 +174,8 @@
     pinOff: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6M4 4l16 16"/>',
     bell: '<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
     keyboard: '<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8"/>',
+    smile: '<circle cx="12" cy="12" r="8.5"/><path d="M8.6 14.2a4.2 4.2 0 006.8 0"/><circle cx="9.3" cy="10" r=".9" fill="currentColor" stroke="none"/><circle cx="14.7" cy="10" r=".9" fill="currentColor" stroke="none"/>',
+    reply: '<path d="M9.5 7L4.5 12l5 5"/><path d="M5 12h9a5.5 5.5 0 015.5 5.5V19"/>',
     users: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0111 0"/><path d="M15.5 5.6a3.2 3.2 0 010 5.8M17 13.8a5.5 5.5 0 013.5 5.2"/>',
     person: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0114 0"/>',
     brain: '<path d="M9 4.5a3 3 0 00-3 3 3 3 0 00-1.5 5.5A3 3 0 007 18a2.5 2.5 0 005 0V6.5a2 2 0 00-3-2zM15 4.5a3 3 0 013 3 3 3 0 011.5 5.5A3 3 0 0117 18a2.5 2.5 0 01-5 0"/>',
@@ -454,6 +456,7 @@
 
   // ───────────────────────────── state ─────────────────────────────
   const S = {
+    reply: null, // {botId, id, who, quote}: the message the user is replying to
     homeToken: null,
     apiBase: location.origin,
     apiToken: null,
@@ -724,6 +727,10 @@
       if (!it) continue;
       if (it === '-') {
         if (m.lastElementChild && !m.lastElementChild.classList.contains('menu-sep')) m.append(h('div', { class: 'menu-sep' }));
+        continue;
+      }
+      if (it.el) {
+        m.append(it.el);
         continue;
       }
       m.append(
@@ -1774,6 +1781,7 @@
     S.pending = d ? d.pending || [] : [];
     S.composerExpanded = false;
     renderAttachRow();
+    renderReplyRow();
     updateComposer();
   }
   async function selectBot(id, { focus = true } = {}) {
@@ -1902,6 +1910,8 @@
   }).observe(msgsEl);
   let lastBox = '';
   msgsEl.addEventListener('scroll', () => {
+    // A message menu belongs next to its message: close it when the chat scrolls away.
+    if (openMenuEl && openMenuEl.querySelector('.react-box')) closeMenu();
     const box = msgsEl.clientWidth + 'x' + msgsEl.clientHeight;
     if (box === lastBox) S.pinned = distFromBottom() < 8;
     else if (S.pinned) msgsEl.scrollTop = msgsEl.scrollHeight;
@@ -1941,7 +1951,7 @@
   };
   function sigOf(m) {
     const meta = m.meta || {};
-    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, (m.role === 'tool' || m.role === 'relay') && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? approvalAnswers.get(meta.approval_id) || '' : ''].join('|');
+    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, (m.role === 'tool' || m.role === 'relay') && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? approvalAnswers.get(meta.approval_id) || '' : '', reactionsOf(m).map((r) => r.emoji + r.by).join(',')].join('|');
   }
 
   let renderQueued = false;
@@ -2043,6 +2053,9 @@
       const bubble = $('.bubble', c.el);
       if (bubble) {
         fillBotBubble(bubble, m);
+        const w = bubble.closest('.bwrap');
+        if (w) paintPills(w, m);
+        c.el.classList.toggle('reacted', reactionsOf(m).length > 0);
         c.sig = sig;
         return c.el;
       }
@@ -2163,6 +2176,8 @@
     const title = m.created_at ? fmtTime(m.created_at) : null;
     switch (m.role) {
       case 'user': {
+        const rt = m.meta && m.meta.reply_to;
+        if (rt && rt.id) stack.append(h('button', { class: 'quote-pill', 'data-tip': 'Jump to replied message', onclick: () => jumpTo(rt.id) }, icon('reply', 12, '', 2), h('span', { class: 'qp-who' }, rt.who), h('span', { class: 'qp-text' }, rt.quote)));
         const atts = (m.meta && m.meta.attachments) || [];
         const imgs = atts.filter(isImage);
         const files = atts.filter((a) => !isImage(a));
@@ -2172,7 +2187,7 @@
           const t = m.text;
           const emoji = EMOJI_ONLY.test(t.trim());
           const bubble = h('div', { class: 'bubble user' + (m._tmp ? ' sending' : '') + (emoji ? ' emoji' : !emoji && [...t.trim()].length <= 2 ? ' glyph' : ''), title }, t);
-          stack.append(bwrap(bubble, t));
+          stack.append(bwrap(bubble, t, m));
           bubbleEnd = true;
           bubbleStart = !imgs.length && !files.length;
         }
@@ -2191,7 +2206,7 @@
       case 'attachment':
         stack.append(...attachmentMsg(m));
         if (m.text) {
-          stack.append(bwrap(h('div', { class: 'bubble agent', title }, m.text), m.text));
+          stack.append(bwrap(h('div', { class: 'bubble agent', title }, m.text), m.text, m));
           bubbleEnd = true;
         }
         break;
@@ -2231,6 +2246,7 @@
     }
     if (bubbleStart) wrap.dataset.bubbleStart = '1';
     if (bubbleEnd) wrap.dataset.bubbleEnd = '1';
+    wrap.classList.toggle('reacted', reactionsOf(m).length > 0);
     // In a group chat each Bot's messages carry its name (above a run) and picture (beside its end).
     const speaker = sp === 'bot' && m.meta && m.meta.speaker;
     if (speaker) {
@@ -2247,25 +2263,144 @@
   }
   function bwrap(bubble, copyText, m) {
     const w = h('div', { class: 'bwrap' }, bubble);
-    const bar = h(
-      'div',
-      { class: 'hover-bar', role: 'toolbar', 'aria-label': 'Message actions' },
-      h(
-        'button',
-        {
-          class: 'hb-btn',
-          'aria-label': 'Copy',
-          'data-tip': 'Copy',
-          onclick: () => {
-            const txt = copyText != null ? copyText : (m && m.text) || bubble.innerText;
-            navigator.clipboard.writeText(txt).then(() => toast('Copied'), () => toast('Couldn’t copy', 'error'));
-          },
-        },
-        icon('copy', 15)
-      )
-    );
+    const copy = () => {
+      const txt = copyText != null ? copyText : (m && m.text) || bubble.innerText;
+      navigator.clipboard.writeText(txt).then(() => toast('Copied'), () => toast('Couldn’t copy', 'error'));
+    };
+    // A saved message gets reactions and Reply; one still sending only Copy.
+    const real = m && !m._tmp && m.id && !String(m.id).startsWith('tmp-');
+    const bar = h('div', { class: 'hover-bar', role: 'toolbar', 'aria-label': 'Message actions' });
+    if (real) {
+      bar.append(
+        h('button', { class: 'hb-btn', 'aria-label': 'Add reaction', 'data-tip': 'Add reaction', onclick: (e) => menuAt(e.currentTarget, [{ el: reactBar(m) }]) }, icon('smile', 15)),
+        h('button', { class: 'hb-btn', 'aria-label': 'More message actions', 'data-tip': 'More', onclick: (e) => menuAt(e.currentTarget, messageMenu(m, copy)) }, icon('more', 15))
+      );
+      bubble.addEventListener('contextmenu', (e) => {
+        if (window.getSelection && String(window.getSelection()).trim()) return;
+        e.preventDefault();
+        showMenu(messageMenu(m, copy), e.clientX, e.clientY);
+      });
+      paintPills(w, m);
+    } else bar.append(h('button', { class: 'hb-btn', 'aria-label': 'Copy', 'data-tip': 'Copy', onclick: copy }, icon('copy', 15)));
     w.append(bar);
     return w;
+  }
+
+  // ── reactions and replies (shell.md 4.6, 6.12)
+  const QUICK_EMOJI = ['👍', '👎', '❤️', '😂', '🎉'];
+  const MORE_EMOJI = ['😊', '😮', '😢', '🙏', '🔥', '👏', '💯', '✅', '👀', '🤔', '😅', '🥳', '😍', '🙌', '💪', '👌', '🤝', '⭐', '😎', '🤯', '😭', '😬', '🫡', '💡', '🚀', '☕', '🍕', '📌', '❓', '❗'];
+  const reactionsOf = (m) => (m && m.meta && Array.isArray(m.meta.reactions) ? m.meta.reactions : []);
+  const mine = (m, e) => reactionsOf(m).some((r) => r.by === 'user' && r.emoji === e);
+  async function react(m, emoji) {
+    const cur = (S.msgs.get(m.bot_id) || []).find((x) => x.id === m.id) || m;
+    try {
+      const nm = await api(`/api/messages/${m.id}/react`, { method: 'POST', body: { emoji, on: !mine(cur, emoji) } });
+      if (nm && nm.id) upsertMessage(nm, false);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  // Five quick emojis and a + for more.
+  function reactBar(m) {
+    const cur = () => (S.msgs.get(m.bot_id) || []).find((x) => x.id === m.id) || m;
+    const pick = (e) => {
+      closeMenu();
+      react(m, e);
+    };
+    const cell = (e) => h('button', { class: 'react-q' + (mine(cur(), e) ? ' on' : ''), 'aria-label': 'React ' + e, onclick: () => pick(e) }, e);
+    const bar = h('div', { class: 'react-bar' }, ...QUICK_EMOJI.map(cell));
+    const grid = h('div', { class: 'react-grid', hidden: true }, ...MORE_EMOJI.map(cell));
+    bar.append(
+      h('button', {
+        class: 'react-q more',
+        'aria-label': 'More emoji',
+        onclick: (e) => {
+          grid.hidden = !grid.hidden;
+          e.currentTarget.classList.toggle('on', !grid.hidden);
+          // Keep the bigger menu inside the window.
+          const menu = e.currentTarget.closest('.menu');
+          const r = menu && menu.getBoundingClientRect();
+          if (r && r.bottom > innerHeight - 8) menu.style.top = Math.max(8, innerHeight - r.height - 8) + 'px';
+        },
+      }, icon('plus', 14, '', 2))
+    );
+    return h('div', { class: 'react-box' }, bar, grid);
+  }
+  function messageMenu(m, copy) {
+    return [{ el: reactBar(m) }, '-', { label: 'Reply', icon: 'reply', action: () => startReply(m) }, { label: 'Copy', icon: 'copy', action: copy }];
+  }
+  // Tapback pills on the bubble's top corner: one per emoji, at most 3, yours kept in view.
+  function paintPills(w, m) {
+    let box = w.querySelector(':scope > .react-pills');
+    const list = reactionsOf(m);
+    if (!list.length) {
+      if (box) box.remove();
+      return;
+    }
+    if (!box) {
+      box = h('div', { class: 'react-pills' });
+      w.append(box);
+    }
+    box.textContent = '';
+    const groups = new Map();
+    for (const r of list) {
+      const g = groups.get(r.emoji) || { emoji: r.emoji, by: [] };
+      g.by.push(r.by);
+      groups.set(r.emoji, g);
+    }
+    const all = [...groups.values()].sort((a, b) => b.by.includes('user') - a.by.includes('user') || b.by.length - a.by.length);
+    for (const g of all.slice(0, 3)) {
+      const names = g.by.map((b) => (b === 'user' ? 'You' : (S.bots.get(b) || {}).name || 'A Bot')).join(', ');
+      box.append(
+        h(
+          'button',
+          { class: 'react-pill' + (g.by.includes('user') ? ' on' : ''), 'data-tip': names, 'aria-label': `${g.emoji} from ${names}`, onclick: () => react(m, g.emoji) },
+          h('span', { class: 'rp-emoji' }, g.emoji),
+          g.by.length > 1 ? h('span', { class: 'rp-count' }, String(g.by.length)) : null
+        )
+      );
+    }
+  }
+  // Reply: a pill above the message box; the sent message quotes the original.
+  function replyInfo(m) {
+    const who = m.role === 'user' ? 'You' : (ownerOf(m) || {}).name || 'Bot';
+    // Plain text, like the sidebar preview (no Markdown marks).
+    const quote = (m.text || (m.meta && m.meta.name) || 'a message').replace(/\s+/g, ' ').replace(/[*`#>]/g, '').replace(/^[-+\s]+/, '').trim();
+    return { id: m.id, who, quote: quote.length > 140 ? quote.slice(0, 139) + '…' : quote };
+  }
+  function startReply(m) {
+    S.reply = Object.assign({ botId: m.bot_id }, replyInfo(m));
+    renderReplyRow();
+    updateComposer();
+    input.focus();
+  }
+  function cancelReply() {
+    S.reply = null;
+    renderReplyRow();
+    updateComposer();
+  }
+  function jumpTo(id) {
+    const c = S.nodes.get(id);
+    if (!c || !c.el.isConnected) return toast('That message isn’t loaded here');
+    c.el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    c.el.classList.remove('flash');
+    void c.el.offsetWidth;
+    c.el.classList.add('flash');
+  }
+  function renderReplyRow() {
+    let row = $('#replyRow');
+    if (!row) {
+      row = h('div', { class: 'c-reply', id: 'replyRow', hidden: true });
+      $('#cContent').insertBefore(row, $('#attachRow'));
+    }
+    const r = S.reply && S.reply.botId === S.current ? S.reply : null;
+    row.hidden = !r;
+    row.textContent = '';
+    if (!r) return;
+    row.append(
+      h('button', { class: 'c-reply-body', type: 'button', 'data-tip': 'Jump to message', onclick: () => jumpTo(r.id) }, icon('reply', 13, '', 2), h('span', { class: 'c-reply-who' }, `Reply to ${r.who}`), h('span', { class: 'c-reply-quote' }, r.quote)),
+      h('button', { class: 'pend-x', type: 'button', 'aria-label': 'Cancel reply', onclick: () => cancelReply() }, icon('x', 12, '', 2.4))
+    );
   }
   function fillBotBubble(bubble, m) {
     if (bubble.classList.contains('emoji')) {
@@ -3280,7 +3415,8 @@
   // 44px pill ↔ expanded box (shell.md 6.2/6.3)
   function layoutComposer() {
     const hasText = input.value.length > 0;
-    let exp = (S.composerExpanded && hasText) || input.value.includes('\n') || S.pending.length > 0 || !!notice;
+    const replying = !!(S.reply && S.reply.botId === S.current);
+    let exp = (S.composerExpanded && hasText) || input.value.includes('\n') || S.pending.length > 0 || !!notice || replying;
     if (!exp && hasText) {
       composerEl.classList.remove('expanded');
       input.style.height = 'auto';
@@ -3302,6 +3438,7 @@
   function placeholderFor(b) {
     if (rec) return 'Listening…';
     if (!b) return 'Ask anything, or drop a file';
+    if (S.reply && S.reply.botId === b.id) return 'Reply…';
     if (S.pending.length && !input.value) return 'Add a message, or hit send';
     const list = S.msgs.get(b.id) || [];
     if (openWidget(list)) return 'Type your answer, or talk about something else';
@@ -3360,6 +3497,9 @@
       if (rec) {
         rec.abort ? rec.abort() : rec.stop();
         e.stopPropagation();
+      } else if (S.reply && S.reply.botId === S.current) {
+        cancelReply();
+        e.stopPropagation();
       } else input.blur();
     }
   });
@@ -3407,6 +3547,9 @@
     const atts = S.pending.filter((p) => !p.error && p.path).map(({ name, path, mime, url }) => ({ name, path, mime, url }));
     if (!text && !atts.length) return;
     const pendingCopy = S.pending;
+    const reply = S.reply && S.reply.botId === b.id ? S.reply : null;
+    S.reply = null;
+    renderReplyRow();
     input.value = '';
     S.pending = [];
     S.composerExpanded = false;
@@ -3422,7 +3565,10 @@
       text,
       html: '',
       status: 'done',
-      meta: { attachments: atts.map((a) => Object.assign({}, a, { localUrl: (pendingCopy.find((p) => p.path === a.path) || {}).localUrl })) },
+      meta: Object.assign(
+        { attachments: atts.map((a) => Object.assign({}, a, { localUrl: (pendingCopy.find((p) => p.path === a.path) || {}).localUrl })) },
+        reply ? { reply_to: { id: reply.id, who: reply.who, quote: reply.quote } } : {}
+      ),
       created_at: Date.now(),
       _tmp: true,
     };
@@ -3430,7 +3576,7 @@
     S.pinned = true;
     upsertMessage(tmp, true);
     try {
-      const m = await api(`/api/bots/${b.id}/messages`, { method: 'POST', body: { text, attachments: atts } });
+      const m = await api(`/api/bots/${b.id}/messages`, { method: 'POST', body: { text, attachments: atts, reply_to: reply ? reply.id : '' } });
       const list = S.msgs.get(b.id) || [];
       const i = list.findIndex((x) => x.id === tmp.id);
       if (i >= 0) list.splice(i, 1);
@@ -3441,6 +3587,8 @@
       if (S.current === b.id && !input.value) {
         input.value = text;
         S.pending = pendingCopy;
+        S.reply = reply;
+        renderReplyRow();
         renderAttachRow();
         updateComposer();
       }

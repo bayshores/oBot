@@ -106,6 +106,8 @@ Message = {
 //  note:     {}   a short line the Bot wrote right before a tool call ("Checking the syllabus."); hidden like tool rows,
 //            and shown as bot.activity.label while it works. Longer text (lists, paragraphs, questions) stays a "bot" message.
 //  speaker:  (any role a Bot posts, in a group chat) the id of the Bot that posted it
+//  reactions: (any message) [{ emoji, by: "user" | bot id }]   tapback reactions (the user's, or a Bot's via `react`)
+//  reply_to: (user) { id, who ("You" or the Bot's name), bot (null = the user's own), quote }   the message being replied to
 //  relay:    { direction: "to"|"from", bot_id, name }   a message one Bot passed to another (message_bot); it is in
 //            both chats ("Messaged <name>" / "Message from <name>"); text = the message
 //  calendar: an event the Bot added or changed without asking (a calendar card): { action: "create"|"update",
@@ -202,7 +204,8 @@ Usage = {
 | POST | /api/bots/:id/read | – | `{ok:true}` (unread → 0) |
 | POST | /api/bots/:id/unread | – | `{ok:true}` ("Mark as Unread": unread → 1) |
 | GET | /api/bots/:id/messages?before=<ms>&limit=200 | – | `[Message]` oldest→newest |
-| POST | /api/bots/:id/messages | `{text, attachments:[{name,path,mime,url}]}` | `Message` (the user message) |
+| POST | /api/bots/:id/messages | `{text, attachments:[{name,path,mime,url}], reply_to?: message id}` | `Message` (the user message; a reply gets `meta.reply_to`, and the Bot is told what it quotes) |
+| POST | /api/messages/:id/react | `{emoji, on}` (`on:false` takes the user's reaction back) | `Message` (`meta.reactions`). The Bot that wrote it hears about it with the user's next message |
 | POST | /api/bots/:id/stop | – | `{ok:true}` (also drops the user's queued messages: they get `meta.not_sent`; openbot's own queued turns still run) |
 | POST | /api/bots/:id/steer | `{message_id}` | `{ok}` "Send now": stops the current turn and runs the queued messages right away. `ok:false` if that message is no longer queued |
 | POST | /api/bots/:id/retry | – | `{ok:true}` "Try again": runs the last turn's prompt again (400 if there is none or the bot is busy) |
@@ -305,6 +308,7 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `update_bot {bot, name?, label?, look?, instructions?, add_instructions?}` | change a bot (or itself) |
 | `delete_bot {bot, reason?}` | retire a bot. Always shows an Allow / Deny card and waits, whatever the permission mode. Not the Main Bot, not itself |
 | `message_bot {bot, message}` | pass a task or question to another Bot: the message shows in both chats (`relay`) and starts a turn in that Bot, which works on it in its own chat. At most 4 messages between the same two Bots in 10 minutes. Each Bot's instructions list the user's other Bots, so it can say when a task fits another one better (`backend/core/src/relay.rs`) |
+| `react` | `{emoji, message_id?, remove?}` | React to one of the user's messages (default: their latest) with an emoji; shows as a pill on it |
 | `set_status {text}` | status line under the bot's name |
 | `list_accounts` | the connected accounts this bot may use (Settings › Connections) |
 | `email_search {account?, query?, max?}` · `email_read {account?, id}` · `email_attachment {account?, id, attachment_id}` | find and read email; save an attachment into the bot's folder (`attachments/`) |
