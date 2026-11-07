@@ -2017,3 +2017,36 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .sform-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 6px 4px; }
 .btn.link { background: none; box-shadow: none; height: 28px; padding: 0 6px; font-size: 13px; color: var(--text-2); }
 .btn.link:hover:not(:disabled) { background: var(--secondary); color: var(--text); }
+
+/* group chats: the group's picture, each Bot's name and picture on its messages, and the pickers */
+.av-group { position: relative; }
+.av-group .av-sub { position: absolute; }
+.av-group .av-sub.n1 { inset: 0; }
+.av-group .av-sub.n2.i0 { left: 0; top: 0; }
+.av-group .av-sub.n2.i1 { right: 0; bottom: 0; }
+.av-group .av-sub.n3.i0 { left: 50%; top: 0; transform: translateX(-50%); }
+.av-group .av-sub.n3.i1 { left: 0; bottom: 0; }
+.av-group .av-sub.n3.i2 { right: 0; bottom: 0; }
+.row.grp { flex-direction: row; align-items: flex-end; gap: 6px; }
+.row.grp .gav { width: 22px; height: 22px; flex: none; visibility: hidden; margin-bottom: 1px; }
+.row.grp.run-last .gav { visibility: visible; }
+.row.grp .gcol { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.row.grp .bwrap { max-width: min(80%, 560px, calc(100% - 110px)); }
+.row.grp .sender { display: none; font-size: 12px; line-height: 16px; font-weight: var(--w-medium); margin: 0 0 3px 12px; }
+.row.grp.run-first .sender { display: block; }
+.dialog-sub { font-size: 13px; line-height: 18px; color: var(--text-3); margin: 0 0 12px; }
+.g-pick { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; margin: 0 0 12px; }
+.g-pick-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; text-align: left; }
+.g-pick-row:hover:not(:disabled) { background: var(--hover); }
+.g-pick-row:disabled { opacity: .45; }
+.g-pick-name { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 14px; color: var(--text); }
+.g-pick-sub { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-check { width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--b2); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.g-pick-row.on .g-check { background: var(--accent); color: #fff; box-shadow: none; }
+.g-note { margin: 10px 2px 0; font-size: 12px; }
+.g-members { padding: 4px; }
+.g-member { display: flex; align-items: center; gap: 10px; padding: 4px 6px; }
+.g-member-name { flex: 1; text-align: left; font-size: 14px; color: var(--text); }
+.g-member-name:hover { text-decoration: underline; }
+.g-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; font-size: 14px; }
+.p-note { font-size: 12px; line-height: 17px; color: var(--text-3); margin: 0 4px; }

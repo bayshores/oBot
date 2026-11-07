@@ -89,6 +89,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         device_seen: std::sync::Mutex::new(HashMap::new()),
         pair_lock: Mutex::new(()),
         screens: Default::default(),
+        group_turns: Default::default(),
     });
 
     // Look up Claude Code in the background so the first screen loads fast.
@@ -103,6 +104,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     crate::accounts::spawn_keep_alive(state.clone());
     crate::routines::spawn_scheduler(state.clone());
     crate::memory_tidy::spawn(state.clone());
+    runner::start_workers();
     runner::recover_queued(&state);
     {
         let st = state.clone();
@@ -126,6 +128,7 @@ fn router(state: Shared) -> Router {
         .route("/api/prefs", get(get_prefs).put(put_prefs))
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/bots", get(list_bots).post(create_bot))
+        .route("/api/groups", post(create_group))
         .route("/api/bots/{id}", axum::routing::patch(patch_bot).delete(delete_bot))
         .route("/api/bots/{id}/reset", post(reset_bot))
         .route("/api/bots/{id}/read", post(read_bot))
@@ -632,9 +635,10 @@ async fn put_prefs(State(st): State<Shared>, Json(v): Json<Value>) -> ApiResult<
 
 // ---------------------------------------------------------------- bots
 
+/// Bots and group chats.
 async fn all_bots(st: &AppState) -> ApiResult<Vec<Bot>> {
     let mut out = vec![];
-    for b in st.db.list_bots()? {
+    for b in st.db.list_bots()?.into_iter().chain(st.db.list_groups()?) {
         out.push(st.bot_view(b).await);
     }
     Ok(out)
@@ -689,6 +693,20 @@ struct BotBody {
     label: Option<String>,
     pinned: Option<bool>,
     notifications: Option<bool>,
+    /// Group chats only: the member Bots.
+    members: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct GroupBody {
+    name: String,
+    members: Vec<String>,
+}
+
+async fn create_group(State(st): State<Shared>, Json(b): Json<GroupBody>) -> ApiResult<Json<Bot>> {
+    let g = crate::group::create(&st, &b.name, &b.members).await.map_err(|e| bad(&e))?;
+    Ok(Json(st.bot_view(g).await))
 }
 
 async fn create_bot(State(st): State<Shared>, Json(b): Json<BotBody>) -> ApiResult<Json<Bot>> {
@@ -711,6 +729,15 @@ async fn create_bot(State(st): State<Shared>, Json(b): Json<BotBody>) -> ApiResu
 
 async fn patch_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<BotBody>) -> ApiResult<Json<Bot>> {
     let mut bot = get_bot(&st, &id).await?;
+    if bot.is_group() {
+        let mut g = crate::group::update(&st, &id, b.name, b.members).await.map_err(|e| bad(&e))?;
+        if let Some(v) = b.pinned { g.pinned = v; }
+        if let Some(v) = b.notifications { g.notifications = v; }
+        st.db.upsert_bot(&g)?;
+        let g = st.bot_view(g).await;
+        st.emit("bot.updated", json!({ "bot": g }));
+        return Ok(Json(g));
+    }
     if let Some(n) = b.name {
         if n.trim().is_empty() {
             return Err(bad("Give your bot a name"));
@@ -732,13 +759,19 @@ async fn patch_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(
 }
 
 async fn delete_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    get_bot(&st, &id).await?;
+    if get_bot(&st, &id).await?.is_group() {
+        crate::group::delete(&st, &id).await.map_err(|e| bad(&e))?;
+        return Ok(Json(json!({ "ok": true })));
+    }
     crate::bots::delete(&st, &id).await.map_err(|e| bad(&e))?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn reset_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let mut bot = get_bot(&st, &id).await?;
+    if bot.is_group() {
+        crate::group::forget_history(&st, &bot).await;
+    }
     runner::stop(&st, &id).await;
     st.db.clear_messages(&id)?;
     bot.session_id.clear();
@@ -790,10 +823,11 @@ struct SendBody {
 }
 
 async fn send_message(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<SendBody>) -> ApiResult<Json<Message>> {
-    Ok(Json(post_user_message(&st, &id, b).await?))
+    Ok(Json(post_user_message(&st, &id, b, None).await?))
 }
 
-async fn post_user_message(st: &Shared, id: &str, b: SendBody) -> ApiResult<Message> {
+/// `only`: in a group chat, the one Bot that should answer (the user answered its question).
+async fn post_user_message(st: &Shared, id: &str, b: SendBody, only: Option<&str>) -> ApiResult<Message> {
     let st = st.clone();
     let id = id.to_string();
     let mut bot = get_bot(&st, &id).await?;
@@ -813,6 +847,16 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody) -> ApiResult<Mess
     };
     st.db.upsert_message(&m)?;
     st.emit_message(true, &m);
+
+    if bot.is_group() {
+        bot.updated_at = now_ms();
+        bot.last_preview = preview(&format!("You: {}", if text.is_empty() { "Sent a file" } else { &text }));
+        bot.unread = 0;
+        st.db.upsert_bot(&bot)?;
+        st.emit_bot(&id).await;
+        crate::group::user_posted(&st, &bot, &text, only).await;
+        return Ok(m);
+    }
 
     let mut prompt = String::new();
     // After "Edit and resend", the withdrawn message may still be in Claude Code's conversation.
@@ -866,7 +910,10 @@ async fn steer_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(
 
 /// "Try again" on an error card.
 async fn retry_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    get_bot(&st, &id).await?;
+    if get_bot(&st, &id).await?.is_group() {
+        crate::group::retry(&st, &id).await.map_err(|e| bad(&e))?;
+        return Ok(Json(json!({ "ok": true })));
+    }
     runner::retry(&st, &id).await.map_err(|e| bad(&e))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -915,6 +962,10 @@ async fn rollback_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) ->
 }
 
 async fn stop_bot(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    if st.db.get_bot(&id)?.is_some_and(|b| b.is_group()) {
+        crate::group::stop(&st, &id).await;
+        return Ok(Json(json!({ "ok": true })));
+    }
     runner::stop(&st, &id).await;
     Ok(Json(json!({ "ok": true })))
 }
@@ -1105,7 +1156,7 @@ pub(crate) async fn ask_approval(
     reason: &str,
 ) -> anyhow::Result<bool> {
     let approval_id = new_id();
-    let m = Message {
+    let mut m = Message {
         id: new_id(),
         bot_id: bot_id.to_string(),
         role: "approval".into(),
@@ -1122,14 +1173,16 @@ pub(crate) async fn ask_approval(
         }),
         created_at: now_ms(),
     };
+    // In a group chat the card shows there.
+    st.route(&mut m);
     st.db.upsert_message(&m)?;
     st.emit_message(true, &m);
-    if let Ok(Some(mut bot)) = st.db.get_bot(bot_id) {
+    if let Ok(Some(mut bot)) = st.db.get_bot(&m.bot_id) {
         bot.last_preview = format!("Needs your OK: {}", preview(summary));
         bot.updated_at = now_ms();
         bot.unread += 1;
         let _ = st.db.upsert_bot(&bot);
-        st.emit_bot(bot_id).await;
+        st.emit_bot(&m.bot_id).await;
     }
     if st.is_running(bot_id).await {
         runner::set_activity(st, bot_id, Some(("waiting_for_you", "Waiting for your OK"))).await;
@@ -1311,7 +1364,8 @@ async fn answer_widget(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
     m.meta["answer"] = json!(value);
     st.db.upsert_message(&m)?;
     st.emit_message(false, &m);
-    let user = post_user_message(&st, &m.bot_id, SendBody { text: value, attachments: vec![] }).await?;
+    let speaker = m.meta.get("speaker").and_then(Value::as_str).map(str::to_string);
+    let user = post_user_message(&st, &m.bot_id, SendBody { text: value, attachments: vec![] }, speaker.as_deref()).await?;
     Ok(Json(user))
 }
 

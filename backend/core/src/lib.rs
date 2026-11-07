@@ -16,6 +16,7 @@ pub mod config;
 pub mod db;
 pub mod discover;
 pub mod drive;
+pub mod group;
 pub mod hooks;
 pub mod jobs;
 pub mod logins;

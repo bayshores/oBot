@@ -756,7 +756,8 @@ async fn day_events(st: &Shared, acct: &Account, cal: &str, e: &Event) -> Vec<Va
 }
 
 fn post_card(st: &Shared, bot: &Bot, text: &str, card: Value) {
-    let m = Message { id: new_id(), bot_id: bot.id.clone(), role: "calendar".into(), text: text.into(), html: String::new(), status: "done".into(), meta: card, created_at: now_ms() };
+    let mut m = Message { id: new_id(), bot_id: bot.id.clone(), role: "calendar".into(), text: text.into(), html: String::new(), status: "done".into(), meta: card, created_at: now_ms() };
+    st.route(&mut m);
     let _ = st.db.upsert_message(&m);
     st.emit_message(true, &m);
 }

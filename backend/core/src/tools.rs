@@ -295,8 +295,9 @@ fn normalize_schedule(v: &Value) -> Result<Value, String> {
     routines::validate(&v)
 }
 
+/// Post what the Bot sends (a file, a page, a question...) in the chat it's working in.
 fn post(state: &Shared, bot_id: &str, role: &str, text: &str, meta: Value) -> Message {
-    let m = Message {
+    let mut m = Message {
         id: new_id(),
         bot_id: bot_id.into(),
         role: role.into(),
@@ -306,6 +307,7 @@ fn post(state: &Shared, bot_id: &str, role: &str, text: &str, meta: Value) -> Me
         meta,
         created_at: now_ms(),
     };
+    state.route(&mut m);
     let _ = state.db.upsert_message(&m);
     state.emit_message(true, &m);
     m

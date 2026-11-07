@@ -174,6 +174,7 @@
     pinOff: '<path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6M4 4l16 16"/>',
     bell: '<path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 004 0"/>',
     keyboard: '<rect x="3" y="6" width="18" height="12" rx="2.5"/><path d="M7 10h.01M10.5 10h.01M14 10h.01M17.5 10h.01M8 14h8"/>',
+    users: '<circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0111 0"/><path d="M15.5 5.6a3.2 3.2 0 010 5.8M17 13.8a5.5 5.5 0 013.5 5.2"/>',
     person: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0114 0"/>',
     brain: '<path d="M9 4.5a3 3 0 00-3 3 3 3 0 00-1.5 5.5A3 3 0 007 18a2.5 2.5 0 005 0V6.5a2 2 0 00-3-2zM15 4.5a3 3 0 013 3 3 3 0 011.5 5.5A3 3 0 0117 18a2.5 2.5 0 01-5 0"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
@@ -279,8 +280,32 @@
   function avatar(bot, size = 36, opts = {}) {
     const el = h('span', { class: 'av', style: { width: size + 'px', height: size + 'px' } });
     el._size = size;
-    paintAvatar(el, lookOf(bot), size, opts);
+    if (isGroup(bot)) paintGroup(el, bot, size);
+    else paintAvatar(el, lookOf(bot), size, opts);
     return el;
+  }
+  // A group's picture: its first Bots, overlapped.
+  const groupKey = (g) => 'group:' + (g.members || []).filter((id) => S.bots.has(id)).slice(0, 3).map((id) => lookOf(S.bots.get(id)).color).join(',');
+  function paintGroup(el, g, size) {
+    if (el._av) {
+      try {
+        el._av.destroy();
+      } catch {}
+      el._av = null;
+      liveAvatars.delete(el);
+    }
+    el.textContent = '';
+    el._look = groupKey(g);
+    el._live = false;
+    el.classList.add('av-group');
+    const ids = (g.members || []).filter((id) => S.bots.has(id)).slice(0, 3);
+    const n = Math.max(ids.length, 1);
+    const sub = n === 1 ? size : Math.round(size * (n === 2 ? 0.68 : 0.56));
+    ids.forEach((id, i) => {
+      const s = h('span', { class: `av-sub n${n} i${i}`, style: { width: sub + 'px', height: sub + 'px' } });
+      paintAvatar(s, lookOf(S.bots.get(id)), sub);
+      el.append(s);
+    });
   }
   function setAvatarState(el, state, force) {
     if (!el || !el._av || (!force && el._state === state)) return;
@@ -296,6 +321,11 @@
   }
   // keep a mounted avatar in sync with a bot (repaint only when the look changes)
   function syncAvatar(el, bot, size, opts = {}) {
+    if (isGroup(bot)) {
+      if (el._look !== groupKey(bot)) paintGroup(el, bot, size);
+      return;
+    }
+    el.classList.remove('av-group');
     const look = lookOf(bot);
     if (el._look !== look.shape + '/' + look.color + '/' + (opts.badge || '') || !!el._live !== !!opts.live) paintAvatar(el, look, size, opts);
     else if (opts.live) setAvatarState(el, opts.state || 'idle');
@@ -342,7 +372,7 @@
   function applyTint() {
     const pref = S.prefs.accent || 'bot';
     let colorId = null;
-    if (pref === 'bot') colorId = curBot() ? lookOf(curBot()).color : null;
+    if (pref === 'bot') colorId = curBot() && !isGroup(curBot()) ? lookOf(curBot()).color : null;
     else if (pref !== 'none') colorId = pref;
     const hu = HUES[hueOf(colorId)];
     const st = document.documentElement.style;
@@ -468,6 +498,11 @@
     initialRender: true,
   };
   const curBot = () => (S.current ? S.bots.get(S.current) : null);
+  // A group chat is stored like a Bot (kind "group", with member Bot ids).
+  const isGroup = (b) => !!b && b.kind === 'group';
+  const realBots = () => [...S.bots.values()].filter((b) => !isGroup(b));
+  // The Bot that posted a message (in a group, the one whose name is on it).
+  const ownerOf = (m) => S.bots.get((m.meta && m.meta.speaker) || m.bot_id);
 
   // ───────────────────────────── network ─────────────────────────────
   async function req(base, token, path, { method = 'GET', body, form } = {}) {
@@ -1492,6 +1527,28 @@
   function botMenu(b, x, y) {
     if (!b) return;
     const pinned = !!b.pinned && !b.hidden;
+    if (isGroup(b)) {
+      showMenu(
+        [
+          { label: pinned ? 'Unpin' : 'Pin', icon: pinned ? 'pinOff' : 'pin', action: () => togglePin(b) },
+          b.unread > 0 ? { label: 'Mark as Read', icon: 'bell', action: () => markRead(b) } : b.id !== S.current && { label: 'Mark as Unread', icon: 'bell', action: () => markUnread(b) },
+          '-',
+          {
+            label: 'Group settings',
+            icon: 'pencil',
+            action: () => {
+              selectBot(b.id);
+              setPanel(true, { focusName: true });
+            },
+          },
+          '-',
+          { label: 'Delete group chat', icon: 'trash', danger: true, action: () => deleteBot(b) },
+        ],
+        x,
+        y
+      );
+      return;
+    }
     const rename = () => {
       const c = rowCache.get((pinned ? 'tile:' : 'row:') + b.id);
       if (c && c.layout === 'row' && !app.classList.contains('rail')) startRename(b.id, c.parts);
@@ -1528,7 +1585,7 @@
     const okBtn = h('button', { class: 'btn primary', onclick: confirm }, 'Confirm');
     function paint() {
       list.textContent = '';
-      const bots = sortedBots().filter((b) => !q || b.name.toLowerCase().includes(q));
+      const bots = sortedBots().filter((b) => !isGroup(b) && (!q || b.name.toLowerCase().includes(q)));
       if (!bots.length) list.append(h('div', { class: 'p-empty' }, `No matches for “${search.value.trim()}”`));
       for (const b of bots) {
         const on = pick === b.id;
@@ -1672,7 +1729,9 @@
     if (b.main) return choosePrimaryBot(b);
     const ok = await confirmDialog({
       title: `Delete “${b.name}”`,
-      body: 'This permanently deletes the Bot and its chat history. This can\'t be undone.',
+      body: isGroup(b)
+        ? 'This deletes the group chat and its messages. The Bots and their own chats stay. This can\'t be undone.'
+        : 'This permanently deletes the Bot and its chat history. This can\'t be undone.',
       confirmText: 'Delete',
       danger: true,
     });
@@ -1793,7 +1852,7 @@
     nm.textContent = b.name;
     pill.title = b.name;
     pill.setAttribute('aria-expanded', S.panelOpen ? 'true' : 'false');
-    pill.dataset.tip = 'Bot settings';
+    pill.dataset.tip = isGroup(b) ? 'Group settings' : 'Bot settings';
     pill.dataset.kbd = isMac ? '⌘⇧,' : 'Ctrl+Shift+,';
     renderScreenBtn();
   }
@@ -2006,8 +2065,12 @@
       const pSp = p && p.dataset.speaker;
       const nSp = nx && nx.dataset.speaker;
       n.classList.toggle('gs', !!(pSp && pSp !== sp && sp !== 'center'));
-      const bubble = n.querySelector(':scope > .stack > .bwrap:last-child > .bubble');
-      const firstBubble = n.querySelector(':scope > .stack > .bwrap:first-child > .bubble');
+      if (n.classList.contains('grp')) {
+        n.classList.toggle('run-first', pSp !== sp);
+        n.classList.toggle('run-last', nSp !== sp);
+      }
+      const bubble = n.querySelector(':scope > .stack > .bwrap:last-child > .bubble, :scope > .gcol > .stack > .bwrap:last-child > .bubble');
+      const firstBubble = n.querySelector(':scope > .stack > .bwrap:first-child > .bubble, :scope > .gcol > .stack > .bwrap:first-child > .bubble');
       if (firstBubble) firstBubble.classList.toggle('cp', !!(pSp === sp && sp !== 'center' && p.dataset.bubbleEnd === '1'));
       if (bubble) bubble.classList.toggle('cn', !!(nSp === sp && sp !== 'center' && nx.dataset.bubbleStart === '1'));
     }
@@ -2042,7 +2105,9 @@
       av._bot = b.id;
       av._look = null;
     }
-    syncAvatar(av, b, 28, { live: true, state: botState(b) });
+    // In a group: the pictures of the Bots still working.
+    const working = isGroup(b) && b.activity && Array.isArray(b.activity.members) ? Object.assign({}, b, { members: b.activity.members }) : b;
+    syncAvatar(av, working, 28, { live: true, state: botState(b) });
     const start = S.runStart.get(b.id) || Date.now();
     const text = (b.activity && b.activity.label) || WORK_PHRASES[Math.floor(start / 1000) % WORK_PHRASES.length];
     if (phrase.textContent !== text) {
@@ -2080,7 +2145,8 @@
   function emptyChat(b) {
     const av = avatar(b, 72, { live: true, interactive: true });
     av.addEventListener('click', () => pokeAvatar(av));
-    const el = h('div', { class: 'empty-chat', role: 'note' }, av, h('div', { class: 'empty-name' }, b.name), h('div', { class: 'empty-sub' }, 'No messages yet'));
+    const sub = isGroup(b) ? memberNames(b) : 'No messages yet';
+    const el = h('div', { class: 'empty-chat', role: 'note' }, av, h('div', { class: 'empty-name' }, b.name), h('div', { class: 'empty-sub' }, sub));
     el._bot = b.id;
     return el;
   }
@@ -2165,6 +2231,18 @@
     }
     if (bubbleStart) wrap.dataset.bubbleStart = '1';
     if (bubbleEnd) wrap.dataset.bubbleEnd = '1';
+    // In a group chat each Bot's messages carry its name (above a run) and picture (beside its end).
+    const speaker = sp === 'bot' && m.meta && m.meta.speaker;
+    if (speaker) {
+      const who = S.bots.get(speaker) || { id: speaker, name: 'A Bot' };
+      wrap.dataset.speaker = 'bot:' + speaker;
+      wrap.classList.add('grp');
+      wrap.textContent = '';
+      wrap.append(
+        h('span', { class: 'gav', 'aria-hidden': 'true' }, avatar(who, 22)),
+        h('div', { class: 'gcol' }, h('div', { class: 'sender', style: { color: inkOf(lookOf(who).color) } }, who.name), stack)
+      );
+    }
     return wrap;
   }
   function bwrap(bubble, copyText, m) {
@@ -2488,7 +2566,7 @@
     const btn = $('#screenBtn');
     if (!btn) return;
     const b = curBot();
-    btn.hidden = !b || !(S.screenStatus && S.screenStatus.supported);
+    btn.hidden = !b || isGroup(b) || !(S.screenStatus && S.screenStatus.supported);
     const on = !!b && S.screensOn.has(b.id);
     btn.classList.toggle('live', on);
     btn.dataset.tip = on ? 'Bot’s screen (on)' : 'Bot’s screen';
@@ -2879,7 +2957,7 @@
   }
   function approvalCard(m) {
     const meta = m.meta || {};
-    const b = S.bots.get(m.bot_id);
+    const b = ownerOf(m);
     const botName = b ? b.name : 'Your Bot';
     const tool = meta.tool_name || '';
     const shell = tool === 'Bash' || tool === 'PowerShell';
@@ -3049,7 +3127,7 @@
   }
   // "@School Bot" in a Bot's reply becomes a button that opens that Bot.
   function mentionify(root) {
-    const bots = [...S.bots.values()].filter((b) => b.name).sort((a, b) => b.name.length - a.name.length);
+    const bots = realBots().filter((b) => b.name).sort((a, b) => b.name.length - a.name.length);
     if (!bots.length || !root.textContent.includes('@')) return;
     const re = new RegExp('@(' + bots.map((b) => b.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\w])', 'gi');
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement.closest('code, pre, a') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
@@ -3156,6 +3234,12 @@
   function noteForNotify(m, created) {
     const b = S.bots.get(m.bot_id);
     if (!b || !TAURI) return;
+    // In a group: "School Bot: …" under the group's name.
+    const who = isGroup(b) ? ownerOf(m) : null;
+    if (who && who.id !== b.id) {
+      const orig = m;
+      m = Object.assign({}, orig, { text: `${who.name}: ${orig.text || ''}`, meta: Object.assign({}, orig.meta, orig.meta && orig.meta.summary ? { summary: `${who.name}: ${orig.meta.summary}` } : {}) });
+    }
     if (m.role === 'bot' && m.status === 'done' && (m.text || '').trim()) maybeNotify(b, 'done', m.text, 'd:' + m.id);
     else if (m.role === 'attachment' && created) maybeNotify(b, 'done', m.text || `Sent ${(m.meta && m.meta.name) || 'a file'}`, 'd:' + m.id);
     else if (m.role === 'visualization' && created) maybeNotify(b, 'done', (m.meta && m.meta.title) || 'Made a page', 'd:' + m.id);
@@ -3591,6 +3675,15 @@
     panelEl.textContent = '';
     P = { botId: b.id, page: view.page, tab: view.tab };
     const head = h('div', { class: 'panel-head' });
+    if (isGroup(b)) {
+      head.append(h('span', { class: 'panel-head-title strong' }, 'Group chat'));
+      head.append(h('button', { class: 'ghost-btn', 'aria-label': 'Close', 'data-tip': 'Close', 'data-kbd': 'Esc', onclick: () => setPanel(false) }, icon('x', 16)));
+      const body = h('div', { class: 'panel-body' });
+      panelEl.append(head, body);
+      panelGroup(b, body);
+      renderChatHeader();
+      return;
+    }
     if (view.page === 'settings') {
       head.append(
         h(
@@ -3817,6 +3910,10 @@
     const b = curBot();
     if (!P || !b) return;
     if (P.botId !== b.id) return renderPanel();
+    if (isGroup(b)) {
+      if (!(document.activeElement && panelEl.contains(document.activeElement))) renderPanel();
+      return;
+    }
     const ae = document.activeElement;
     if (P.av) syncAvatar(P.av, b, 72, { live: true, state: botState(b), badge: b.main ? 'main' : null });
     if (P.name && ae !== P.name) P.name.value = b.name;
@@ -4241,6 +4338,148 @@
   }
 
   // ───────────────────────────── "Create New Bot" (settings-and-bots.md 4.2) ─────────────────────────────
+  // ── group chats ──
+  const MAX_GROUP = 6;
+  const memberNames = (g) => {
+    const names = (g.members || []).map((id) => S.bots.get(id)).filter(Boolean).map((x) => x.name);
+    if (names.length <= 2) return names.join(' and ') || 'No Bots yet';
+    return names.slice(0, -1).join(', ') + ', and ' + names[names.length - 1];
+  };
+  const GROUP_COST_NOTE = 'Group chats use more of your Claude usage, because each Bot reads every message. For most work, chat with one Bot instead.';
+  function panelGroup(g, body) {
+    const av = avatar(g, 72);
+    const name = inlineInput('p-name', g.name, { maxlength: '72', 'aria-label': 'Group name', placeholder: memberNames(g) }, (v) => patchBot(g.id, { name: v }));
+    const list = h('div', { class: 'panel-card g-members' });
+    const members = (g.members || []).map((id) => S.bots.get(id)).filter(Boolean);
+    for (const m of members) {
+      list.append(
+        h(
+          'div',
+          { class: 'g-member' },
+          avatar(m, 28),
+          h('button', { class: 'g-member-name', onclick: () => selectBot(m.id) }, m.name),
+          members.length > 1
+            ? h('button', { class: 'ghost-btn sm', 'aria-label': `Remove ${m.name}`, 'data-tip': `Remove ${m.name}`, onclick: () => patchBot(g.id, { members: g.members.filter((x) => x !== m.id) }) }, icon('x', 14))
+            : null
+        )
+      );
+    }
+    const canAdd = members.length < MAX_GROUP && realBots().some((x) => !g.members.includes(x.id));
+    const addBtn = h('button', { class: 'ghost-btn sm', 'aria-label': 'Add Bots', 'data-tip': canAdd ? 'Add Bots' : `Up to ${MAX_GROUP} Bots`, disabled: !canAdd, onclick: () => openGroupPicker(g) }, icon('plus', 14));
+    const notif = toggleEl(g.notifications !== false, (on) => patchBot(g.id, { notifications: on }));
+    body.append(
+      h('div', { class: 'p-hero' }, h('div', { class: 'p-avatar' }, av), name, h('div', { class: 'p-sub' }, g.running ? (g.activity && g.activity.label) || 'Working' : `${members.length} ${members.length === 1 ? 'Bot' : 'Bots'}`)),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, h('span', null, 'Bots'), addBtn), list),
+      h('div', { class: 'p-sec' }, h('div', { class: 'panel-card g-row' }, h('span', null, 'Notifications'), notif)),
+      h('div', { class: 'p-sec' }, h('div', { class: 'p-note' }, GROUP_COST_NOTE)),
+      h('div', { class: 'p-sec' }, h('button', { class: 'btn danger', onclick: () => deleteBot(S.bots.get(g.id)) }, 'Delete group chat'))
+    );
+    Object.assign(P, { name });
+  }
+  // Pick Bots: for a new group (g = null) or to add to one.
+  function botChecklist(chosen, onChange, exclude = []) {
+    const box = h('div', { class: 'g-pick', role: 'group', 'aria-label': 'Bots' });
+    const bots = orderedBots().filter((b) => !isGroup(b) && !exclude.includes(b.id));
+    const paint = () => {
+      box.textContent = '';
+      for (const b of bots) {
+        const on = chosen.includes(b.id);
+        const full = !on && chosen.length + exclude.length >= MAX_GROUP;
+        box.append(
+          h(
+            'button',
+            {
+              class: 'g-pick-row' + (on ? ' on' : ''),
+              role: 'checkbox',
+              'aria-checked': on ? 'true' : 'false',
+              disabled: full,
+              onclick: () => {
+                if (on) chosen.splice(chosen.indexOf(b.id), 1);
+                else chosen.push(b.id);
+                paint();
+                onChange();
+              },
+            },
+            avatar(b, 28),
+            h('span', { class: 'g-pick-name' }, b.name, b.label ? h('span', { class: 'g-pick-sub' }, b.label) : null),
+            h('span', { class: 'g-check' }, on ? icon('check', 13, '', 2.4) : null)
+          )
+        );
+      }
+    };
+    paint();
+    return box;
+  }
+  function openGroupPicker(g) {
+    const chosen = [];
+    const addBtn = h('button', { class: 'btn primary', disabled: true }, 'Add');
+    const list = botChecklist(chosen, () => (addBtn.disabled = !chosen.length), g.members);
+    addBtn.addEventListener('click', async () => {
+      close();
+      await patchBot(g.id, { members: [...g.members, ...chosen] });
+    });
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Add Bots' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Add to group chat'),
+      list,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), addBtn)
+    );
+    const close = openModal(box);
+  }
+  function openNewGroup() {
+    const chosen = [];
+    const nameIn = h('input', { class: 'field', placeholder: 'Group name (optional)', maxlength: '72', 'aria-label': 'Group name' });
+    const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
+    const createBtn = h('button', { class: 'btn primary', disabled: true }, 'Create group chat');
+    const sync = () => {
+      createBtn.disabled = busy || chosen.length < 2;
+      nameIn.placeholder = chosen.length ? memberNames({ members: chosen }) : 'Group name (optional)';
+    };
+    let busy = false;
+    const list = botChecklist(chosen, sync);
+    createBtn.addEventListener('click', async () => {
+      if (busy || chosen.length < 2) return;
+      busy = true;
+      sync();
+      err.hidden = true;
+      try {
+        const g = await api('/api/groups', { method: 'POST', body: { name: nameIn.value.trim(), members: chosen } });
+        close();
+        if (g && g.id) {
+          S.bots.set(g.id, g);
+          renderSidebar();
+          selectBot(g.id);
+        }
+      } catch (e) {
+        busy = false;
+        err.textContent = e && e.message ? e.message : 'Couldn’t make the group chat. Try again.';
+        err.hidden = false;
+        sync();
+      }
+    });
+    const box = h(
+      'div',
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New group chat' },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'New group chat'),
+      h('div', { class: 'dialog-sub' }, `Pick 2 to ${MAX_GROUP} Bots. Each one answers when the message is for it, and stays quiet otherwise.`),
+      list,
+      nameIn,
+      h('div', { class: 'set-note g-note' }, GROUP_COST_NOTE),
+      err,
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), createBtn)
+    );
+    const close = openModal(box);
+  }
+  // The + button: a new Bot or a new group chat.
+  function newMenu(anchor) {
+    menuAt(anchor, [
+      { label: 'New Bot', icon: 'plus', kbd: MOD + 'N', action: () => openNewBot() },
+      { label: 'New group chat', icon: 'users', kbd: (isMac ? '⌘⇧' : 'Ctrl+Shift+') + 'N', action: () => openNewGroup() },
+    ]);
+  }
   function openNewBot(preset) {
     const d = defaultsFor('new-' + Math.random());
     const used = new Set([...S.bots.values()].map((b) => lookOf(b).color));
@@ -4358,6 +4597,7 @@
   function paletteCommands() {
     return [
       { title: 'New Bot', icon: 'plus', type: 'Action', run: () => openNewBot() },
+      { title: 'New group chat', icon: 'users', type: 'Action', run: () => openNewGroup() },
       { title: 'Bot templates', icon: 'gridPlus', type: 'Action', run: () => openTemplates() },
       curBot() && { title: 'Bot settings', sub: curBot().name, icon: 'gear', type: 'Action', run: () => setPanel(true) },
       { title: 'Toggle compact sidebar', icon: 'sidebar', type: 'Action', sub: MOD + 'B', run: () => toggleRail() },
@@ -4533,6 +4773,7 @@
     const rows = [
       ['Jump to / search', MOD + 'K'],
       ['New Bot', MOD + 'N'],
+      ['New group chat', (isMac ? '⌘⇧' : 'Ctrl+Shift+') + 'N'],
       ['Send', '↵'],
       ['New line', '⇧↵'],
       ['Go to Bot 1–9', MOD + '1…9'],
@@ -6401,7 +6642,7 @@
     const draw = () => {
       list.hidden = st.bots === null;
       list.replaceChildren(
-        ...orderedBots().map((b) => {
+        ...orderedBots().filter((b) => !isGroup(b)).map((b) => {
           const on = st.bots !== null && st.bots.includes(b.id);
           return h(
             'button',
@@ -7122,7 +7363,7 @@
   }
   function openOnboarding() {
     if (S.onboardingOpen) return;
-    const mainBot = () => [...S.bots.values()].find((b) => b.main) || orderedBots()[0] || null;
+    const mainBot = () => realBots().find((b) => b.main) || orderedBots().find((b) => !isGroup(b)) || null;
     const mb = mainBot();
     const look = mb ? lookOf(mb) : { shape: 'ball', color: 'violet' };
     const st = { i: 0, where: S.conn.mode === 'remote' ? 'remote' : 'local', name: S.prefs.userName || '', wz: null };
@@ -7438,8 +7679,8 @@
       openSearch(e.key);
     }
   });
-  $('#newBotBtn').addEventListener('click', () => S.booted && openNewBot());
-  $('#railNewBtn').addEventListener('click', () => S.booted && openNewBot());
+  $('#newBotBtn').addEventListener('click', (e) => S.booted && newMenu(e.currentTarget));
+  $('#railNewBtn').addEventListener('click', (e) => S.booted && newMenu(e.currentTarget));
   $('#templatesBtn').addEventListener('click', () => S.booted && openTemplates());
   $('#settingsBtn').addEventListener('click', () => openSettings('general'));
   $('#meBtn').addEventListener('click', () => accountMenu());
@@ -7510,6 +7751,9 @@
       } else if (k === 'n' && !e.shiftKey) {
         e.preventDefault();
         openNewBot();
+      } else if (k === 'n' && e.shiftKey) {
+        e.preventDefault();
+        openNewGroup();
       } else if (k === 'b' && !e.shiftKey) {
         e.preventDefault();
         toggleRail();

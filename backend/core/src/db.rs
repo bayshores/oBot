@@ -42,6 +42,18 @@ pub struct Bot {
     /// Claude Code session id, shown as "conversation ID".
     #[serde(default)]
     pub conversation_id: String,
+    /// "" for a Bot, "group" for a group chat (see group.rs).
+    #[serde(default)]
+    pub kind: String,
+    /// A group chat's Bots, in order.
+    #[serde(default)]
+    pub members: Vec<String>,
+}
+
+impl Bot {
+    pub fn is_group(&self) -> bool {
+        self.kind == "group"
+    }
 }
 
 fn yes() -> bool {
@@ -130,6 +142,8 @@ fn row_to_bot(r: &Row) -> rusqlite::Result<Bot> {
         notifications: r.get::<_, i64>("notifications")? != 0,
         main: false,
         conversation_id: String::new(),
+        kind: r.get("kind")?,
+        members: serde_json::from_str(&r.get::<_, String>("members")?).unwrap_or_default(),
     })
 }
 
@@ -230,6 +244,8 @@ impl Db {
             ("bots", "label", "TEXT NOT NULL DEFAULT ''"),
             ("bots", "pinned", "INTEGER NOT NULL DEFAULT 0"),
             ("bots", "notifications", "INTEGER NOT NULL DEFAULT 1"),
+            ("bots", "kind", "TEXT NOT NULL DEFAULT ''"),
+            ("bots", "members", "TEXT NOT NULL DEFAULT '[]'"),
             ("memories", "tier", "TEXT NOT NULL DEFAULT 'profile'"),
             ("jobs", "pid", "INTEGER"),
         ] {
@@ -249,9 +265,17 @@ impl Db {
 
     // ---------- bots ----------
 
+    /// The user's Bots (not group chats).
     pub fn list_bots(&self) -> anyhow::Result<Vec<Bot>> {
         let c = self.c();
-        let mut st = c.prepare("SELECT * FROM bots ORDER BY updated_at DESC")?;
+        let mut st = c.prepare("SELECT * FROM bots WHERE kind = '' ORDER BY updated_at DESC")?;
+        let v = st.query_map([], row_to_bot)?.collect::<Result<Vec<_>, _>>()?;
+        Ok(v)
+    }
+
+    pub fn list_groups(&self) -> anyhow::Result<Vec<Bot>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT * FROM bots WHERE kind = 'group' ORDER BY updated_at DESC")?;
         let v = st.query_map([], row_to_bot)?.collect::<Result<Vec<_>, _>>()?;
         Ok(v)
     }
@@ -263,14 +287,15 @@ impl Db {
 
     pub fn upsert_bot(&self, b: &Bot) -> anyhow::Result<()> {
         self.c().execute(
-            r#"INSERT INTO bots (id,name,color,shape,instructions,model,hidden,created_at,updated_at,last_preview,unread,workdir,session_id,label,pinned,notifications)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)
+            r#"INSERT INTO bots (id,name,color,shape,instructions,model,hidden,created_at,updated_at,last_preview,unread,workdir,session_id,label,pinned,notifications,kind,members)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
                ON CONFLICT(id) DO UPDATE SET name=?2,color=?3,shape=?4,instructions=?5,model=?6,hidden=?7,
-               updated_at=?9,last_preview=?10,unread=?11,workdir=?12,session_id=?13,label=?14,pinned=?15,notifications=?16"#,
+               updated_at=?9,last_preview=?10,unread=?11,workdir=?12,session_id=?13,label=?14,pinned=?15,notifications=?16,
+               kind=?17,members=?18"#,
             params![
                 b.id, b.name, b.color, b.shape, b.instructions, b.model, b.hidden as i64,
                 b.created_at, b.updated_at, crate::vault::redact(&b.last_preview), b.unread, b.workdir, b.session_id,
-                b.label, b.pinned as i64, b.notifications as i64
+                b.label, b.pinned as i64, b.notifications as i64, b.kind, serde_json::to_string(&b.members).unwrap_or_else(|_| "[]".into())
             ],
         )?;
         Ok(())

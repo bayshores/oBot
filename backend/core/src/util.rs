@@ -38,6 +38,16 @@ pub fn preview(s: &str) -> String {
     truncate_chars(flat.trim(), 120)
 }
 
+/// "A", "A and B", "A, B, and C".
+pub fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
+}
+
 /// Mask a secret so only its last 4 characters show: "sk-ant-api03-abcdef" -> "••••cdef".
 /// Values of 8 characters or fewer show nothing but dots (4 would be half of it).
 pub fn hint(secret: &str) -> String {

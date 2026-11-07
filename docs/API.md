@@ -57,8 +57,17 @@ Bot = {
   pinned: boolean,        // pinned tile above the list
   notifications: boolean, // desktop notifications for this bot
   main: boolean,          // the Main Bot (can't be deleted; star badge)
-  conversation_id: string // Claude Code session id ("Copy conversation ID")
+  conversation_id: string,// Claude Code session id ("Copy conversation ID")
+  kind: "" | "group",     // "group" = a group chat (below); it's in the same list as the Bots
+  members: string[]       // group chats: the member Bot ids, in order (1–6)
 }
+// A group chat uses the Bot routes for its chat (messages, read, stop, retry, reset, PATCH name/members/pinned/
+// notifications, DELETE). When the user writes, each member Bot (or only the ones named with @Name) takes a turn: it
+// reads what was said since its last turn there and answers, or replies PASS to stay quiet. A Bot can name another
+// member with @Name to give it a turn (at most 6 such turns per user message). Each Bot keeps a separate Claude Code
+// conversation per group and works in its own folder; what it posts (replies, tool rows, cards) goes to the group
+// with meta.speaker = its id. While it runs: running = true, activity = {kind, label: "Food Bot and School Bot are
+// working" (or "<Bot>: <what it's doing>"), members: [ids working]}.
 
 Message = {
   id: string, bot_id: string,
@@ -96,6 +105,7 @@ Message = {
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
 //  note:     {}   a short line the Bot wrote right before a tool call ("Checking the syllabus."); hidden like tool rows,
 //            and shown as bot.activity.label while it works. Longer text (lists, paragraphs, questions) stays a "bot" message.
+//  speaker:  (any role a Bot posts, in a group chat) the id of the Bot that posted it
 //  relay:    { direction: "to"|"from", bot_id, name }   a message one Bot passed to another (message_bot); it is in
 //            both chats ("Messaged <name>" / "Message from <name>"); text = the message
 //  calendar: an event the Bot added or changed without asking (a calendar card): { action: "create"|"update",
@@ -185,7 +195,8 @@ Usage = {
 | GET | /api/bootstrap | – | see above |
 | GET | /api/bots | – | `[Bot]` |
 | POST | /api/bots | `{name,color,shape,instructions,model}` | `Bot` |
-| PATCH | /api/bots/:id | any of `{name,color,shape,instructions,model,hidden}` | `Bot` |
+| PATCH | /api/bots/:id | any of `{name,color,shape,instructions,model,hidden}`; group chats: `{name, members, pinned, notifications}` | `Bot` |
+| POST | /api/groups | `{name ("" = the Bots' names), members:[bot ids, 1–6]}` | `Bot` (kind "group"; `bot.created` event) |
 | DELETE | /api/bots/:id | – | `{ok:true}` |
 | POST | /api/bots/:id/reset | – | `{ok:true}` (clears chat, starts new Claude conversation) |
 | POST | /api/bots/:id/read | – | `{ok:true}` (unread → 0) |

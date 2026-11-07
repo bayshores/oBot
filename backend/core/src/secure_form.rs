@@ -85,7 +85,7 @@ pub async fn tool(st: &Shared, bot_id: &str, args: &Value) -> Result<String, Str
             st.emit_message(false, &old);
         }
     }
-    let m = Message {
+    let mut m = Message {
         id: new_id(),
         bot_id: bot_id.to_string(),
         role: "form".into(),
@@ -96,6 +96,7 @@ pub async fn tool(st: &Shared, bot_id: &str, args: &Value) -> Result<String, Str
                      "save_available": save, "filled": [], "missing": [], "saved": null}),
         created_at: now_ms(),
     };
+    st.route(&mut m);
     st.db.upsert_message(&m).map_err(|e| e.to_string())?;
     st.emit_message(true, &m);
     Ok(format!(
@@ -137,7 +138,7 @@ pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, Str
              on without it, say so in one sentence.",
             quote(&title)
         );
-        crate::runner::enqueue(st, &m.bot_id, prompt).await;
+        crate::runner::enqueue_reply(st, &m, prompt).await;
         return Ok(m);
     }
     let fields: Vec<Value> = m.meta["fields"].as_array().cloned().unwrap_or_default();
@@ -160,7 +161,9 @@ pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, Str
         return Err("Fill in at least one box".into());
     }
     let only: Vec<crate::screen::Fill> = fills.iter().map(|(_, x)| crate::screen::Fill { target: x.target.clone(), value: x.value.clone() }).collect();
-    let r = crate::screen::page_fill(st, &m.bot_id, &host, &only).await?;
+    // In a group chat the form is in the group, but the screen is the Bot's.
+    let bot_id = m.meta.get("speaker").and_then(Value::as_str).unwrap_or(&m.bot_id).to_string();
+    let r = crate::screen::page_fill(st, &bot_id, &host, &only).await?;
     if r.filled.is_empty() {
         return Err(format!("Couldn't find those boxes on the page on {host}. Open the Bot's screen to check it, or close the form."));
     }
@@ -207,6 +210,6 @@ pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, Str
         quote(&title),
         names(&r.filled).join(", "),
     );
-    crate::runner::enqueue(st, &m.bot_id, prompt).await;
+    crate::runner::enqueue_reply(st, &m, prompt).await;
     Ok(m)
 }

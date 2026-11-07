@@ -29,30 +29,71 @@ use crate::util::{hide_console, new_id, now_ms, preview, truncate_chars};
 /// Queue a turn openbot starts itself (routine, wake-up, background job...). Runs after anything
 /// already waiting.
 pub async fn enqueue(state: &Shared, bot_id: &str, prompt: String) {
-    push(state, bot_id, prompt, None).await;
+    push(state, bot_id, prompt, None, None, false).await;
+}
+
+/// An automatic note about something the Bot posted (a form it sent, say): goes to the Bot that
+/// posted it, in the chat it's in (its own, or a group).
+pub async fn enqueue_reply(state: &Shared, m: &Message, prompt: String) {
+    match m.meta.get("speaker").and_then(Value::as_str) {
+        Some(bot) => push(state, bot, prompt, None, Some(m.bot_id.clone()), false).await,
+        None => push(state, &m.bot_id, prompt, None, None, false).await,
+    };
+}
+
+/// Give a Bot a turn in a group chat (see group.rs). It waits behind the Bot's other work.
+pub async fn enqueue_group(state: &Shared, bot_id: &str, group_id: &str, winding_down: bool) {
+    push(state, bot_id, String::new(), None, Some(group_id.to_string()), winding_down).await;
 }
 
 /// Queue the user's chat message. Returns true when the bot is busy, so the message waits (it's
 /// marked "Queued" in the chat and can be sent right away with `steer`).
 pub async fn enqueue_user(state: &Shared, bot_id: &str, prompt: String, msg_id: &str) -> bool {
-    push(state, bot_id, prompt, Some(msg_id.to_string())).await
+    push(state, bot_id, prompt, Some(msg_id.to_string()), None, false).await
 }
 
-async fn push(state: &Shared, bot_id: &str, prompt: String, user_msg: Option<String>) -> bool {
+type WorkerStart = (Shared, String, mpsc::UnboundedReceiver<Job>);
+static SPAWNER: std::sync::OnceLock<mpsc::UnboundedSender<WorkerStart>> = std::sync::OnceLock::new();
+
+/// Start the task that starts each Bot's queue worker. A turn can queue turns for other Bots (in a
+/// group chat), so workers are started from here rather than from inside another worker.
+pub fn start_workers() {
+    SPAWNER.get_or_init(|| {
+        let (tx, mut rx) = mpsc::unbounded_channel::<WorkerStart>();
+        tokio::spawn(async move {
+            while let Some((state, bot_id, jobs)) = rx.recv().await {
+                tokio::spawn(worker(state, bot_id, jobs));
+            }
+        });
+        tx
+    });
+}
+
+async fn push(state: &Shared, bot_id: &str, prompt: String, user_msg: Option<String>, group: Option<String>, winding_down: bool) -> bool {
+    if state.db.get_bot(bot_id).ok().flatten().is_some_and(|b| b.is_group()) {
+        // A group chat isn't a Bot; its Bots take turns (group.rs).
+        tracing::warn!("ignored a turn queued for group chat {bot_id}");
+        return false;
+    }
     let busy = state.runs.lock().await.contains_key(bot_id);
     let mut queues = state.queues.lock().await;
     let needs_worker = queues.get(bot_id).map_or(true, |tx| tx.is_closed());
     if needs_worker {
         let (tx, rx) = mpsc::unbounded_channel();
         queues.insert(bot_id.to_string(), tx);
-        tokio::spawn(worker(state.clone(), bot_id.to_string(), rx));
+        match SPAWNER.get() {
+            Some(s) => {
+                let _ = s.send((state.clone(), bot_id.to_string(), rx));
+            }
+            None => tracing::error!("Bot queues aren't running (start_workers wasn't called)"),
+        }
     }
     if let Some(tx) = queues.get(bot_id) {
         // Marked before it's handed over, so the worker's "no longer queued" always comes after.
         if let (true, Some(id)) = (busy, user_msg.as_deref()) {
             mark_queued(state, id, true, false);
         }
-        let _ = tx.send(Job { prompt, user_msg, while_busy: busy });
+        let _ = tx.send(Job { prompt, user_msg, while_busy: busy, group, winding_down });
     }
     busy
 }
@@ -114,6 +155,33 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         while let Ok(more) = rx.try_recv() {
             jobs.push(more);
         }
+        // One chat per turn: the Bot's own chat or one group. The rest waits for the next turn.
+        let group = jobs[0].group.clone();
+        let (now, later): (Vec<Job>, Vec<Job>) = jobs.into_iter().partition(|j| j.group == group);
+        carry.extend(later);
+        let jobs = now;
+        if let Some(g) = &group {
+            let winding_down = jobs.iter().all(|j| j.winding_down);
+            // Automatic notes (a form was filled...) come after what was said in the group.
+            let notes: Vec<&str> = jobs.iter().map(|j| j.prompt.as_str()).filter(|p| !p.is_empty()).collect();
+            let said = crate::group::turn_prompt(&state, g, &bot_id, winding_down && notes.is_empty());
+            let prompt = match (said, notes.is_empty()) {
+                (None, true) => continue,
+                (said, _) => [said.unwrap_or_default(), notes.join("\n\n")].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n"),
+            };
+            let stopped = Arc::new(AtomicBool::new(false));
+            let steer = Arc::new(AtomicBool::new(false));
+            run_turn(&state, &bot_id, Some(g), &prompt, false, stopped.clone(), steer.clone()).await;
+            steered = false;
+            if stopped.load(Ordering::SeqCst) && !steer.load(Ordering::SeqCst) {
+                // Stop in the group also cancels this Bot's other waiting turns there.
+                while let Ok(j) = rx.try_recv() {
+                    carry.push(j);
+                }
+                carry.retain(|j| j.group.as_ref() != Some(g));
+            }
+            continue;
+        }
         for id in jobs.iter().filter_map(|j| j.user_msg.as_deref()) {
             mark_queued(&state, id, false, false);
         }
@@ -122,7 +190,7 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         state.db.kv_set(&format!("{LAST_PROMPT}{bot_id}"), &prompt);
         let stopped = Arc::new(AtomicBool::new(false));
         let steer = Arc::new(AtomicBool::new(false));
-        run_turn(&state, &bot_id, &prompt, from_user, stopped.clone(), steer.clone()).await;
+        run_turn(&state, &bot_id, None, &prompt, from_user, stopped.clone(), steer.clone()).await;
         steered = steer.load(Ordering::SeqCst);
         if stopped.load(Ordering::SeqCst) && !steered {
             // "Stop" also throws away the user's messages queued behind the current turn. openbot's
@@ -196,6 +264,17 @@ pub async fn skip_card_for(state: &Shared, bot_id: &str, msg_id: &str) {
     if state.approvals.lock().await.values().any(|p| p.bot_id == bot_id) {
         steer(state, bot_id, msg_id).await;
     }
+}
+
+/// The user moved on in a group while this Bot waited on a card there: skip the card and stop the
+/// turn, so the Bot reads the new message next.
+pub async fn cut_short(state: &Shared, bot_id: &str) {
+    let runs = state.runs.lock().await;
+    let Some(h) = runs.get(bot_id) else { return };
+    h.steer.store(true, Ordering::SeqCst);
+    h.stop.notify_one();
+    drop(runs);
+    deny_pending(state, bot_id, "skipped").await;
 }
 
 /// "Send now" on a queued message: stop the current turn and run the waiting messages right away.
@@ -340,7 +419,21 @@ pub fn add_simple(state: &Shared, bot_id: &str, role: &str, text: &str) -> Messa
 /// Waits before each automatic retry of a temporary failure.
 const RETRY_WAITS: [u64; 3] = [5, 20, 60];
 
-async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, stopped: Arc<AtomicBool>, steer: Arc<AtomicBool>) {
+async fn run_turn(
+    state: &Shared,
+    bot_id: &str,
+    group: Option<&str>,
+    prompt: &str,
+    from_user: bool,
+    stopped: Arc<AtomicBool>,
+    steer: Arc<AtomicBool>,
+) {
+    // Where this turn's messages go.
+    let chat = group.unwrap_or(bot_id);
+    let started = now_ms();
+    if let Some(g) = group {
+        state.group_turns.lock().unwrap_or_else(|e| e.into_inner()).insert(bot_id.to_string(), g.to_string());
+    }
     let stop = Arc::new(Notify::new());
     state
         .runs
@@ -354,7 +447,7 @@ async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, s
     let mut attempt = 0;
     let mut current = prompt.to_string();
     let failure = loop {
-        let outcome = match drive(state, bot_id, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
+        let outcome = match drive(state, bot_id, group, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
             Ok(o) => o,
             Err(e) => Outcome::Failed(Failure::from_text(&e.to_string(), true)),
         };
@@ -363,13 +456,15 @@ async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, s
             Outcome::ResumeFailed => {
                 // The saved conversation is gone (e.g. the bot moved to another computer): start a
                 // fresh one, and say so.
-                if let Ok(Some(mut b)) = state.db.get_bot(bot_id) {
+                if let Some(g) = group {
+                    state.db.kv_set(&crate::group::session_key(g, bot_id), "");
+                } else if let Ok(Some(mut b)) = state.db.get_bot(bot_id) {
                     b.session_id.clear();
                     let _ = state.db.upsert_bot(&b);
                 }
                 add_event(
                     state,
-                    bot_id,
+                    chat,
                     "Started a new conversation because the old one couldn't be found. Memory, files and routines are kept.",
                     json!({"kind": "conversation-reset"}),
                 );
@@ -387,8 +482,9 @@ async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, s
                     _ = tokio::time::sleep(Duration::from_secs(wait)) => {}
                     _ = stop.notified() => {
                         stopped.store(true, Ordering::SeqCst);
-                        if !steer.load(Ordering::SeqCst) {
-                            add_simple(state, bot_id, "system", "Stopped");
+                        // In a group, "Stopped" shows once for everyone (group::stop).
+                        if !steer.load(Ordering::SeqCst) && group.is_none() {
+                            add_simple(state, chat, "system", "Stopped");
                         }
                         break None;
                     }
@@ -399,7 +495,10 @@ async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, s
         }
     };
     if let Some(f) = failure {
-        add_error(state, bot_id, &f, attempt, from_user);
+        add_error(state, chat, group.map(|_| bot_id), &f, attempt, from_user);
+        if let Some(g) = group {
+            crate::group::rewind(state, g, bot_id);
+        }
     }
 
     state.runs.lock().await.remove(bot_id);
@@ -408,6 +507,11 @@ async fn run_turn(state: &Shared, bot_id: &str, prompt: &str, from_user: bool, s
     }
     deny_pending(state, bot_id, "expired").await;
     state.emit_bot(bot_id).await;
+    if let Some(g) = group {
+        state.group_turns.lock().unwrap_or_else(|e| e.into_inner()).remove(bot_id);
+        state.emit_bot(g).await;
+        crate::group::after_turn(state, g, bot_id, started).await;
+    }
 }
 
 enum Outcome {
@@ -515,7 +619,8 @@ impl Failure {
 }
 
 /// The one error card for a failed turn. "Edit and resend" only when the turn was the user's message.
-fn add_error(state: &Shared, bot_id: &str, f: &Failure, retries: usize, from_user: bool) {
+/// `speaker`: in a group chat, the Bot whose turn failed.
+fn add_error(state: &Shared, bot_id: &str, speaker: Option<&str>, f: &Failure, retries: usize, from_user: bool) {
     let actions: Vec<&str> = f.code.actions().iter().copied().filter(|a| from_user || *a != "edit").collect();
     let mut text = if f.text.is_empty() { "The run ended early.".to_string() } else { f.text.clone() };
     match f.code {
@@ -536,7 +641,7 @@ fn add_error(state: &Shared, bot_id: &str, f: &Failure, retries: usize, from_use
         text,
         html: String::new(),
         status: "done".into(),
-        meta: json!({ "code": f.code.as_str(), "actions": actions }),
+        meta: json!({ "code": f.code.as_str(), "actions": actions, "speaker": speaker }),
         created_at: now_ms(),
     };
     let _ = state.db.upsert_message(&m);
@@ -677,6 +782,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
 fn build_command(
     state: &Shared,
     bot: &Bot,
+    group: Option<&str>,
     cfg: &Config,
     claude: &PathBuf,
     resume: bool,
@@ -692,6 +798,9 @@ fn build_command(
 
     let persona_path = bot_dir.join("persona.md");
     let mut persona_text = persona(state, bot, cfg);
+    if let Some(g) = group {
+        persona_text.push_str(&crate::group::persona(state, g, bot));
+    }
     if wsl {
         persona_text = persona_text.replace(&bot.workdir, &crate::util::to_wsl_path(std::path::Path::new(&bot.workdir)));
     }
@@ -709,9 +818,14 @@ fn build_command(
         "--system-prompt-snapshot".into(),
         "off".into(),
     ];
-    if resume && !bot.session_id.is_empty() {
+    // Each group chat is its own conversation for the Bot.
+    let session = match group {
+        Some(g) => state.db.kv_get(&crate::group::session_key(g, &bot.id)).unwrap_or_default(),
+        None => bot.session_id.clone(),
+    };
+    if resume && !session.is_empty() {
         args.push("--resume".into());
-        args.push(bot.session_id.clone());
+        args.push(session);
     }
     let model = [&bot.model, &cfg.default_model]
         .into_iter()
@@ -903,6 +1017,7 @@ fn interrupt(pid: Option<u32>) {
 async fn drive(
     state: &Shared,
     bot_id: &str,
+    group: Option<&str>,
     prompt: &str,
     stop: Arc<Notify>,
     stopped: Arc<AtomicBool>,
@@ -919,7 +1034,7 @@ async fn drive(
         )
     })?;
 
-    let mut cmd = build_command(state, &bot, &cfg, &claude, resume)?;
+    let mut cmd = build_command(state, &bot, group, &cfg, &claude, resume)?;
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("Couldn't start Claude Code ({}): {e}", claude.display()))?;
@@ -954,7 +1069,7 @@ async fn drive(
 
     let stdout = child.stdout.take().ok_or_else(|| anyhow!("no output from Claude Code"))?;
     let mut lines = BufReader::new(stdout).lines();
-    let mut turn = Turn::new(state.clone(), bot_id.to_string());
+    let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string));
     let mut deadline: Option<tokio::time::Instant> = None;
 
     loop {
@@ -1013,6 +1128,9 @@ async fn drive(
 struct Turn {
     state: Shared,
     bot_id: String,
+    /// Where messages go: the Bot's own chat, or the group it's answering in.
+    chat: String,
+    group: Option<String>,
     cur_api_msg: String,
     /// content-block index -> message id (text blocks of the current model message)
     blocks: HashMap<u64, String>,
@@ -1128,9 +1246,11 @@ fn result_text(content: &Value) -> String {
 }
 
 impl Turn {
-    fn new(state: Shared, bot_id: String) -> Self {
+    fn new(state: Shared, bot_id: String, group: Option<String>) -> Self {
         Self {
             state,
+            chat: group.clone().unwrap_or_else(|| bot_id.clone()),
+            group,
             bot_id,
             cur_api_msg: String::new(),
             blocks: HashMap::new(),
@@ -1148,10 +1268,13 @@ impl Turn {
         }
     }
 
-    fn new_msg(&self, role: &str, text: &str, status: &str, meta: Value) -> Message {
+    fn new_msg(&self, role: &str, text: &str, status: &str, mut meta: Value) -> Message {
+        if self.group.is_some() && meta.is_object() {
+            meta["speaker"] = json!(self.bot_id);
+        }
         Message {
             id: new_id(),
-            bot_id: self.bot_id.clone(),
+            bot_id: self.chat.clone(),
             role: role.into(),
             text: text.into(),
             html: if role == "bot" { markdown::render(text) } else { String::new() },
@@ -1176,7 +1299,7 @@ impl Turn {
                 Some("compact_boundary") => {
                     add_event(
                         &self.state,
-                        &self.bot_id,
+                        &self.chat,
                         "Summarized older messages to make room. The Bot still has its memory.",
                         json!({"kind": "compacted"}),
                     );
@@ -1197,6 +1320,10 @@ impl Turn {
 
     fn set_session(&self, v: &Value) {
         let Some(sid) = v.get("session_id").and_then(Value::as_str) else { return };
+        if let Some(g) = &self.group {
+            self.state.db.kv_set(&crate::group::session_key(g, &self.bot_id), sid);
+            return;
+        }
         if let Ok(Some(mut b)) = self.state.db.get_bot(&self.bot_id) {
             if b.session_id != sid {
                 b.session_id = sid.to_string();
@@ -1285,7 +1412,7 @@ impl Turn {
 
     async fn finalize(&mut self, id: &str) {
         let Some(mut m) = self.live.remove(id) else { return };
-        if m.text.trim().is_empty() {
+        if m.text.trim().is_empty() || (self.group.is_some() && crate::group::is_pass(&m.text)) {
             return;
         }
         m.text = m.text.trim().to_string();
@@ -1295,31 +1422,45 @@ impl Turn {
         self.bump_bot(&m.text, 1).await;
     }
 
+    /// The sidebar preview: in a group it starts with who wrote it ("School Bot: …").
+    fn preview_of(&self, text: &str) -> String {
+        match &self.group {
+            Some(_) => {
+                let name = self.state.db.get_bot(&self.bot_id).ok().flatten().map(|b| b.name).unwrap_or_default();
+                preview(&format!("{name}: {text}"))
+            }
+            None => preview(text),
+        }
+    }
+
     /// Update the sidebar preview / unread count.
     async fn bump_bot(&self, text: &str, unread: i64) {
-        if let Ok(Some(mut b)) = self.state.db.get_bot(&self.bot_id) {
-            b.last_preview = preview(text);
+        if let Ok(Some(mut b)) = self.state.db.get_bot(&self.chat) {
+            b.last_preview = self.preview_of(text);
             b.updated_at = now_ms();
             b.unread += unread;
             let _ = self.state.db.upsert_bot(&b);
-            self.state.emit_bot(&self.bot_id).await;
+            self.state.emit_bot(&self.chat).await;
         }
     }
 
     /// Show a finished Bot reply that wasn't streamed live.
     fn add_bot_text(&mut self, text: &str) {
+        if self.group.is_some() && crate::group::is_pass(text) {
+            return;
+        }
         let m = self.new_msg("bot", text, "done", json!({}));
         let _ = self.state.db.upsert_message(&m);
         self.state.emit_message(true, &m);
         let st = self.state.clone();
-        let (bid, t) = (self.bot_id.clone(), m.text.clone());
+        let (chat, p) = (self.chat.clone(), self.preview_of(&m.text));
         tokio::spawn(async move {
-            if let Ok(Some(mut bot)) = st.db.get_bot(&bid) {
-                bot.last_preview = preview(&t);
+            if let Ok(Some(mut bot)) = st.db.get_bot(&chat) {
+                bot.last_preview = p;
                 bot.updated_at = now_ms();
                 bot.unread += 1;
                 let _ = st.db.upsert_bot(&bot);
-                st.emit_bot(&bid).await;
+                st.emit_bot(&chat).await;
             }
         });
     }
@@ -1495,12 +1636,14 @@ impl Turn {
             }
         }
         match end {
+            // In a group these show once for everyone, not once per Bot (group.rs).
+            End::Stopped | End::Steered if self.group.is_some() => None,
             End::Stopped => {
-                add_simple(&self.state, &self.bot_id, "system", "Stopped");
+                add_simple(&self.state, &self.chat, "system", "Stopped");
                 None
             }
             End::Steered => {
-                add_event(&self.state, &self.bot_id, "Stopped to read your new message", json!({"kind": "steered"}));
+                add_event(&self.state, &self.chat, "Stopped to read your new message", json!({"kind": "steered"}));
                 None
             }
             End::Finished => {
@@ -1550,7 +1693,7 @@ mod tests {
     }
 
     fn job(p: &str, user: bool, busy: bool) -> Job {
-        Job { prompt: p.into(), user_msg: user.then(|| "m".to_string()), while_busy: busy }
+        Job { prompt: p.into(), user_msg: user.then(|| "m".to_string()), while_busy: busy, group: None, winding_down: false }
     }
 
     #[test]

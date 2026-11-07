@@ -79,6 +79,8 @@ pub fn build(db: &Db, cfg: &Config, b: &NewBot) -> anyhow::Result<Bot> {
         notifications: true,
         main: false,
         conversation_id: String::new(),
+        kind: String::new(),
+        members: vec![],
     })
 }
 
@@ -127,6 +129,7 @@ pub async fn delete(st: &Shared, id: &str) -> Result<(), String> {
     st.queues.lock().await.remove(id);
     st.db.delete_bot(id).map_err(|e| e.to_string())?;
     st.db.delete_routines_of_bot(id).map_err(|e| e.to_string())?;
+    crate::group::forget_bot(st, id).await;
     // Take the Bot off any Vault secret or connected account that was limited to certain Bots.
     let vault_changed = {
         let mut cfg = st.config.write().await;

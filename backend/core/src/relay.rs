@@ -29,8 +29,12 @@ pub fn is_tool(name: &str) -> bool {
     name == "message_bot"
 }
 
-fn post(st: &Shared, bot_id: &str, text: &str, meta: Value) {
-    let m = Message { id: new_id(), bot_id: bot_id.into(), role: "relay".into(), text: text.into(), html: String::new(), status: "done".into(), meta, created_at: now_ms() };
+/// `sender`: the sending Bot's side, shown in the chat it's working in (maybe a group).
+fn post(st: &Shared, bot_id: &str, text: &str, meta: Value, sender: bool) {
+    let mut m = Message { id: new_id(), bot_id: bot_id.into(), role: "relay".into(), text: text.into(), html: String::new(), status: "done".into(), meta, created_at: now_ms() };
+    if sender {
+        st.route(&mut m);
+    }
     let _ = st.db.upsert_message(&m);
     st.emit_message(true, &m);
 }
@@ -60,8 +64,8 @@ pub async fn tool(st: &Shared, me: &Bot, args: &Value) -> Result<String, String>
     if recent >= MAX_IN_WINDOW {
         return Err(format!("You and {} have already sent each other {recent} messages in the last 10 minutes. Stop here and tell the user where things stand instead.", to.name));
     }
-    post(st, &me.id, &text, json!({"direction": "to", "bot_id": to.id, "name": to.name}));
-    post(st, &to.id, &text, json!({"direction": "from", "bot_id": me.id, "name": me.name}));
+    post(st, &me.id, &text, json!({"direction": "to", "bot_id": to.id, "name": to.name}), true);
+    post(st, &to.id, &text, json!({"direction": "from", "bot_id": me.id, "name": me.name}), false);
     if let Ok(Some(mut b)) = st.db.get_bot(&to.id) {
         b.last_preview = format!("Message from {}: {}", me.name, preview(&text));
         b.updated_at = now_ms();
