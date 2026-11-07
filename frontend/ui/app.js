@@ -2141,6 +2141,9 @@
       case 'approval':
         stack.append(approvalCard(m));
         break;
+      case 'calendar':
+        stack.append(calendarCard(m));
+        break;
       case 'tool':
         stack.append(toolView(m));
         break;
@@ -2719,6 +2722,7 @@
     mcp__openbot__calendar_create: ['calendar', 'Calendar', 'add an event and invite people'],
     mcp__openbot__calendar_update: ['calendar', 'Calendar', 'change an event'],
     mcp__openbot__calendar_delete: ['calendar', 'Calendar', 'delete an event'],
+    mcp__openbot__calendar_respond: ['calendar', 'Calendar', 'reply to an invitation'],
   };
   // Approval card (settings-and-bots.md 2.3.1)
   const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
@@ -2748,6 +2752,124 @@
       return h('div', { class: 'card-well mail' }, line('Calendar', x.account), line('Event', x.title), line('When', x.when), line('Where', x.location), line('Guests', x.attendees), x.description ? h('div', { class: 'mail-body' }, x.description) : null);
     return null;
   }
+  // ── calendar card: an event a Bot added or changed, or wants to send (inside its approval card)
+  const CAL_ACTION = {
+    create: { allow: 'Send invite', deny: 'Don’t send', done: 'Invite sent', added: 'Added to your calendar' },
+    update: { allow: 'Send update', deny: 'Don’t send', done: 'Update sent', added: 'Updated in your calendar' },
+    delete: { allow: 'Delete event', deny: 'Keep it', done: 'Deleted' },
+    respond: { allow: 'Send reply', deny: 'Don’t send', done: 'Reply sent' },
+  };
+  const REPLY_WORD = { yes: 'Yes', no: 'No', maybe: 'Maybe', waiting: 'Waiting' };
+  const dayOf = (iso) => {
+    const [y, mo, d] = String(iso || '').split('-').map(Number);
+    return y ? new Date(y, mo - 1, d) : null;
+  };
+  const calDate = (d) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+  const calTime = (d) => d.toLocaleTimeString(undefined, d.getMinutes() ? { hour: 'numeric', minute: '2-digit' } : { hour: 'numeric' });
+  function calWhen(x) {
+    if (x.all_day) {
+      const a = dayOf(x.first_day);
+      const b = dayOf(x.last_day);
+      if (!a) return [x.when || ''];
+      return !b || +a === +b ? [calDate(a), 'All day'] : [`${calDate(a)} – ${calDate(b)}`, 'All day'];
+    }
+    const a = new Date(x.start);
+    const b = new Date(x.end);
+    const sameDay = a.toDateString() === b.toDateString();
+    return sameDay ? [calDate(a), `${calTime(a)} – ${calTime(b)}`] : [`${calDate(a)}, ${calTime(a)}`, `${calDate(b)}, ${calTime(b)}`];
+  }
+  // A 4-hour view of the day around the event, with the user's other events beside it.
+  function calTimeline(x) {
+    const HOUR = 3600000;
+    const ROW = 30;
+    const day = x.all_day ? dayOf(x.first_day) || new Date(x.start) : new Date(x.start);
+    const midnight = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+    const firstHour = x.all_day ? 8 : Math.min(20, Math.max(0, new Date(x.start).getHours() - 1));
+    const from = midnight + firstHour * HOUR;
+    const to = from + 4 * HOUR;
+    const timed = (x.day_events || []).filter((e) => !e.all_day && e.end > from && e.start < to).map((e) => ({ ...e }));
+    const allDay = (x.day_events || []).filter((e) => e.all_day);
+    if (!x.all_day) timed.push({ title: x.title || '(No title)', start: x.start, end: x.end, proposed: true });
+    timed.sort((a, b) => a.start - b.start || b.end - a.end);
+    const lanes = [];
+    for (const e of timed) {
+      let i = lanes.findIndex((end) => end <= e.start);
+      if (i < 0) i = lanes.push(0) - 1;
+      lanes[i] = e.end;
+      e.lane = i;
+    }
+    const n = Math.max(1, lanes.length);
+    const grid = h('div', { class: 'cal-grid', style: { height: ROW * 4 + 'px' } });
+    for (let i = 0; i < 4; i++) {
+      grid.append(h('div', { class: 'cal-hour', style: { top: i * ROW + 'px' } }, h('span', null, calTime(new Date(from + i * HOUR)))));
+    }
+    for (const e of timed) {
+      const top = Math.max(0, ((e.start - from) / HOUR) * ROW);
+      const bottom = Math.min(ROW * 4, ((e.end - from) / HOUR) * ROW);
+      const height = Math.max(ROW / 2, bottom - top);
+      grid.append(
+        h(
+          'div',
+          { class: 'cal-block' + (e.proposed ? ' proposed' : ''), style: { top: top + 'px', height: height + 'px', left: `calc(52px + (100% - 52px) * ${e.lane / n})`, width: `calc((100% - 52px) / ${n} - 3px)` }, title: e.title },
+          h('span', null, e.title || '(No title)')
+        )
+      );
+    }
+    const wrap = h('div', { class: 'cal-day' });
+    const strip = [...allDay.map((e) => e.title || '(No title)'), ...(x.all_day ? [x.title || '(No title)'] : [])];
+    if (strip.length) wrap.append(h('div', { class: 'cal-allday' }, ...strip.map((t, i) => h('span', { class: 'cal-chip' + (x.all_day && i === strip.length - 1 ? ' proposed' : '') }, t))));
+    wrap.append(grid);
+    return wrap;
+  }
+  function calBody(x, open) {
+    const guests = (x.guests || []).filter((g) => !g.organizer || !g.self);
+    const counts = {};
+    for (const g of guests) counts[g.response] = (counts[g.response] || 0) + 1;
+    const summary = ['yes', 'no', 'maybe', 'waiting'].filter((k) => counts[k]).map((k) => `${counts[k]} ${REPLY_WORD[k]}`).join(', ');
+    const [d1, d2] = calWhen(x);
+    const body = h('div', { class: 'cal-body' });
+    const row = (label, ...v) => h('div', { class: 'cal-row' }, h('span', { class: 'cal-k' }, label), h('div', { class: 'cal-v' }, ...v));
+    const details = h('div', { class: 'cal-details', hidden: !open });
+    const toggle = h('button', { class: 'cal-toggle', 'aria-expanded': open ? 'true' : 'false', onclick: () => { details.hidden = !details.hidden; toggle.setAttribute('aria-expanded', details.hidden ? 'false' : 'true'); toggle.classList.toggle('open', !details.hidden); } }, 'Details', icon('chevronDown', 12, '', 2));
+    if (open) toggle.classList.add('open');
+    body.append(row('When', h('span', { class: 'cal-chip' }, d1), d2 ? h('span', { class: 'cal-chip' }, d2) : null, toggle));
+    if (x.repeat) body.append(row('Repeats', h('span', null, x.repeat.charAt(0).toUpperCase() + x.repeat.slice(1))));
+    details.append(calTimeline(x));
+    body.append(details);
+    if (guests.length) {
+      const list = h(
+        'div',
+        { class: 'cal-guests' },
+        ...guests.map((g) =>
+          h(
+            'div',
+            { class: 'cal-guest' },
+            h('span', { class: 'cal-gname' }, g.name || g.email, g.self ? h('span', { class: 'cal-note' }, ' (You)') : null, g.optional ? h('span', { class: 'cal-note' }, ' · Optional') : null),
+            h('span', { class: 'cal-reply ' + g.response }, REPLY_WORD[g.response] || g.response)
+          )
+        )
+      );
+      body.append(row('Guests', h('div', null, h('div', { class: 'cal-sum' }, summary), list)));
+    }
+    if (x.removed && x.removed.length) body.append(row('Removed', h('span', null, x.removed.join(', '))));
+    if (x.location) body.append(row('Location', h('span', null, x.location)));
+    if (x.video) body.append(row('Video call', h('a', { href: x.video, target: '_blank', rel: 'noopener noreferrer' }, x.video.replace(/^https?:\/\//, ''))));
+    if (x.organizer) body.append(row('Organizer', h('span', null, x.organizer === x.account ? `${x.organizer} (You)` : x.organizer)));
+    if (x.action === 'respond') body.append(row('Your reply', h('span', { class: 'cal-reply ' + x.response }, REPLY_WORD[x.response] || x.response), x.comment ? h('span', { class: 'cal-note' }, ` “${x.comment}”`) : null));
+    if (x.description && open) body.append(h('div', { class: 'cal-desc' }, x.description));
+    return body;
+  }
+  function calHead(x) {
+    const src = x.calendar ? `Calendar · ${x.calendar}` : 'Calendar';
+    return [h('div', { class: 'card-src' }, icon('calendar', 14), h('span', null, src)), h('div', { class: 'card-title' }, x.title || '(No title)')];
+  }
+  // An event the Bot added or changed (no approval needed).
+  function calendarCard(m) {
+    const x = m.meta || {};
+    const act = CAL_ACTION[x.action] || CAL_ACTION.create;
+    const openIn = x.link ? h('a', { class: 'cal-open', href: x.link, target: '_blank', rel: 'noopener noreferrer' }, x.provider === 'microsoft' ? 'Open in Outlook' : 'Open in Google Calendar', icon('external', 12, '', 2)) : null;
+    return h('div', { class: 'card cal' }, ...calHead(x), calBody(x, false), h('div', { class: 'card-settled ok' }, icon('check', 13, '', 2.2), h('span', null, act.added || act.done), openIn));
+  }
   function approvalCard(m) {
     const meta = m.meta || {};
     const b = S.bots.get(m.bot_id);
@@ -2766,8 +2888,9 @@
       if (typeof v === 'string') well = h('div', { class: 'card-well mono' }, v.length > 340 ? cutMiddle(v) : v);
       full = typeof v === 'string' && Object.keys(input).length === 1 ? v : JSON.stringify(input, null, 2);
     }
+    const cal = input && input.kind === 'event' && input.start != null ? input : null;
     if (input && input.kind) {
-      well = approvalPreview(input);
+      well = cal ? calBody(cal, m.status === 'pending') : approvalPreview(input);
       full = '';
     }
     if (!well && (meta.summary || m.text)) well = h('div', { class: 'card-well' }, meta.summary || m.text);
@@ -2780,7 +2903,8 @@
       'div',
       { class: 'card approval ' + status },
       h('div', { class: 'card-src' }, icon(shell ? 'terminal' : ic, 14), h('span', null, source)),
-      h('div', { class: 'card-title' }, `${botName} wants to ${verb}`),
+      h('div', { class: 'card-title' }, cal ? cal.title || '(No title)' : `${botName} wants to ${verb}`),
+      cal && h('div', { class: 'card-desc' }, `${botName} wants to ${verb}`),
       reason && h('div', { class: 'card-caution' }, icon('alert', 14), h('span', null, reason)),
       well,
       full && full !== (well && well.textContent) ? h('details', { class: 'card-full' }, h('summary', null, 'View the full request'), h('pre', null, full)) : null
@@ -2806,12 +2930,14 @@
         }
       };
       if (rule) card.append(h('div', { class: 'rule-notice' }, h('div', { class: 'rule-notice-title' }, 'Adding to your Allow rules'), h('div', { class: 'rule-notice-text' }, rule)));
-      buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, rule ? 'Allow once' : 'Allow'));
+      const calAct = cal && CAL_ACTION[cal.action];
+      buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, calAct ? calAct.allow : rule ? 'Allow once' : 'Allow'));
       if (rule) buttons.push(h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'));
-      buttons.push(h('button', { class: 'btn ghost', onclick: () => decide('deny') }, shell ? 'Skip' : 'Deny'));
+      buttons.push(h('button', { class: 'btn ghost', onclick: () => decide('deny') }, calAct ? calAct.deny : shell ? 'Skip' : 'Deny'));
       card.append(h('div', { class: 'card-actions' }, buttons), errLine);
     } else {
-      const label = status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? 'Denied' : status === 'allowed' ? 'Allowed once' : 'Status unavailable';
+      const calAct = cal && CAL_ACTION[cal.action];
+      const label = status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? (calAct ? 'Not sent' : 'Denied') : status === 'allowed' ? (calAct ? calAct.done : 'Allowed once') : 'Status unavailable';
       const ok = status === 'allowed';
       card.append(
         h(
@@ -6278,7 +6404,7 @@
           'div',
           { class: 'secret-ctl' },
           a.needs_reconnect && pillBtn('Reconnect', () => connectAccount(a.provider, a.id), { disabled: busy }),
-          !a.needs_reconnect && a.missing_drive && pillBtn('Add Google Drive', () => connectAccount(a.provider, a.id), { disabled: busy, 'aria-label': `Let Bots use the Google Drive of ${a.email}` }),
+          !a.needs_reconnect && a.missing && a.missing.length > 0 && pillBtn('Update permissions', () => connectAccount(a.provider, a.id), { disabled: busy, 'aria-label': `Allow more features for ${a.email}` }),
           pillBtn('Bots', () => ((ui.acctEdit = { id: a.id, bots: a.bots ? a.bots.slice() : null }), rerenderSettings(true)), { disabled: busy, 'aria-label': `Which Bots can use ${a.email}` }),
           pillBtn('Remove', () => removeAccount(a), { disabled: busy, 'aria-label': `Remove ${a.email}` })
         ),
@@ -6288,7 +6414,7 @@
           h('span', { class: 'secret-desc' }, a.services),
           h('span', { class: 'secret-access' }, scopeText(a.bots, 'Bots')),
           a.needs_reconnect && h('span', { class: 'secret-problem' }, `${PROVIDER_NAME[a.provider]} stopped accepting openbot’s sign-in (for example after a password change). Click Reconnect and sign in again.`),
-          !a.needs_reconnect && a.missing_drive && h('span', { class: 'secret-access' }, 'Google Drive isn’t allowed yet. Click Add Google Drive, sign in and tick Google Drive on the permission screen.')
+          !a.needs_reconnect && a.missing && a.missing.length > 0 && h('span', { class: 'secret-access' }, `Not allowed yet: ${a.missing.join(', ')}. Click Update permissions, sign in and tick every box on the permission screen.`)
         )
       );
     });

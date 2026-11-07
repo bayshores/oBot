@@ -29,9 +29,10 @@ For development you can instead put them in `config.json` on the computer your B
 - Either one stops working if the person changes their password (some cases), removes openbot's
   access from their account, or an admin revokes it. The account then shows **Signed out** in
   Settings › Connections with a **Reconnect** button.
-- Google accounts connected before Google Drive was added (or where Drive was unticked on the
-  permission screen) show **Add Google Drive**. It runs the same sign-in again; openbot keeps what
-  Google reports the account allowed (`scopes` in config.json) and updates it on every token refresh.
+- Google accounts connected before a feature was added (Google Drive, other calendars and free time),
+  or where a box was unticked on the permission screen, show **Update permissions**. It runs the same
+  sign-in again; openbot keeps what Google reports the account allowed (`scopes` in config.json) and
+  updates it on every token refresh.
 - If a Google API isn't enabled in the project, Bots get an error with the link that turns it on.
 
 ## Google
@@ -42,7 +43,8 @@ For development you can instead put them in `config.json` on the computer your B
 4. **Audience**: user type **External**.
 5. **Data access › Add or remove scopes**: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`,
    `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/calendar.events`,
-   `https://www.googleapis.com/auth/drive`.
+   `https://www.googleapis.com/auth/calendar.calendarlist.readonly`,
+   `https://www.googleapis.com/auth/calendar.events.freebusy`, `https://www.googleapis.com/auth/drive`.
 6. **Clients › Create client**: application type **Desktop app**, name `openbot`. Copy the client ID
    and client secret. (Desktop clients accept any `http://127.0.0.1:<port>` return address, which
    openbot uses.)

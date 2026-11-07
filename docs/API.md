@@ -63,7 +63,7 @@ Bot = {
 Message = {
   id: string, bot_id: string,
   role: "user" | "bot" | "tool" | "approval" | "error" | "system"
-      | "widget" | "form" | "attachment" | "visualization" | "event",
+      | "widget" | "form" | "attachment" | "visualization" | "calendar" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
   status: "done" | "running" | "ok" | "failed" | "stopped" | "pending" | "allowed" | "denied" | "expired" | "replaced",
@@ -93,6 +93,11 @@ Message = {
 //            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
+//  calendar: an event the Bot added or changed without asking (a calendar card): { action: "create"|"update",
+//            account, provider, calendar (name, "" = main), id, title, start, end (unix ms), all_day, first_day,
+//            last_day ("2026-11-05"), when, location, organizer, guests: [{email, name, response: "yes"|"no"|"maybe"|"waiting",
+//            optional, self, organizer}], repeat (text like "every week on Mon"), video (call link), link (opens the
+//            event), description, day_events: [{title, start, end, all_day}] (the user's other events that day) }
 //  event:    { kind, routine_id?, job_id?, bot_id? }   small centered line. kind: "routine-created" | "routine-run"
 //            | "routine-paused" | "memory-tidy" | "compacted" (older messages summarized) | "conversation-reset"
 //            | "retry" | "steered" (stopped by "Send now") | "job-started" | "job-done" | "job-failed" | "job-stopped" | bot-…
@@ -126,7 +131,8 @@ Settings = {
                bots: string[] | null,                // Bot ids that may use it; null = every Bot
                added_at, needs_reconnect: boolean,
                drive: boolean,                       // Google account allowed Google Drive
-               missing_drive: boolean }]             // Google account without Drive: show "Add Google Drive"
+               missing: string[] }]                  // features it hasn't allowed yet ("Google Drive", "other calendars
+                                                     // and free time"): show "Update permissions" (signs in again)
                                                      // (Settings › Connections; tokens are never sent)
   accounts_ready: { google: boolean, microsoft: boolean }  // can this build connect accounts?
   auto_review: boolean,                              // Settings › Permissions › Auto-Review (default true)
@@ -287,8 +293,11 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `email_search {account?, query?, max?}` · `email_read {account?, id}` · `email_attachment {account?, id, attachment_id}` | find and read email; save an attachment into the bot's folder (`attachments/`) |
 | `email_send {account?, to[], cc[]?, bcc[]?, subject?, body, reply_to?, attachments[]?, draft?}` | send or reply. Always shows the whole email on an Allow / Deny card and waits (no card for `draft:true`, which only saves a draft) |
 | `email_update {account?, ids[], read?, archive?, star?, trash?, add_labels[]?, remove_labels[]?}` | organize email; `trash` asks first. Labels are Gmail only |
-| `calendar_events {account?, from?, to?, query?, max?}` | events (default the next 7 days) |
-| `calendar_create {account?, title, start, end, all_day?, location?, description?, attendees[]?}` · `calendar_update {account?, id, …}` · `calendar_delete {account?, id}` | change the calendar. Asks first when attendees get notified, and always for delete |
+| `calendar_list {account?}` | the account's calendars (name, id, main, read only) (`backend/core/src/calendar.rs`) |
+| `calendar_events {account?, calendar?, from?, to?, query?, max?}` · `calendar_get {account?, calendar?, id}` | events (default the next 7 days; `calendar` is a name or id, `"all"` = every shown calendar) · one event with guests and replies, reminders, repeat rule, video link and link |
+| `calendar_free_time {account?, people[]?, from?, to?, minutes?, day_start?, day_end?, weekends?, max?}` | free times when the user and `people` are all free, inside working hours (default 09:00–18:00, weekdays, 30 min) |
+| `calendar_create {account?, calendar?, title, start, end, all_day?, time_zone?, location?, description?, attendees[]?, optional_attendees[]?, repeat[]? (RRULE lines), reminders[]? ({minutes, method: popup\|email}), video_call?, color?, show_as?, visibility?, notify? (all\|external\|none)}` · `calendar_update {…, id, add_attendees[]?, remove_attendees[]?}` | add or change an event. When guests get an email, the user sees the event on a card (Send invite / Send update · Don't send) and the tool waits; otherwise it's saved and a `calendar` message shows it. Outlook: one reminder, no colors, always emails guests, Teams links for work/school accounts |
+| `calendar_delete {account?, calendar?, id, notify?}` · `calendar_respond {account?, calendar?, id, response: yes\|maybe\|no, comment?}` | delete an event · reply to an invitation. Both always show a card first |
 | `drive_search {account?, query?, folder?, shared_with_me?, max?}` · `drive_list {account?, folder?}` | find Google Drive files (name or text inside) · list a folder. `folder` is an id or a My Drive path like `School/CSE 21`. Google accounts only, and only ones that allowed Drive (`backend/core/src/drive.rs`) |
 | `drive_download {account?, id, to?, format?}` | save a file into the bot's folder (default `drive/<name>`, max 100 MB). Docs, Sheets, Slides and Drawings are converted (default PDF; `docx`, `xlsx`, `pptx`, `csv`, `txt`, `md`, `png`) |
 | `drive_upload {account?, path, folder?, name?, replace?}` | upload a file from the bot's folder (max 100 MB). Stops if the folder has a file with that name, unless `replace` (Drive keeps the old version) |
@@ -322,6 +331,8 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 `account` is the account's email address (it can be left out when the bot has only one). Times are the user's
 local time (`2026-11-05T14:00`, the timezone in Settings). Email/calendar approval cards carry
 `meta.input.kind` = `"email"`, `"email-trash"` or `"event"` with the fields the UI previews; they never offer "Always allow".
+Event cards carry the same fields as a `calendar` message plus `action` (`create`, `update`, `delete`, `respond`),
+`removed` (guests taken off), and for replies `response` and `comment`.
 
 `bot` arguments take a bot's name (any case) or id. `look` is one of the avatar skins (`violet` … `camo`).
 Actions on other bots leave an `event` message in both chats with `meta {kind, bot_id}`

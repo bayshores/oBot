@@ -10,6 +10,7 @@
 pub mod accounts;
 pub mod api;
 pub mod bots;
+pub mod calendar;
 pub mod computer;
 pub mod config;
 pub mod db;

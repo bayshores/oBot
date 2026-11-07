@@ -139,12 +139,17 @@ pub fn now_local() -> chrono::NaiveDateTime {
     to_local(now_ms()).unwrap_or_else(|| chrono::Local::now().naive_local())
 }
 
+/// The user's timezone as an IANA name like "America/Los_Angeles" (Settings, else this computer's).
+pub fn timezone_name() -> Option<String> {
+    match tz() {
+        Some(t) => Some(t.name().to_string()),
+        None => iana_time_zone::get_timezone().ok().filter(|n| n.parse::<chrono_tz::Tz>().is_ok()),
+    }
+}
+
 /// e.g. "America/Los_Angeles", or "this computer's timezone".
 pub fn timezone_label() -> String {
-    match tz() {
-        Some(t) => t.name().to_string(),
-        None => "this computer's timezone".into(),
-    }
+    timezone_name().unwrap_or_else(|| "this computer's timezone".into())
 }
 
 /// `C:\Users\me\x` -> `/mnt/c/Users/me/x` (how a Windows path looks from inside WSL).

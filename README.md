@@ -23,7 +23,9 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   password. If nothing is saved, the Bot shows a **secure form** in the chat.
 * **Work in the background.** Routines, check-ins and long commands wake the Bot up when it's time.
 * **Email, calendar and files.** Connected Gmail / Google Calendar / Google Drive and Outlook accounts.
-  With Google Drive for desktop on your Mac, files a Bot puts in your Drive show up there.
+  Bots use all your calendars, add repeating events with reminders and video links, find free time and
+  answer invitations; invites show as an event card you send yourself. With Google Drive for desktop on
+  your Mac, files a Bot puts in your Drive show up there.
 * **Recover from errors.** Temporary errors are retried by themselves. Otherwise you get **Try again**,
   **Edit and resend** or **Start a new conversation**. Messages sent while a Bot is busy wait as
   **Queued** (tap **Send now** to interrupt it).
