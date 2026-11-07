@@ -731,6 +731,14 @@ fn build_command(
     }
     args.push("--mcp-config".into());
     args.push(p(&mcp_path));
+    // Bots get only what openbot gives them. Without these two, Claude Code would also load this
+    // computer's personal Claude Code setup (~/.claude): its MCP servers and claude.ai connectors,
+    // plugins, skills, hooks, permission rules, CLAUDE.md and output style. That duplicates openbot's
+    // own tools (browser, Connections) and lets personal permission rules apply to bots.
+    // Skills openbot saves in the bot's folder (.claude/skills) are "project" ones, so they still load.
+    args.push("--strict-mcp-config".into());
+    args.push("--setting-sources".into());
+    args.push("project,local".into());
     // Hooks (see hooks.rs): Claude Code runs this same program at the end of each turn and before
     // it summarizes older messages. Forward slashes work in every shell Claude Code uses; quotes
     // only where needed (a quoted program name doesn't run in PowerShell).

@@ -83,6 +83,9 @@ pub async fn review(
         "--max-turns",
         "1",
         "--strict-mcp-config",
+        // No personal Claude Code settings, hooks, plugins or CLAUDE.md: the safety check sees only this prompt.
+        "--setting-sources",
+        "",
         "--permission-mode",
         "dontAsk",
         "--disallowedTools",
