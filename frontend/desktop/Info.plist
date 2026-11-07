@@ -10,7 +10,5 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>openbot uses the microphone for voice dictation.</string>
 </dict>
 </plist>

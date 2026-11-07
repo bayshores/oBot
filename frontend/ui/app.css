@@ -1071,10 +1071,8 @@ b, strong { font-weight: var(--w-semibold); }
 }
 .c-btn:hover:not(:disabled) { background: var(--secondary-hover); color: var(--text); }
 .c-btn:disabled { opacity: .4; }
-.c-btn.listening { color: var(--danger-text); }
 .c-plus { position: absolute; left: 8px; bottom: 8px; }
 .c-trailing { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 8px; align-items: center; }
-.c-mic.collapsed { width: 0; opacity: 0; margin-left: -8px; pointer-events: none; overflow: hidden; }
 .c-send {
   width: 28px;
   height: 28px;
@@ -1087,7 +1085,7 @@ b, strong { font-weight: var(--w-semibold); }
   transition: background-color .15s, opacity .15s;
 }
 .c-send > .ico { grid-area: 1 / 1; transition: transform .2s var(--ease), opacity .2s var(--ease); transform: scale(.5); opacity: 0; }
-.c-send[data-mode="send"] .g-send, .c-send[data-mode="dictate"] .g-mic, .c-send[data-mode="stop"] .g-stop, .c-send[data-mode="listening"] .g-send, .c-send[data-mode="disabled"] .g-send { transform: none; opacity: 1; }
+.c-send[data-mode="send"] .g-send, .c-send[data-mode="stop"] .g-stop, .c-send[data-mode="disabled"] .g-send { transform: none; opacity: 1; }
 .c-send:hover:not(:disabled) { background: var(--tint-cta-hover); }
 .c-send[data-mode="disabled"], .c-send:disabled { opacity: .4; }
 .c-send[data-mode="stop"] { background: var(--secondary-hover); color: var(--text); box-shadow: inset 0 0 0 .5px var(--b3); }

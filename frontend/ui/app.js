@@ -130,7 +130,6 @@
     bars: '<path d="M6 20v-7M12 20V5M18 20v-9"/>',
     updates: '<path d="M7 17.5a4.5 4.5 0 01-.6-8.96A6 6 0 0118 9.5a4 4 0 01-.5 7.97"/><path d="M12 11v9M8.8 17l3.2 3.2 3.2-3.2"/>',
     x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
-    mic: '<rect x="9" y="3.5" width="6" height="10.5" rx="3"/><path d="M5.8 11a6.2 6.2 0 0012.4 0M12 17.2V20.5"/>',
     wave: '<path d="M4 10.5v3M8 7.5v9M12 4.5v15M16 7.5v9M20 10.5v3"/>',
     arrowUp: '<path d="M12 19V5.5M6 11l6-6 6 6"/>',
     arrowDown: '<path d="M12 5v13.5M6 13l6 6 6-6"/>',
@@ -1809,7 +1808,6 @@
     if (!S.bots.has(id)) return;
     if (S.current !== id) {
       saveDraft();
-      if (rec) rec.stop();
       S.current = id;
       S.prefs.lastBotId = id;
       savePrefs();
@@ -3450,8 +3448,6 @@
   // ───────────────────────────── composer ─────────────────────────────
   const input = $('#input');
   const composerEl = $('#composer');
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null;
   let notice = null; // {text, err}
   function setNotice(text, err) {
     notice = text ? { text, err } : null;
@@ -3489,7 +3485,6 @@
     $('#chat').style.setProperty('--dock-h', H + 16 + (ub && !ub.hidden ? ub.offsetHeight + 8 : 0) + 'px');
   }
   function placeholderFor(b) {
-    if (rec) return 'Listening…';
     if (!b) return 'Ask anything, or drop a file';
     if (S.reply && S.reply.botId === b.id) return 'Reply…';
     if (S.pending.length && !input.value) return 'Add a message, or hit send';
@@ -3509,21 +3504,13 @@
     let mode;
     if (b && (hasText || ready)) mode = 'send';
     else if (b && b.running) mode = 'stop';
-    else if (b && SR && !rec) mode = 'dictate';
     else mode = 'disabled';
     btn.dataset.mode = mode;
     btn.disabled = mode === 'disabled';
-    const labels = { send: 'Send message', stop: 'Stop', dictate: 'Start voice input', disabled: 'Send message' };
+    const labels = { send: 'Send message', stop: 'Stop', disabled: 'Send message' };
     btn.setAttribute('aria-label', labels[mode]);
-    if (mode === 'stop' || mode === 'dictate') {
-      btn.dataset.tip = mode === 'stop' ? `Stop ${b.name}` : 'Start voice input';
-    } else delete btn.dataset.tip;
-    const mic = $('#micBtn');
-    mic.hidden = !SR;
-    mic.classList.toggle('collapsed', mode === 'dictate');
-    mic.classList.toggle('listening', !!rec);
-    mic.setAttribute('aria-label', rec ? 'Stop dictation' : 'Dictate');
-    mic.dataset.tip = rec ? 'Stop dictation' : 'Dictate';
+    if (mode === 'stop') btn.dataset.tip = `Stop ${b.name}`;
+    else delete btn.dataset.tip;
     composerEl.classList.toggle('disabled', !b);
     layoutComposer();
   }
@@ -3542,15 +3529,9 @@
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !e.repeat) {
       e.preventDefault();
-      if (rec) {
-        rec.stop();
-        setTimeout(send, 250);
-      } else send();
+      send();
     } else if (e.key === 'Escape') {
-      if (rec) {
-        rec.abort ? rec.abort() : rec.stop();
-        e.stopPropagation();
-      } else if (S.reply && S.reply.botId === S.current) {
+      if (S.reply && S.reply.botId === S.current) {
         cancelReply();
         e.stopPropagation();
       } else input.blur();
@@ -3568,7 +3549,6 @@
     const mode = $('#sendBtn').dataset.mode;
     if (mode === 'send') send();
     else if (mode === 'stop') stopBot();
-    else if (mode === 'dictate') toggleDictation();
   });
   composerEl.addEventListener('mousedown', (e) => {
     if (e.target === composerEl || e.target.id === 'cContent') {
@@ -3787,42 +3767,6 @@
     }
   });
 
-  // dictation (Web Speech API when the webview has it)
-  function toggleDictation() {
-    if (!SR) return;
-    if (rec) {
-      rec.stop();
-      return;
-    }
-    try {
-      rec = new SR();
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.lang = navigator.language || 'en-US';
-      const base = input.value ? input.value.replace(/\s*$/, ' ') : '';
-      rec.onresult = (e) => {
-        let t = '';
-        for (const r of e.results) t += r[0].transcript;
-        input.value = base + t;
-        updateComposer();
-      };
-      rec.onerror = (e) => {
-        if (e.error && e.error !== 'no-speech' && e.error !== 'aborted') setNotice('The microphone is unavailable: ' + e.error, true);
-      };
-      rec.onend = () => {
-        rec = null;
-        updateComposer();
-      };
-      rec.start();
-      updateComposer();
-      input.focus();
-    } catch (e) {
-      rec = null;
-      setNotice('The microphone is unavailable', true);
-      updateComposer();
-    }
-  }
-  $('#micBtn').addEventListener('click', toggleDictation);
 
   // ───────────────────────────── bot settings panel (header pill, ⌘⇧,) ─────────────────────────────
   const panelEl = $('#panel');
@@ -7865,8 +7809,7 @@
     if (b) openScreen(b.id);
   });
   $('#attachBtn').append(icon('plus', 16, '', 2.2));
-  $('#micBtn').append(icon('mic', 15, '', 2));
-  $('#sendBtn').append(icon('arrowUp', 16, 'g-send', 2.4), icon('mic', 15, 'g-mic', 2.2), icon('stop', 22, 'g-stop'));
+  $('#sendBtn').append(icon('arrowUp', 16, 'g-send', 2.4), icon('stop', 22, 'g-stop'));
   $('#toBottom').append(icon('arrowDown', 18, '', 2));
   $('#searchBtn').dataset.kbd = MOD + 'K';
   $('#newBotBtn').dataset.kbd = MOD + 'N';
@@ -7917,10 +7860,6 @@
       if (top && top.dismissable) {
         e.preventDefault();
         top.close();
-        return;
-      }
-      if (rec) {
-        rec.abort ? rec.abort() : rec.stop();
         return;
       }
       if (S.panelOpen && !(document.activeElement && panelEl.contains(document.activeElement) && isEditable(document.activeElement))) {
