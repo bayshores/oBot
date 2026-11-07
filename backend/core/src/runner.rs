@@ -783,6 +783,83 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     s
 }
 
+fn persona_keys(bot: &str, group: Option<&str>) -> (String, String) {
+    let k = match group {
+        Some(g) => format!("{g}:{bot}"),
+        None => bot.to_string(),
+    };
+    (format!("persona_snap:{k}"), format!("persona_seen:{k}"))
+}
+
+/// Longest note about changed instructions; a bigger change starts from fresh instructions instead.
+const MAX_CHANGE_NOTE: usize = 6000;
+
+/// What changed in a Bot's instructions, as a note for its next message ("" = nothing).
+fn persona_changes(old: &str, new: &str) -> String {
+    let clean = |s: &str| s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    let (o, n) = (clean(old), clean(new));
+    let added: Vec<&String> = n.iter().filter(|l| !o.contains(l)).collect();
+    let removed: Vec<&String> = o.iter().filter(|l| !n.contains(l)).collect();
+    if added.is_empty() && removed.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "[openbot: Your setup changed since this conversation started (your instructions, memory, routines or the user's \
+         other Bots). These lines are now part of your instructions and replace anything they contradict:\n",
+    );
+    for l in &added {
+        s.push_str(l);
+        s.push('\n');
+    }
+    if !removed.is_empty() {
+        s.push_str("These lines no longer apply:\n");
+        for l in &removed {
+            s.push_str("- ");
+            s.push_str(l);
+            s.push('\n');
+        }
+    }
+    s.push_str("]\n");
+    s
+}
+
+/// The instructions for this run, and a note for the message about anything that changed.
+///
+/// Claude Code keeps a conversation cheap by reusing (caching) everything sent before, but only
+/// while the instructions at the top stay exactly the same: one changed line (a new memory, a
+/// renamed Bot) makes the whole conversation count again. So a conversation keeps the instructions
+/// it started with, and changes reach the Bot as a short note with its next message. They start
+/// over with a new conversation, or when Claude Code summarizes the old one (that resets the cache
+/// anyway; see `Turn::handle`).
+fn stable_persona(state: &Shared, bot: &Bot, group: Option<&str>, current: String, resuming: bool) -> (String, String) {
+    let (snap_key, seen_key) = persona_keys(&bot.id, group);
+    let snap = state.db.kv_get(&snap_key).unwrap_or_default();
+    if resuming && !snap.is_empty() {
+        let seen = state.db.kv_get(&seen_key).filter(|s| !s.is_empty()).unwrap_or_else(|| snap.clone());
+        let note = persona_changes(&seen, &current);
+        if note.len() <= MAX_CHANGE_NOTE {
+            if !note.is_empty() {
+                tracing::info!("bot {}: its setup changed; told it in a note ({} chars)", bot.id, note.len());
+                state.db.kv_set(&seen_key, &current);
+            }
+            return (snap, note);
+        }
+    }
+    state.db.kv_set(&snap_key, &current);
+    state.db.kv_set(&seen_key, &current);
+    (current, String::new())
+}
+
+/// The instructions a Bot's conversation is up to date with become its instructions from the next
+/// run on (after Claude Code summarized the conversation, when the cache starts over anyway).
+fn refresh_persona(state: &Shared, bot: &str, group: Option<&str>) {
+    let (snap_key, seen_key) = persona_keys(bot, group);
+    if let Some(seen) = state.db.kv_get(&seen_key).filter(|s| !s.is_empty()) {
+        state.db.kv_set(&snap_key, &seen);
+    }
+}
+
+/// Returns the command and a note to put before the message (changed instructions, or "").
 fn build_command(
     state: &Shared,
     bot: &Bot,
@@ -790,7 +867,7 @@ fn build_command(
     cfg: &Config,
     claude: &PathBuf,
     resume: bool,
-) -> anyhow::Result<Command> {
+) -> anyhow::Result<(Command, String)> {
     let bot_dir = state.data_dir.join("bots").join(&bot.id);
     std::fs::create_dir_all(&bot_dir)?;
     std::fs::create_dir_all(&bot.workdir)?;
@@ -801,13 +878,19 @@ fn build_command(
     let p = |path: &std::path::Path| if wsl { crate::util::to_wsl_path(path) } else { path.to_string_lossy().into_owned() };
 
     let persona_path = bot_dir.join("persona.md");
-    let mut persona_text = persona(state, bot, cfg);
+    let mut current = persona(state, bot, cfg);
     if let Some(g) = group {
-        persona_text.push_str(&crate::group::persona(state, g, bot));
+        current.push_str(&crate::group::persona(state, g, bot));
     }
     if wsl {
-        persona_text = persona_text.replace(&bot.workdir, &crate::util::to_wsl_path(std::path::Path::new(&bot.workdir)));
+        current = current.replace(&bot.workdir, &crate::util::to_wsl_path(std::path::Path::new(&bot.workdir)));
     }
+    // Each group chat is its own conversation for the Bot.
+    let session = match group {
+        Some(g) => state.db.kv_get(&crate::group::session_key(g, &bot.id)).unwrap_or_default(),
+        None => bot.session_id.clone(),
+    };
+    let (persona_text, change_note) = stable_persona(state, bot, group, current, resume && !session.is_empty());
     std::fs::write(&persona_path, persona_text)?;
 
     let mut args: Vec<String> = vec![
@@ -822,11 +905,6 @@ fn build_command(
         "--system-prompt-snapshot".into(),
         "off".into(),
     ];
-    // Each group chat is its own conversation for the Bot.
-    let session = match group {
-        Some(g) => state.db.kv_get(&crate::group::session_key(g, &bot.id)).unwrap_or_default(),
-        None => bot.session_id.clone(),
-    };
     if resume && !session.is_empty() {
         args.push("--resume".into());
         args.push(session);
@@ -998,7 +1076,7 @@ fn build_command(
         cmd.env("WSLENV", list);
     }
     hide_console(&mut cmd);
-    Ok(cmd)
+    Ok((cmd, change_note))
 }
 
 fn interrupt(pid: Option<u32>) {
@@ -1038,7 +1116,7 @@ async fn drive(
         )
     })?;
 
-    let mut cmd = build_command(state, &bot, group, &cfg, &claude, resume)?;
+    let (mut cmd, change_note) = build_command(state, &bot, group, &cfg, &claude, resume)?;
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("Couldn't start Claude Code ({}): {e}", claude.display()))?;
@@ -1046,7 +1124,7 @@ async fn drive(
 
     if let Some(mut stdin) = child.stdin.take() {
         // If Claude Code exits right away, its error output says why; the write error doesn't.
-        let _ = stdin.write_all(with_time(prompt).as_bytes()).await;
+        let _ = stdin.write_all(with_time(&format!("{change_note}{prompt}")).as_bytes()).await;
         stdin.shutdown().await.ok();
         drop(stdin);
     }
@@ -1302,6 +1380,7 @@ impl Turn {
                     self.set_session(&v)
                 }
                 Some("compact_boundary") => {
+                    refresh_persona(&self.state, &self.bot_id, self.group.as_deref());
                     add_event(
                         &self.state,
                         &self.chat,
@@ -1701,6 +1780,16 @@ mod tests {
         assert_eq!(code("Request timed out"), Code::Overloaded);
         assert_eq!(Failure::from_text("Claude Code isn't installed on this computer.", true).code, Code::Setup);
         assert!(Code::Overloaded.retryable() && !Code::UsageLimit.retryable() && !Code::TooLong.retryable());
+    }
+
+    #[test]
+    fn changed_instructions_become_a_note() {
+        assert_eq!(persona_changes("a\nb\n", "a\n\nb"), "");
+        let n = persona_changes("You are \"Food Bot\"\nLikes pasta\nSame", "You are \"Agenda Bot\"\nSame");
+        assert!(n.starts_with("[openbot: Your setup changed"));
+        assert!(n.contains("You are \"Agenda Bot\"\n"));
+        assert!(n.contains("These lines no longer apply:\n- You are \"Food Bot\"\n- Likes pasta\n"));
+        assert!(!n.contains("- Same"));
     }
 
     fn job(p: &str, user: bool, busy: bool) -> Job {
