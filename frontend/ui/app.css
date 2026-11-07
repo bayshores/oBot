@@ -604,12 +604,16 @@ b, strong { font-weight: var(--w-semibold); }
   border: .5px solid var(--b3);
   box-shadow: var(--sh-control);
   opacity: 0;
-  pointer-events: none;
-  transition: opacity .12s;
+  visibility: hidden;
+  /* stays a moment after the pointer leaves, so it can be reached */
+  transition: opacity .12s ease .3s, visibility 0s linear .42s;
   z-index: 2;
 }
+/* covers the gap between the bubble and the buttons, so moving across it keeps them open */
+.hover-bar::before { content: ''; position: absolute; top: -4px; bottom: -4px; right: 100%; width: 10px; }
 .row.user .hover-bar { left: auto; right: 100%; margin-left: 0; margin-right: 6px; }
-.bwrap:hover .hover-bar, .hover-bar:focus-within { opacity: 1; pointer-events: auto; }
+.row.user .hover-bar::before { right: auto; left: 100%; }
+.bwrap:hover .hover-bar, .hover-bar:focus-within { opacity: 1; visibility: visible; transition-delay: 0s; }
 .hb-btn { width: 24px; height: 24px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: var(--icon-2); }
 .hb-btn:hover { background: var(--secondary); color: var(--icon); }
 .hb-btn:active { background: var(--secondary-hover); }
