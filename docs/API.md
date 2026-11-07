@@ -1,7 +1,12 @@
 # openbot HTTP / WebSocket API (contract between `ui/` and `openbot-core`)
 
-All JSON. All `/api/*` routes (except `POST /api/pair`) need a token, either as header
-`Authorization: Bearer <token>` or query `?token=<token>` (used for `<img src>` and the WebSocket).
+All JSON. All `/api/*` routes (except `POST /api/pair`) need a token in the header
+`Authorization: Bearer <token>`. A token is never accepted in the address (it could end up in logs):
+* WebSockets (browsers can't set that header) offer it as a subprotocol: `["openbot", "openbot.auth.<token>"]`
+  for `/api/events` (the server answers `openbot`), `["binary", "openbot.auth.<token>"]` for a Bot screen.
+* Bot files in `<img src>` and download links use `?fk=<file_key>` instead: a key from `/api/bootstrap`
+  that opens only `GET /api/bots/:id/files/*`. It's made from the credential's hash, so it stops working
+  when that device is removed.
 Two kinds of token work:
 * the **owner token** (`config.token`): used by the desktop app on the same computer, the approval helper,
   and SSH tunnels;
@@ -39,8 +44,8 @@ chat when one is tapped; it caches nothing.
 Boot sequence in the UI:
 1. `GET {home}/api/connection` → `{mode:"local"|"remote", url, token}`; set `apiBase`/`apiToken`.
 2. `GET {home}/api/prefs` → free JSON object (theme, accent, spellcheck, userName…). `PUT` saves the whole object.
-3. `GET {api}/api/bootstrap` → `{bots:[Bot], settings:Settings, computer:Computer, usage:Usage, version:string}`
-4. Open WebSocket `ws(s)://{api host}/api/events?token=…`; reconnect with backoff
+3. `GET {api}/api/bootstrap` → `{bots:[Bot], settings:Settings, computer:Computer, usage:Usage, version:string, file_key:string}`
+4. Open WebSocket `ws(s)://{api host}/api/events` (token as a subprotocol, see above); reconnect with backoff
    (1s→10s) and re-bootstrap on reconnect. When the page comes back to the front after 15 s or more (a phone
    app that was in the background), reconnect right away.
 5. Tell the server whether someone is using this window: send `{"type":"presence","active":bool}` on the
@@ -97,7 +102,7 @@ Message = {
   created_at: number
 }
 // meta by role:
-//  user:     { attachments: [{ name, path, mime, size, url }],    url is relative: "/api/bots/{id}/files/{path}" (append ?token=)
+//  user:     { attachments: [{ name, path, mime, size, url }],    url is relative: "/api/bots/{id}/files/{path}" (append ?fk=<file_key>)
 //              queued?: bool,     sent while the bot was busy; waiting ("Send now" = POST /api/bots/:id/steer)
 //              not_sent?: bool }  the user pressed Stop (or openbot restarted) before the bot read it
 //  tool:     { tool_use_id, name, summary, output }            summary e.g. "Ran `ls -la`", output truncated text
@@ -283,9 +288,9 @@ Usage = {
 | GET | /api/bots/:id/screen | – | `{supported, reason, running, width, height}` |
 | POST | /api/bots/:id/screen/start | – | `{running, password, width, height}` starts the bot's screen if needed. `password` is the one-off VNC password for the viewer |
 | POST | /api/bots/:id/screen/stop | – | `{running:false}` closes the bot's browser and screen (its browser profile, so logins, stays) |
-| GET (ws) | /api/bots/:id/screen/ws?token= | – | WebSocket (subprotocol `binary`) piped to the screen's VNC server; the UI connects noVNC here |
+| GET (ws) | /api/bots/:id/screen/ws | – | WebSocket (subprotocol `binary`) piped to the screen's VNC server; the UI connects noVNC here |
 | GET | /vendor/*path | – | third-party UI files (`frontend/ui/vendor/`, e.g. noVNC) |
-| GET (ws) | /api/events?token= | – | stream of events; the UI sends `presence` messages back |
+| GET (ws) | /api/events | – | stream of events (subprotocol `openbot`); the UI sends `presence` messages back |
 
 Errors: non-2xx with `{error: string}`.
 

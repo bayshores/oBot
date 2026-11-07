@@ -260,20 +260,51 @@ fn peer_of(req: &Request) -> Option<SocketAddr> {
         .map(|c| c.0)
 }
 
+/// The token, from the Authorization header, or (for WebSockets, which can't send that header from
+/// a browser) from the offered subprotocols: `openbot.auth.<token>`. Never from the address, where
+/// it could end up in logs or history.
 fn token_of(req: &Request) -> Option<String> {
-    let from_header = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(str::to_string);
-    from_header.or_else(|| {
-        req.uri().query().and_then(|q| {
-            q.split('&')
-                .find_map(|kv| kv.strip_prefix("token="))
-                .map(percent_decode)
-        })
+    let h = req.headers();
+    let bearer = h.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::to_string);
+    bearer.or_else(|| {
+        h.get(header::SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').find_map(|p| p.trim().strip_prefix("openbot.auth.").map(str::to_string)))
     })
+}
+
+/// A key that only opens Bot files (pictures and downloads in the chat). An `<img src>` link can't
+/// send a header, so it carries this instead of the token: a leaked file key can't run Bots or change
+/// anything. It's made from the credential's hash, so it stops working when that device is removed.
+fn file_key(token_hash: &str) -> String {
+    sha256_hex(&format!("openbot-files:{token_hash}"))[..40].to_string()
+}
+
+/// `GET /api/bots/<id>/files/...?fk=<file key>`: which credential the file key belongs to.
+fn file_key_auth(req: &Request, cfg: &Config) -> Option<AuthDevice> {
+    if req.method() != axum::http::Method::GET || !(req.uri().path().starts_with("/api/bots/") && req.uri().path().contains("/files/")) {
+        return None;
+    }
+    let fk = req.uri().query()?.split('&').find_map(|kv| kv.strip_prefix("fk=")).map(percent_decode)?;
+    if fk.is_empty() {
+        return None;
+    }
+    if constant_eq(&fk, &file_key(&sha256_hex(&cfg.token))) {
+        return Some(AuthDevice(None));
+    }
+    cfg.devices.iter().find(|d| constant_eq(&fk, &file_key(&d.token_hash))).map(|d| AuthDevice(Some(d.id.clone())))
+}
+
+#[cfg(test)]
+mod file_key_tests {
+    #[test]
+    fn file_keys_differ_per_device_and_from_the_token() {
+        let a = super::file_key(&super::sha256_hex("obd_one"));
+        let b = super::file_key(&super::sha256_hex("obd_two"));
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 40);
+        assert!(!a.contains("obd_one"));
+    }
 }
 
 fn too_many(secs: i64) -> Response {
@@ -293,17 +324,19 @@ async fn require_token(State(st): State<Shared>, mut req: Request, next: Next) -
     if let Some(secs) = st.limiter.blocked(&key) {
         return too_many(secs);
     }
-    let who = match token_of(&req) {
-        Some(t) if !t.is_empty() => {
-            let cfg = st.config.read().await;
-            if constant_eq(&t, &cfg.token) {
-                Some(AuthDevice(None))
-            } else {
-                let h = sha256_hex(&t);
-                cfg.devices.iter().find(|d| constant_eq(&d.token_hash, &h)).map(|d| AuthDevice(Some(d.id.clone())))
+    let who = {
+        let cfg = st.config.read().await;
+        match token_of(&req) {
+            Some(t) if !t.is_empty() => {
+                if constant_eq(&t, &cfg.token) {
+                    Some(AuthDevice(None))
+                } else {
+                    let h = sha256_hex(&t);
+                    cfg.devices.iter().find(|d| constant_eq(&d.token_hash, &h)).map(|d| AuthDevice(Some(d.id.clone())))
+                }
             }
+            _ => file_key_auth(&req, &cfg),
         }
-        _ => None,
     };
     let Some(who) = who else {
         st.limiter.fail(&key);
@@ -741,9 +774,16 @@ pub fn usage_json(st: &AppState) -> Value {
     })
 }
 
-async fn bootstrap(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+async fn bootstrap(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>) -> ApiResult<Json<Value>> {
     let bots = all_bots(&st).await?;
-    let settings = st.config.read().await.settings_json();
+    let (settings, fk) = {
+        let cfg = st.config.read().await;
+        let hash = match &who.0 {
+            None => sha256_hex(&cfg.token),
+            Some(id) => cfg.devices.iter().find(|d| &d.id == id).map(|d| d.token_hash.clone()).unwrap_or_default(),
+        };
+        (cfg.settings_json(), file_key(&hash))
+    };
     let computer = computer_json(&st).await;
     Ok(Json(json!({
         "bots": bots,
@@ -751,6 +791,7 @@ async fn bootstrap(State(st): State<Shared>) -> ApiResult<Json<Value>> {
         "computer": computer,
         "usage": usage_json(&st),
         "version": crate::VERSION,
+        "file_key": fk,
     })))
 }
 
@@ -2315,8 +2356,9 @@ async fn open_folder(Json(b): Json<FolderBody>) -> ApiResult<Json<Value>> {
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn events(State(st): State<Shared>, ws: WebSocketUpgrade, _h: HeaderMap) -> Response {
-    ws.on_upgrade(move |socket| ws_loop(st, socket))
+async fn events(State(st): State<Shared>, ws: WebSocketUpgrade) -> Response {
+    // The browser offered "openbot" plus its token as a subprotocol; answering "openbot" lets it connect.
+    ws.protocols(["openbot"]).on_upgrade(move |socket| ws_loop(st, socket))
 }
 
 /// Each open openbot window, so phone notifications wait while one is in use (see push.rs).

@@ -91,8 +91,10 @@ Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPR
 * The server listens on `127.0.0.1` only. Tailscale Serve gives it a private HTTPS address that only
   your own devices can open. Never use `tailscale funnel` or forward port 7777.
 * Each device pairs once with a code that works once, for 10 minutes. The PC stores only a hash of each
-  device's key.
-* Phone notifications are encrypted for the phone, so Apple's or Google's push service can't read them. Requests from other websites and unknown host names are refused, and repeated wrong
+  device's key. Keys travel in request headers, never in web addresses, and the server's log file doesn't
+  contain the sign-in link or pairing codes (run `openbot-server token` or `openbot-server pair` for those).
+* Phone notifications are encrypted for the phone, so Apple's or Google's push service can't read them.
+* Requests from other websites and unknown host names are refused, and repeated wrong
   tries (20 in a minute) lock that address out for 5 minutes.
 * **Permissions:** Settings › Computer › **Execution on this computer** is *Ask every time* (default), *Always allow* or
   *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions

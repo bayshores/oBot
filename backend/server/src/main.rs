@@ -199,7 +199,14 @@ fn main() -> anyhow::Result<()> {
             }
         }
         println!("  Address on this PC:       http://127.0.0.1:{port}");
-        println!("  Open it on this PC:       http://127.0.0.1:{port}/?token={}", server.token);
+        // The sign-in link and pairing code are secrets: shown in a terminal, but not written to the
+        // log file when openbot-server runs in the background.
+        let terminal = std::io::IsTerminal::is_terminal(&std::io::stdout());
+        if terminal {
+            println!("  Open it on this PC:       http://127.0.0.1:{port}/?token={}", server.token);
+        } else {
+            println!("  Open it on this PC:       run `openbot-server token` for the sign-in key (it isn't written here)");
+        }
         println!();
         println!("  To use it from your other devices:");
         println!("    1. Install Tailscale on this PC and the other device, and sign in to both.");
@@ -207,9 +214,13 @@ fn main() -> anyhow::Result<()> {
         println!("       It prints a private https://...ts.net address only your devices can open.");
         println!("    3. In the openbot app: Settings > Computer > Remote computer, enter that address");
         println!("       and this pairing code:");
-        match openbot_core::security::new_pairing_code(&server.state.data_dir) {
-            Ok((code, _)) => print_pair_code(&code),
-            Err(e) => println!("       (couldn't make a pairing code: {e})"),
+        if terminal {
+            match openbot_core::security::new_pairing_code(&server.state.data_dir) {
+                Ok((code, _)) => print_pair_code(&code),
+                Err(e) => println!("       (couldn't make a pairing code: {e})"),
+            }
+        } else {
+            println!("       a pairing code from `openbot-server pair` (or Settings > Computer > Pair a new device).");
         }
         println!();
         if claude["installed"] != true {

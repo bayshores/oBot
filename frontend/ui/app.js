@@ -562,7 +562,8 @@
     if (!rel) return '';
     if (/^(blob:|data:)/.test(rel)) return rel;
     const abs = /^https?:/.test(rel) ? rel : S.apiBase + rel;
-    return abs + (abs.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(S.apiToken || '');
+    // A file-only key, not the token (an <img> can't send a header; see file_key in api.rs).
+    return abs + (abs.includes('?') ? '&' : '?') + 'fk=' + encodeURIComponent(S.fileKey || '');
   }
 
   function initToken() {
@@ -1063,6 +1064,7 @@
     S.computer = (b && b.computer) || S.computer;
     S.usage = (b && b.usage) || S.usage;
     S.version = (b && b.version) || S.version;
+    S.fileKey = (b && b.file_key) || S.fileKey;
     migratePins();
     renderUsageBanner();
     renderSysBanner();
@@ -1097,10 +1099,10 @@
     }
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
     u.pathname = '/api/events';
-    u.search = '?token=' + encodeURIComponent(S.apiToken || '');
     let ws;
     try {
-      ws = new WebSocket(u.toString());
+      // The token rides along as a subprotocol, not in the address.
+      ws = new WebSocket(u.toString(), ['openbot', 'openbot.auth.' + (S.apiToken || '')]);
     } catch {
       return scheduleReconnect(gen);
     }
@@ -3025,8 +3027,7 @@
       const u = new URL(S.apiBase);
       u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
       u.pathname = `/api/bots/${encodeURIComponent(botId)}/screen/ws`;
-      u.search = '?token=' + encodeURIComponent(S.apiToken || '');
-      const r = new RFB(stage, u.toString(), { credentials: { password: info.password }, wsProtocols: ['binary'] });
+      const r = new RFB(stage, u.toString(), { credentials: { password: info.password }, wsProtocols: ['binary', 'openbot.auth.' + (S.apiToken || '')] });
       rfb = r;
       r.scaleViewport = true;
       r.resizeSession = false;
