@@ -1,228 +1,120 @@
-<p align="center"><img src="frontend/assets/icon.png" width="160" alt="openbot icon"></p>
+<p align="center"><img src="frontend/assets/icon.png" width="140" alt="openbot icon"></p>
 
 # openbot
 
-Always-on AI bots that chat like friends and actually do things on a computer, powered by **your Claude
-subscription** (through Claude Code) or an **Anthropic API key**.
+Always-on AI Bots that chat with you and do real work on a computer: browse, sign in, run commands,
+handle email and calendar. They run on **Claude Code** with your **Claude subscription** (or an
+Anthropic API key). A Rust server and a small Tauri desktop app.
 
-Written in Rust: a small native desktop app (Tauri) plus a fast server, instead of a 344 MB Electron app.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img src="docs/images/architecture-light.svg" alt="The openbot app on your Mac talks over Tailscale to openbot-server on a PC that stays on. The server runs Claude Code, Bot screens, the Vault, memory and files, routines and background jobs, and Gmail and Outlook connections.">
+</picture>
 
-```
- ┌──────────────── your Mac / laptop ───────────────┐            ┌──────── Windows PC (on 24/7) ────────┐
- │  openbot app (window)                            │ Tailscale  │  openbot-server (127.0.0.1 only)       │
- │    └─ built-in local server ◄── "This computer"  │ ─────────► │    └─ runs `claude -p` for each bot    │
- │                                 "Remote computer"│ HTTPS+pair │       in C:\Users\you\OpenBot\<bot>     │
- └──────────────────────────────────────────────────┘            └────────────────────────────────────────┘
-```
+The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/architecture.excalidraw) (open it at excalidraw.com).
 
-* **openbot app**: the chat window (sidebar of bots, chat, settings). Works on macOS and Windows.
-* **openbot-server**: the "computer" your bots live on. Run it on a PC that stays on, and the bots keep
-  working while your laptop is closed.
+## What Bots can do
 
-## What's in this folder
+* **Chat and remember.** Each Bot is one long Claude Code conversation with its own folder. It keeps a
+  small always-loaded **profile** of facts about you and a searchable **log**, and tidies both weekly.
+* **Use their own screen.** Each Bot gets a Linux desktop with Chrome. You can watch it live or choose
+  **Take control**.
+* **Sign in for you.** Saved **Vault** logins are typed into the login page without the Bot seeing the
+  password. If nothing is saved, the Bot shows a **secure form** in the chat.
+* **Work in the background.** Routines, check-ins and long commands wake the Bot up when it's time.
+* **Email and calendar.** Connected Gmail / Google Calendar and Outlook accounts.
+* **Recover from errors.** Temporary errors are retried by themselves. Otherwise you get **Try again**,
+  **Edit and resend** or **Start a new conversation**. Messages sent while a Bot is busy wait as
+  **Queued** (tap **Send now** to interrupt it).
+
+Bots use **Sonnet 5.5 at extra-high effort** unless you change it in Settings › General (or per Bot).
+
+## Folders
 
 | Path | What it is |
 |---|---|
-| `frontend/ui/` | The interface (HTML/CSS/JS, no build step). Served by the Rust server. |
+| `frontend/ui/` | The interface (HTML/CSS/JS, no build step), served by the server. |
 | `frontend/desktop/` | The desktop app (Tauri window + built-in local server). |
-| `frontend/assets/` | The app icon (source SVG/PNG). |
-| `backend/core/` | The engine (`openbot-core`): API server, Claude Code runner, approvals, storage, security. |
-| `backend/server/` | The headless always-on server program (`openbot-server`). |
-| `backend/install/windows/install-host.ps1` | One-time setup to make a Windows PC an always-on bot computer. |
-| `docs/` | Documentation. Start at [`docs/README.md`](docs/README.md). |
-| `CLAUDE.md` | Rules for keeping this repo clean (for people and AI assistants). |
+| `frontend/assets/` | The app icon. |
+| `backend/core/` | All server logic: API, Claude Code runner, Bot screens, Vault, storage, security. |
+| `backend/server/` | The `openbot-server` command. |
+| `backend/install/windows/` | `install-host.ps1`: makes a Windows PC the always-on Bot computer. |
+| `docs/` | Documentation, starting at [`docs/README.md`](docs/README.md). API: [`docs/API.md`](docs/API.md). |
 
-## How it uses your Claude subscription
+## Setup
 
-openbot doesn't log in to Claude itself. For each message it runs the official Claude Code program
-(`claude -p ...`) on the bot's computer, and Claude Code uses whatever login that computer has.
-That's how Claude Code is meant to be scripted, and it's for your own personal use.
-**Settings › Claude Account** lets you switch to an Anthropic API key instead (billed per use by Anthropic).
+**1. On both computers**, install [Tailscale](https://tailscale.com/download) and sign in to the same
+account. This is how the app reaches the PC privately, from anywhere.
 
-Each bot is one long Claude Code conversation (`--resume`), with its own folder for files.
-Bots use **Sonnet 5.5 at extra-high effort** unless you pick another model or effort in
-**Settings › General › Bot** (a Bot can also pick its own model in its settings).
+**2. On the Windows PC** (the one that stays on):
 
-## How Bots work
-
-* **Memory.** Bots save facts in two tiers: a small **profile** (who you are, how you want things
-  done) that they always see, and a **log** of everything else that they search when needed. Once a
-  week, at night, each Bot tidies its memory (merges duplicates, drops stale facts). The Bot panel
-  shows both lists; delete anything with the trash icon.
-* **When something fails.** Temporary problems (Claude busy, too many requests) are retried by
-  themselves. If a turn still fails you get one error card with **Try again**, **Edit and resend**
-  or **Start a new conversation** (keeps memory, files and routines).
-* **Messages while a Bot is busy** wait as **Queued**. Tap **Send now** to stop what it's doing and
-  have it read your message right away; **Stop** drops queued messages.
-* **Long jobs.** A Bot can start a long command in the background (after the same permission check as
-  any command) and is woken up with the result when it ends, even hours later.
-* **Follow-ups.** If a Bot says "I'll check back" without scheduling it, openbot sends it back to
-  schedule the check-in.
-
-## Run it on this Mac
-
-1. Install Rust (https://rustup.rs) and Claude Code (https://claude.com/claude-code). Run `claude` once and log in.
-2. Install the Tauri build tool (one time, takes a few minutes):
-   ```bash
-   cargo install tauri-cli --version "^2" --locked
-   ```
-3. Build the app:
-   ```bash
-   cd frontend/desktop
-   cargo tauri build
-   ```
-   The app is at `target/release/bundle/macos/openbot.app`. Drag it into Applications.
-
-   To just try it without packaging: `cargo run -p openbot`.
-
-## Make your Windows PC the 24/7 computer
-
-On the **Windows PC**:
-
-0. Install **Tailscale** (free, https://tailscale.com/download) on the PC **and** your Mac, and sign in
-   to the same account on both. This is how your Mac reaches the PC privately, from anywhere.
-1. Install **Rust**: https://rustup.rs (accept the "Visual Studio C++ Build Tools" step when it asks).
-2. Install **Claude Code** in PowerShell: `irm https://claude.ai/install.ps1 | iex`.
-   Then run `claude` once and log in with your Claude account.
-   (Claude Code on Windows also needs **Git for Windows**: https://git-scm.com/download/win)
-3. Copy this whole `openbot` folder to the PC and build the server:
-   ```powershell
-   cargo build --release -p openbot-server
-   ```
-4. Open **PowerShell as Administrator** in the folder and run:
+1. Install [Claude Code](https://claude.com/claude-code) (`irm https://claude.ai/install.ps1 | iex`) and
+   [Git for Windows](https://git-scm.com/download/win). Run `claude` once and log in.
+2. Get `openbot-server.exe`: download it from this repository's **Actions** tab (artifact
+   `openbot-windows-latest`), or build it with [Rust](https://rustup.rs): `cargo build --release -p openbot-server`.
+3. In **PowerShell as Administrator**, in this folder:
    ```powershell
    Set-ExecutionPolicy -Scope Process Bypass
-   .\backend\install\windows\install-host.ps1 -KeepAwake
+   .\backend\install\windows\install-host.ps1 -ServerExe <path to openbot-server.exe> -KeepAwake
    ```
-   This starts openbot-server every time Windows boots (even before you sign in), restarts it if it
-   crashes, and stops the PC from sleeping while plugged in. openbot only listens on the PC itself
-   (`127.0.0.1:7777`), so nothing on your Wi-Fi or the internet can reach it. The script turns on
-   **Tailscale Serve**, which gives openbot a private `https://<pc>.<tailnet>.ts.net` address that
-   only your own Tailscale devices can open. At the end it prints that **address** and a
-   **6-digit pairing code**.
+   It starts the server at every boot, keeps the PC awake while plugged in, turns on Tailscale Serve,
+   and prints an **address** and a **6-digit pairing code**.
+4. For Bot screens, install WSL with Ubuntu (`wsl --install -d Ubuntu`), then in the app choose
+   Settings › Computer › Bot screens › **Set up**.
 
-   (Prefer to try it first? Run `target\release\openbot-server.exe` in a normal window, then
-   `tailscale serve --bg 7777` in another one.)
+**3. On the Mac**, install the app (the `.dmg` from **Actions**, or build it: `cargo install tauri-cli
+--version "^2" --locked`, then `cargo tauri build` in `frontend/desktop`). Open Settings › Computer ›
+**Remote computer** and enter the address and pairing code.
 
-On your **Mac**: open openbot › Settings › **Computer** › **Remote computer**, enter the address and the
-pairing code, then click **Connect**. Your bots now live on the Windows PC.
+Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPROFILE%\OpenBot`.
 
-### How it stays safe
+## Security
 
-* **Private by default.** The server listens on `127.0.0.1` only. Starting it on the network
-  (`--host 0.0.0.0`) needs an extra `--allow-network` flag and prints a warning.
-* **Encrypted.** Tailscale Serve gives real HTTPS inside your tailnet. Never use `tailscale funnel`
-  (that would put openbot on the public internet) and never forward port 7777 on your router.
-* **Each device pairs once.** A pairing code works once, for 10 minutes, and dies after 5 wrong
-  tries. Each device then gets its own key; the PC only stores a fingerprint (hash) of it. You can see
-  and remove devices in Settings › Computer › **Paired devices**, or with `openbot-server devices` / `unpair`.
-* **Web pages can't sneak in.** Requests from other websites (by their Origin) and unknown host names
-  are refused, so a malicious page in your browser can't talk to openbot.
-* **Guessing is blocked.** 20 wrong tokens or codes in a minute from one address locks it out for 5 minutes.
-* Without Tailscale you can use an SSH tunnel instead: `ssh -N -L 7777:127.0.0.1:7777 you@pc`, then
-  connect the app to `http://127.0.0.1:7777` with **Use a token instead** and the token from
-  `openbot-server token` on the PC.
-
-### Bot screens (watch and take control)
-
-Each Bot can get its own screen: a Linux desktop with a Chrome window, running inside WSL on the PC.
-The Bot clicks, types and browses on it, and you can watch live or take over.
-
-1. On the PC, WSL with Ubuntu must be installed (`wsl --install -d Ubuntu`).
-2. In the app: Settings › Computer › **Bot screens** › **Set up**. It installs Xvfb, x11vnc, openbox,
-   xdotool and a browser inside Ubuntu (a few minutes).
-3. In a chat, the **screen button** (top right) opens the Bot's screen. It is view-only until you
-   choose **Take control**; choose **Hand back** when you're done. While a Bot works on its screen,
-   a **Watch** button shows next to "On its computer".
-4. When a Bot needs a login, a 2FA code or a payment, it asks you with a card that has **Open screen**.
-   Do the step yourself, then choose **I'm done**. Bots are told never to type passwords themselves.
-
-The screen's VNC server only listens on 127.0.0.1 inside the PC; the app reaches it through the
-openbot server with your device's key. Logins in a Bot's browser are kept in its own profile.
-
-### Useful commands on the PC
-
-```powershell
-openbot-server pair         # make a new 6-digit pairing code (for a new device)
-openbot-server devices      # list paired devices
-openbot-server unpair <id>  # remove a paired device
-openbot-server token        # show the owner token (only for this PC or an SSH tunnel)
-openbot-server new-token    # make a new owner token
-Get-Content "$env:LOCALAPPDATA\openbot\openbot-server.log" -Tail 50   # see the log
-.\backend\install\windows\install-host.ps1 -Uninstall                         # remove the auto-start
-```
-
-Data lives in `%APPDATA%\openbot` (bots, chats, settings). Bot folders are in `%USERPROFILE%\OpenBot`.
-
-## Permissions (Settings › Permissions)
-
-| Mode | What happens |
-|---|---|
-| Ask every time (default) | The bot shows an **Allow / Always allow / Deny** card in the chat before doing anything risky. |
-| Let Claude decide | Claude Code's safety check approves routine actions and only asks about risky ones. |
-| Auto-approve file edits | File changes go through; commands still ask. |
-| Allow everything | Nothing asks. Only use this on a computer you're fine with the bot fully controlling. |
-
-"Always allow" remembers that exact action. You can see and remove the list under Permissions.
+* The server listens on `127.0.0.1` only. Tailscale Serve gives it a private HTTPS address that only
+  your own devices can open. Never use `tailscale funnel` or forward port 7777.
+* Each device pairs once with a code that works once, for 10 minutes. The PC stores only a hash of each
+  device's key. Requests from other websites and unknown host names are refused, and repeated wrong
+  tries (20 in a minute) lock that address out for 5 minutes.
+* **Permissions:** Settings › Computer › **Execution on this computer** is *Ask every time* (default), *Always allow* or
+  *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions
+  using your rules and asks you about the rest with an **Allow / Always allow / Deny** card. Sending
+  email, inviting people and deleting always ask.
+* **Vault** passwords, secrets and the API key are encrypted with a key the system keeps (Windows DPAPI,
+  the macOS Keychain, or a private file on Linux). Saved values are shown as `••••` if they ever appear
+  in a chat or memory. Each Vault item and connected account can be limited to the Bots you pick.
+* Bot screens' VNC servers and browser debugging ports listen on 127.0.0.1 inside the PC only.
 
 ## Vault (Settings › Vault)
 
-Three kinds of items, under **New item**:
+* **Logins**: up to 10 websites, a username, a password and hints. They fill only on `https://` pages
+  of those websites and their subdomains. Passwords can't be shown again.
+* **Contact info**: name, address, phones and emails. Bots can see it, to fill in forms.
+* **Secrets**: environment variables for Bots' commands, like `$GITHUB_TOKEN`.
+* **Import** logins from a CSV export of 1Password, Chrome, Edge, Safari / Apple Passwords, Firefox,
+  Bitwarden or LastPass. Delete the export afterwards.
 
-* **Logins** (website, username, password, hints). Your Bots sign in with them on their screen: openbot
-  types the username and password into the login page, and the Bot never sees the password. A login only
-  fills on `https://` pages of its websites and their subdomains (up to 10 websites), so a fake login
-  page on another website gets nothing. Passwords can't be shown again, not even in the app; leave the
-  box empty when editing to keep the saved one.
-* **Contact info** (name, address, phones, emails). Bots can see it, so they can fill in forms for you.
-* **Secrets** (API keys, tokens) your Bots can use in commands as environment variables, like
-  `$GITHUB_TOKEN`.
+Setting up the Google and Microsoft sign-in apps for a build: [docs/connections-setup.md](docs/connections-setup.md).
 
-When a Bot needs a password or a 2FA code that isn't saved, it shows a **secure form** in the chat.
-What you type there goes straight into the page on the Bot's screen; it isn't shown to the Bot or kept
-in the chat. Tick **Securely save to the Vault** to keep a password as a login. **Import** adds logins
-from a CSV export of 1Password, Chrome, Edge, Safari / Apple Passwords, Firefox, Bitwarden or LastPass
-(the same website and username already in the Vault is skipped). Delete the export file afterwards.
+## Commands on the PC
 
-For secrets:
+```powershell
+openbot-server pair         # new pairing code for another device
+openbot-server devices      # list paired devices (unpair <id> removes one)
+openbot-server token        # owner token, for an SSH tunnel instead of Tailscale
+Get-Content "$env:LOCALAPPDATA\openbot\openbot-server.log" -Tail 50
+.\backend\install\windows\install-host.ps1 -Uninstall
+```
 
-* **Only the Bots you pick.** Each secret, login or contact info goes to **All Bots** or only the Bots you choose. Other Bots
-  don't get it and aren't told it exists.
-* **Saved encrypted.** Secret values and login passwords (and the Anthropic API key) are encrypted in `config.json` with a key the
-  system keeps: Windows DPAPI on Windows, the Keychain on a Mac, a file only your account can read on
-  Linux (`vault.key` in the data folder). A copy of the files taken to another computer can't be read.
-  Bots run as your user account, so a Bot that tried hard could still decrypt them; picking which Bots
-  get a secret limits what each Bot is handed, it isn't a wall.
-* **Hidden in chats.** If a saved value shows up in a chat, a command's output or a memory, openbot saves
-  and shows `••••` instead. The app only ever shows the last 4 characters of a value.
-* **Names that would break Bots are refused** (like `PATH`, `HOME`, `NODE_OPTIONS`, or anything starting
-  with `ANTHROPIC_` or `CLAUDE`).
-* If the key can't be read (for example `vault.key` was deleted), the values stay saved but **Locked**:
-  no Bot gets them, and Settings › Vault asks you to enter them again.
-
-## Connections (Settings › Connections)
-
-Connect Gmail / Google Calendar or Outlook mail / calendar, as many accounts as you like, and pick
-which Bots can use each one. You sign in once: openbot keeps the sign-in (encrypted) on the computer
-your Bots run on and renews it by itself. Bots can search and read email, save attachments, send and
-reply, organize (read, archive, star, labels, trash) and manage calendar events. Sending, inviting
-people and deleting always show you an Allow / Deny card first. Setting up the Google and Microsoft
-sign-in apps for a build: [docs/connections-setup.md](docs/connections-setup.md).
-
-## Building Windows/Mac installers automatically
-
-Push this folder to a GitHub repository. `.github/workflows/build.yml` builds `openbot-server.exe`,
-the Windows installer and the Mac `.dmg`. Download them from the repository's **Actions** tab.
-
-## Developing the UI
-
-Run the server with `OPENBOT_UI_DIR` pointing at `frontend/ui/` and it reads the UI files from disk on every
-reload, so you don't need to rebuild:
+## Development
 
 ```bash
-OPENBOT_UI_DIR=$PWD/frontend/ui cargo run -p openbot-server -- --local-only
+OPENBOT_UI_DIR=$PWD/frontend/ui cargo run -p openbot-server -- --local-only   # UI reloads from disk
+cargo run -p openbot                                                         # the desktop app
 ```
+
+`.github/workflows/build.yml` builds the Windows server and the Mac `.dmg` on every push. Repo rules
+are in [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
-openbot is an independent project. It is not affiliated with or endorsed by Anthropic.
+openbot is an independent project, not affiliated with or endorsed by Anthropic.
