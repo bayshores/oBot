@@ -17,8 +17,16 @@ Security rules (see `backend/core/src/security.rs`):
 * 20 failed tokens / pairing codes per minute from one client → 429 for 5 minutes (`Retry-After` set). Behind
   Tailscale Serve the client is the first `X-Forwarded-For` address (trusted only from loopback).
 
-The UI is served by an openbot server at `/` and is opened as `/?token=<token>`.
-The UI stores that token in `sessionStorage` and removes it from the address bar.
+The UI is served by an openbot server at `/`. The desktop app opens it as `/?token=<token>`; the UI stores
+that token in `sessionStorage` and removes it from the address bar. A browser on another device (a phone
+over Tailscale) has no token: it shows a pairing screen, trades a 6-digit code for a device token with
+`POST /api/pair`, and keeps that in `localStorage`. The pairing link `https://<computer>.ts.net/#pair=<code>`
+(the QR code in Settings › Computer › Pair a new device) fills the code in; the part after `#` never
+leaves the phone. `#bot=<id>` opens that chat (a tapped phone notification).
+
+**Phones** (home-screen web app): `/manifest.webmanifest`, `/icons/phone-{180,192,512}.png` and the service
+worker `/sw.js` are served without a token. The service worker shows Web Push notifications and opens the
+chat when one is tapped; it caches nothing.
 
 ## Two kinds of server the UI talks to
 
@@ -32,7 +40,12 @@ Boot sequence in the UI:
 1. `GET {home}/api/connection` → `{mode:"local"|"remote", url, token}`; set `apiBase`/`apiToken`.
 2. `GET {home}/api/prefs` → free JSON object (theme, accent, spellcheck, userName…). `PUT` saves the whole object.
 3. `GET {api}/api/bootstrap` → `{bots:[Bot], settings:Settings, computer:Computer, usage:Usage, version:string}`
-4. Open WebSocket `ws(s)://{api host}/api/events?token=…`; reconnect with backoff (1s→10s) and re-bootstrap on reconnect.
+4. Open WebSocket `ws(s)://{api host}/api/events?token=…`; reconnect with backoff
+   (1s→10s) and re-bootstrap on reconnect. When the page comes back to the front after 15 s or more (a phone
+   app that was in the background), reconnect right away.
+5. Tell the server whether someone is using this window: send `{"type":"presence","active":bool}` on the
+   socket (active = in front, focused, and touched in the last 2 minutes). Phone notifications wait while
+   any window is active.
 
 ## Objects
 
@@ -187,11 +200,15 @@ Usage = {
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | GET | /api/connection | – | `{mode,url,token}` (home only) |
-| PUT | /api/connection | `{mode,url,token}` | same (home only) |
+| PUT | /api/connection | `{mode,url,token}` | same (home only). 403 for a paired device: only the computer's own app changes this |
 | POST | /api/connection/test | `{url,token}` | `{ok:bool, error?:string, computer?:Computer}` (home only) |
-| POST | /api/connection/pair | `{url, code}` | `{ok, token?, computer?, error?}` (home only): sends the code to `{url}/api/pair` with this computer's name. Then PUT /api/connection `{mode:"remote", url, token}` |
+| POST | /api/connection/pair | `{url, code}` | `{ok, token?, computer?, error?}` (home only, not from a paired device): sends the code to `{url}/api/pair` with this computer's name. Then PUT /api/connection `{mode:"remote", url, token}` |
 | POST | /api/pair | `{code, device_name}` (**no token**) | `{token, device_id, computer}`; 401 `{error}` for a wrong/expired code ("Wrong code. N tries left.") |
-| POST | /api/pair/code | – | `{code:"123456", expires_at}`: new pairing code (10 minutes, single use, 5 tries). Replaces the previous code |
+| POST | /api/pair/code | – | `{code:"123456", expires_at, link, qr}`: new pairing code (10 minutes, single use, 5 tries). Replaces the previous code. When Tailscale runs here, `link` is `https://<this computer>.ts.net/#pair=<code>` and `qr` an SVG QR code of it (else both `""`) |
+| GET | /api/push/key | – | `{key}`: this computer's VAPID public key (base64url) for `pushManager.subscribe` |
+| POST | /api/push/subscribe | the browser's `PushSubscription` JSON `{endpoint, keys:{p256dh, auth}}` | `{ok}`. Saved with the device that sent it (at most 20); removing the device removes it |
+| POST | /api/push/unsubscribe | `{endpoint}` | `{ok}` |
+| POST | /api/push/test | `{endpoint}` | `{ok}` after a test notification went out to that one device; 502 `{error}` with the push service's answer |
 | GET | /api/devices | – | `[{id, name, created_at, last_seen, current}]` (`current` = the device making this request) |
 | DELETE | /api/devices/:id | – | `{ok}` revokes that device's token right away |
 | GET/PUT | /api/prefs | object | object (home only) |
@@ -268,9 +285,21 @@ Usage = {
 | POST | /api/bots/:id/screen/stop | – | `{running:false}` closes the bot's browser and screen (its browser profile, so logins, stays) |
 | GET (ws) | /api/bots/:id/screen/ws?token= | – | WebSocket (subprotocol `binary`) piped to the screen's VNC server; the UI connects noVNC here |
 | GET | /vendor/*path | – | third-party UI files (`frontend/ui/vendor/`, e.g. noVNC) |
-| GET (ws) | /api/events?token= | – | stream of events |
+| GET (ws) | /api/events?token= | – | stream of events; the UI sends `presence` messages back |
 
 Errors: non-2xx with `{error: string}`.
+
+### Phone notifications (push.rs)
+
+A phone that added openbot to its home screen turns on Settings › General › Notifications: the UI asks for
+permission, subscribes with the key from `/api/push/key` and sends the subscription to `/api/push/subscribe`.
+openbot then sends a Web Push message (encrypted for that phone, so the push service can't read it) for the
+same things the desktop app notifies about: a finished reply, a file or page, an approval, a question or a
+secure form. Only when no openbot window is `active` (see `presence` above), only for messages from the last
+30 minutes, at most one "finished" notification per chat every 5 seconds, and never for hidden Bots or Bots
+with notifications turned off. The message is `{title, body, bot, tag, badge}` (`badge` = unread count for the
+app icon); approvals and questions go out with `Urgency: high`, and `Topic` is the chat id. A 404/410 from the
+push service removes the subscription. The VAPID private key is in `config.json` under `push`, encrypted.
 
 ## WebSocket events (server → UI), JSON `{type, ...}`
 

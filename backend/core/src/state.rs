@@ -182,10 +182,11 @@ impl AppState {
     }
 
     /// Tell open apps about a new or changed chat message. Saved secret values are hidden first.
-    pub fn emit_message(&self, created: bool, m: &Message) {
+    pub fn emit_message(self: &Arc<Self>, created: bool, m: &Message) {
         let ty = if created { "message.created" } else { "message.updated" };
         let mut m = m.clone();
         crate::vault::redact_message(&mut m);
+        crate::push::on_message(self, created, &m);
         self.emit(ty, json!({ "message": m }));
     }
 

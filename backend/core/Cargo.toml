@@ -27,6 +27,9 @@ iana-time-zone = "0.1"
 sha2 = "0.10"
 base64 = "0.22"
 aes-gcm = "0.10"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+web-push-native = "0.5"
+http = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

@@ -190,6 +190,10 @@ fn router(state: Shared) -> Router {
         .route("/api/pair/code", post(new_pair_code))
         .route("/api/devices", get(list_devices))
         .route("/api/devices/{id}", delete(revoke_device))
+        .route("/api/push/key", get(push_key))
+        .route("/api/push/subscribe", post(push_subscribe))
+        .route("/api/push/unsubscribe", post(push_unsubscribe))
+        .route("/api/push/test", post(push_test))
         .route("/api/connection/pair", post(pair_with_computer))
         .route("/api/tailscale", get(get_tailscale))
         .route("/api/discover", post(discover_computers))
@@ -203,6 +207,10 @@ fn router(state: Shared) -> Router {
         .route("/app.js", get(|| async { ui_response("app.js") }))
         .route("/avatar.js", get(|| async { ui_response("avatar.js") }))
         .route("/favicon.ico", get(|| async { StatusCode::NO_CONTENT }))
+        // Home-screen web app on phones: its manifest, icons and service worker (it must be at "/").
+        .route("/manifest.webmanifest", get(|| async { ui_response("manifest.webmanifest") }))
+        .route("/sw.js", get(|| async { ui_response("sw.js") }))
+        .route("/icons/{name}", get(|UrlPath(n): UrlPath<String>| async move { ui_response(&format!("icons/{n}")) }))
         .route("/pages/{id}", get(get_page))
         // No token needed: a new device trades a pairing code for its own token here.
         .route("/api/pair", post(pair_device))
@@ -417,7 +425,15 @@ async fn get_connection(State(st): State<Shared>) -> Json<Connection> {
     Json(st.config.read().await.connection.clone())
 }
 
-async fn put_connection(State(st): State<Shared>, Json(mut c): Json<Connection>) -> ApiResult<Json<Connection>> {
+async fn put_connection(
+    State(st): State<Shared>,
+    axum::Extension(who): axum::Extension<AuthDevice>,
+    Json(mut c): Json<Connection>,
+) -> ApiResult<Json<Connection>> {
+    // Which computer this one's own app uses is its owner's choice, not a paired phone's.
+    if who.0.is_some() {
+        return Err(ApiError(StatusCode::FORBIDDEN, "Change this on the computer itself.".into()));
+    }
     if c.mode != "remote" {
         c.mode = "local".into();
     }
@@ -520,9 +536,30 @@ async fn pair_device(
 
 /// Settings › "Pair a new device": make a pairing code on this computer.
 async fn new_pair_code(State(st): State<Shared>) -> ApiResult<Json<Value>> {
-    let _guard = st.pair_lock.lock().await;
-    let (code, expires_at) = crate::security::new_pairing_code(&st.data_dir)?;
-    Ok(Json(json!({ "code": code, "expires_at": expires_at })))
+    let (code, expires_at) = {
+        let _guard = st.pair_lock.lock().await;
+        crate::security::new_pairing_code(&st.data_dir)?
+    };
+    // A phone pairs by opening this computer's private Tailscale address with the code after "#"
+    // (the part after "#" never leaves the phone's browser). Shown as a QR code to scan.
+    let ts = crate::discover::tailscale_status().await;
+    let dns = ts["self"]["dns"].as_str().unwrap_or("").trim_end_matches('.').to_string();
+    let link = if ts["running"].as_bool() == Some(true) && dns.ends_with(".ts.net") { format!("https://{dns}/#pair={code}") } else { String::new() };
+    let qr = if link.is_empty() { String::new() } else { qr_svg(&link) };
+    Ok(Json(json!({ "code": code, "expires_at": expires_at, "link": link, "qr": qr })))
+}
+
+/// A QR code for `text` as an SVG picture (black on white, so phones can read it in dark mode too).
+fn qr_svg(text: &str) -> String {
+    match qrcode::QrCode::new(text.as_bytes()) {
+        Ok(q) => q
+            .render::<qrcode::render::svg::Color>()
+            .min_dimensions(200, 200)
+            .dark_color(qrcode::render::svg::Color("#000000"))
+            .light_color(qrcode::render::svg::Color("#ffffff"))
+            .build(),
+        Err(_) => String::new(),
+    }
 }
 
 async fn list_devices(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>) -> ApiResult<Json<Value>> {
@@ -563,10 +600,45 @@ async fn revoke_device(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -
         if cfg.devices.len() == before {
             return Err(not_found("No such device"));
         }
+        crate::push::forget_device(&mut cfg, &id);
     }
     st.save_config().await?;
     st.device_seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     st.emit("devices.updated", json!({}));
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------- phone notifications (push.rs)
+
+async fn push_key(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    Ok(Json(json!({ "key": crate::push::public_key(&st).await.map_err(|e| bad(&e))? })))
+}
+
+/// Body: the browser's PushSubscription as JSON ({endpoint, keys: {p256dh, auth}}).
+async fn push_subscribe(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, Json(b): Json<Value>) -> ApiResult<Json<Value>> {
+    crate::push::subscribe(&st, who.0, &b).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct EndpointBody {
+    endpoint: String,
+}
+
+async fn push_unsubscribe(State(st): State<Shared>, Json(b): Json<EndpointBody>) -> ApiResult<Json<Value>> {
+    crate::push::unsubscribe(&st, &b.endpoint).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Settings › "Send a test": a notification to this one device, right now.
+async fn push_test(State(st): State<Shared>, Json(b): Json<EndpointBody>) -> ApiResult<Json<Value>> {
+    let note = crate::push::Note {
+        title: "openbot".into(),
+        body: "Notifications work. You'll get one when a Bot finishes or needs you while you're away.".into(),
+        bot: String::new(),
+        urgent: true,
+    };
+    crate::push::send(&st, &note, Some(&b.endpoint)).await.map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e))?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -595,7 +667,10 @@ async fn discover_computers() -> Json<Value> {
 }
 
 /// Home server: pair this app with another computer (sends the code to its /api/pair).
-async fn pair_with_computer(Json(b): Json<PairWithBody>) -> Json<Value> {
+async fn pair_with_computer(axum::Extension(who): axum::Extension<AuthDevice>, Json(b): Json<PairWithBody>) -> Json<Value> {
+    if who.0.is_some() {
+        return Json(json!({ "ok": false, "error": "Pair from the computer itself." }));
+    }
     let url = b.url.trim().trim_end_matches('/').to_string();
     let code = b.code.trim().to_string();
     let name = sysinfo::System::host_name().unwrap_or_else(|| "openbot app".into());
@@ -2244,7 +2319,16 @@ async fn events(State(st): State<Shared>, ws: WebSocketUpgrade, _h: HeaderMap) -
     ws.on_upgrade(move |socket| ws_loop(st, socket))
 }
 
-async fn ws_loop(st: Shared, mut socket: WebSocket) {
+/// Each open openbot window, so phone notifications wait while one is in use (see push.rs).
+static NEXT_CONN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+async fn ws_loop(st: Shared, socket: WebSocket) {
+    let conn = NEXT_CONN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ws_events(st, socket, conn).await;
+    crate::push::closed(conn);
+}
+
+async fn ws_events(st: Shared, mut socket: WebSocket, conn: u64) {
     let mut rx = st.events.subscribe();
     let hello = json!({ "type": "hello", "version": crate::VERSION }).to_string();
     if socket.send(WsMessage::Text(hello.into())).await.is_err() {
@@ -2266,12 +2350,29 @@ async fn ws_loop(st: Shared, mut socket: WebSocket) {
             },
             incoming = socket.recv() => match incoming {
                 Some(Ok(WsMessage::Close(_))) | None | Some(Err(_)) => break,
+                // The window says whether someone is using it: {"type":"presence","active":true}.
+                Some(Ok(WsMessage::Text(t))) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(&t) {
+                        if v["type"] == "presence" {
+                            crate::push::set_active(conn, v["active"].as_bool().unwrap_or(false));
+                        }
+                    }
+                }
                 _ => {}
             },
             _ = ping.tick() => {
                 if socket.send(WsMessage::Ping(Vec::new().into())).await.is_err() { break; }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod phone_tests {
+    #[test]
+    fn pairing_qr_is_a_picture() {
+        let svg = super::qr_svg("https://my-pc.tail1234.ts.net/#pair=123456");
+        assert!(svg.contains("<svg") && svg.contains("#000000"));
     }
 }
 

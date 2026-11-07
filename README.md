@@ -79,6 +79,11 @@ account. This is how the app reaches the PC privately, from anywhere.
 --version "^2" --locked`, then `cargo tauri build` in `frontend/desktop`). Open Settings › Computer ›
 **Remote computer** and enter the address and pairing code.
 
+**4. On your iPhone (or any phone)**, install Tailscale and sign in with the same account. In the Mac
+app choose Settings › Computer › **Pair a new device** and scan the QR code with the phone's camera: openbot
+opens in Safari and pairs. Then tap Share › **Add to Home Screen**, open openbot from the Home Screen, and
+turn on Settings › General › **Notifications** to hear when a Bot finishes or needs you while you're away.
+
 Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPROFILE%\OpenBot`.
 
 ## Security
@@ -86,7 +91,8 @@ Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPR
 * The server listens on `127.0.0.1` only. Tailscale Serve gives it a private HTTPS address that only
   your own devices can open. Never use `tailscale funnel` or forward port 7777.
 * Each device pairs once with a code that works once, for 10 minutes. The PC stores only a hash of each
-  device's key. Requests from other websites and unknown host names are refused, and repeated wrong
+  device's key.
+* Phone notifications are encrypted for the phone, so Apple's or Google's push service can't read them. Requests from other websites and unknown host names are refused, and repeated wrong
   tries (20 in a minute) lock that address out for 5 minutes.
 * **Permissions:** Settings › Computer › **Execution on this computer** is *Ask every time* (default), *Always allow* or
   *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions

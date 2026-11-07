@@ -566,6 +566,18 @@
   }
 
   function initToken() {
+    // A phone opened the pairing link (QR code): https://<computer>/#pair=123456. The code stays in
+    // this browser (the part after "#" is never sent) and is used once by pairScreen().
+    const bm = /(?:^#|&)bot=([\w-]{1,64})(?:&|$)/.exec(location.hash);
+    if (bm) {
+      S.openBot = bm[1];
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+    const pm = /(?:^#|&)pair=(\d{6})(?:&|$)/.exec(location.hash);
+    if (pm) {
+      S.pairCode = pm[1];
+      history.replaceState(null, '', location.pathname + location.search);
+    }
     const u = new URL(location.href);
     const t = u.searchParams.get('token');
     if (t) {
@@ -600,12 +612,13 @@
   }
   let lastBadge = -1;
   function updateBadge() {
-    if (!TAURI) return;
+    if (!TAURI && !navigator.setAppBadge) return;
     let n = 0;
     for (const b of S.bots.values()) if (!b.hidden && b.unread > 0) n += b.unread;
     if (n === lastBadge) return;
     lastBadge = n;
-    invoke('set_badge', { count: n });
+    if (TAURI) invoke('set_badge', { count: n });
+    else (n > 0 ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
   }
   // kind: 'done' (bot finished / sent something) or 'needs' (approval / question)
   async function maybeNotify(bot, kind, body, key) {
@@ -820,7 +833,70 @@
     const remote = S.conn && S.conn.mode === 'remote' && S.conn.url;
     showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, remote ? `Connecting to ${computerName()}…` : 'Starting openbot…')));
   }
-  function tokenScreen(msg) {
+  const onThisComputer = () => /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  // What a newly paired browser calls itself in Settings › Paired devices.
+  function browserDeviceName() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+    if (/Android/.test(ua)) return /Mobile/.test(ua) ? 'Android phone' : 'Android tablet';
+    return 'Web browser';
+  }
+  // A phone (or another computer's browser) opened this computer's address: it pairs with a
+  // 6-digit code and gets its own token, which can be removed later in Settings.
+  function pairScreen(msg) {
+    const input = h('input', { class: 'field pair-input', type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: '7', placeholder: '123 456', 'aria-label': 'Pairing code' });
+    const status = h('div', { class: 'screen-note', role: 'status' }, msg || '');
+    const go = async () => {
+      const code = input.value.replace(/\D/g, '');
+      if (code.length !== 6) {
+        status.textContent = 'Enter the 6-digit code.';
+        return input.focus();
+      }
+      pair.disabled = true;
+      status.textContent = 'Pairing…';
+      try {
+        const r = await req(location.origin, null, '/api/pair', { method: 'POST', body: { code, device_name: browserDeviceName() } });
+        S.homeToken = r.token;
+        try {
+          localStorage.setItem('openbot.token', r.token);
+          sessionStorage.setItem('openbot.token', r.token);
+        } catch {}
+        S.pairCode = null;
+        boot();
+      } catch (e) {
+        S.pairCode = null;
+        pair.disabled = false;
+        status.textContent = e.message;
+        input.select();
+      }
+    };
+    const pair = h('button', { class: 'btn primary', onclick: go }, 'Pair');
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && go());
+    input.addEventListener('input', () => {
+      const d = input.value.replace(/\D/g, '').slice(0, 6);
+      const v = d.length > 3 ? d.slice(0, 3) + ' ' + d.slice(3) : d;
+      if (v !== input.value) input.value = v;
+    });
+    showScreen(
+      h(
+        'div',
+        { class: 'screen-card' },
+        h('div', { class: 'screen-art' }, avatar({ id: 'openbot', shape: 'ball', color: 'violet' }, 72, { live: true })),
+        h('h1', { class: 'screen-title' }, `Pair this ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} with openbot`),
+        h('p', { class: 'screen-sub' }, 'On the computer that runs your Bots, open openbot › Settings › Computer and choose Pair a new device. Scan the QR code with this phone’s camera, or type the 6-digit code here.'),
+        h('div', { class: 'screen-form' }, input, pair),
+        status,
+        h('button', { class: 'btn ghost sm screen-alt', onclick: () => tokenScreen(null, { token: true }) }, 'Use a token instead')
+      )
+    );
+    if (S.pairCode) {
+      input.value = S.pairCode.slice(0, 3) + ' ' + S.pairCode.slice(3);
+      go();
+    } else setTimeout(() => input.focus(), 50);
+  }
+  function tokenScreen(msg, opts) {
+    if (!TAURI && !onThisComputer() && !(opts && opts.token)) return pairScreen(msg && 'This device isn’t paired anymore. Pair it again with a new code.');
     const input = h('input', { class: 'field', type: 'password', placeholder: 'Paste your openbot token', autocomplete: 'off' });
     const go = () => {
       const v = input.value.trim();
@@ -962,7 +1038,9 @@
     $('#app').classList.remove('booting');
     renderMe();
     renderSidebar();
-    const want = S.current && S.bots.has(S.current) ? S.current : S.prefs.lastBotId;
+    const tapped = S.openBot && S.bots.has(S.openBot) ? S.openBot : null;
+    S.openBot = null;
+    const want = tapped || (S.current && S.bots.has(S.current) ? S.current : S.prefs.lastBotId);
     const first = (want && S.bots.has(want) && want) || (orderedBots()[0] || {}).id;
     if (first) selectBot(first, { focus: true });
     else {
@@ -1036,6 +1114,8 @@
       S.wsFails = 0;
       setConnBanner(false);
       setLink('ok');
+      presence.sent = null;
+      sendPresence(true);
       if (reconnected) resync();
       if (S.settingsUI) rerenderSettings();
     };
@@ -1065,6 +1145,57 @@
     };
     ws.onerror = () => {};
   }
+  // Tell the computer whether someone is using this window, so phone notifications wait while
+  // you're looking (see push.rs): it's in front, focused and touched in the last 2 minutes.
+  const presence = { lastInput: Date.now(), sent: null, hiddenAt: 0 };
+  const isActive = () => document.visibilityState === 'visible' && document.hasFocus() && Date.now() - presence.lastInput < 120000;
+  function sendPresence(force) {
+    const a = isActive();
+    if (!force && a === presence.sent) return;
+    if (!S.ws || S.ws.readyState !== 1) return;
+    try {
+      S.ws.send(JSON.stringify({ type: 'presence', active: a }));
+      presence.sent = a;
+    } catch {}
+  }
+  for (const ev of ['pointerdown', 'keydown', 'touchstart', 'wheel', 'mousemove'])
+    addEventListener(
+      ev,
+      () => {
+        presence.lastInput = Date.now();
+        if (presence.sent === false) sendPresence();
+      },
+      { passive: true, capture: true }
+    );
+  addEventListener('focus', () => sendPresence());
+  addEventListener('blur', () => sendPresence());
+  setInterval(() => sendPresence(), 30000);
+  // Phones pause a web app in the background and its connection dies quietly. Coming back:
+  // reconnect at once (catching up on what was missed) instead of waiting for the retry timer.
+  function wake() {
+    if (!S.booted) return;
+    const away = presence.hiddenAt ? Date.now() - presence.hiddenAt : 0;
+    presence.hiddenAt = 0;
+    const ws = S.ws;
+    if (!ws || ws.readyState > 1 || away > 15000) {
+      S.wsGen++;
+      try {
+        if (ws) ws.close();
+      } catch {}
+      S.wsRetry = 1000;
+      connectWS();
+    }
+    sendPresence(true);
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') wake();
+    else {
+      presence.hiddenAt = Date.now();
+      sendPresence();
+    }
+  });
+  addEventListener('pageshow', (e) => e.persisted && wake());
+  addEventListener('online', () => wake());
   function scheduleReconnect(gen) {
     setTimeout(() => {
       if (gen === S.wsGen) connectWS();
@@ -5266,6 +5397,7 @@
       'div',
       null,
       section('Account', accountCard),
+      pushSection(),
       section(
         'Appearance',
         card(
@@ -5310,7 +5442,7 @@
         'Help',
         card(
           row('How openbot works', pillBtn('Show tour', () => (S.settingsUI && S.settingsUI.close(), openOnboarding())), 'Replay the short welcome tour'),
-          row('Set up an always-on computer', pillBtn('Start setup', () => openSetupWizard()), 'Keep your Bots working 24/7 on a PC that stays on')
+          TAURI || onThisComputer() ? row('Set up an always-on computer', pillBtn('Start setup', () => openSetupWizard()), 'Keep your Bots working 24/7 on a PC that stays on') : null
         )
       )
     );
@@ -5447,7 +5579,10 @@
       );
     } else out.append(section('Your computer', card(row('Execution on this computer', null, S.settingsLoadErr ? 'Couldn’t load this setting' : 'Loading…'))));
 
-    // where bots run
+    // where bots run (a phone or other browser is paired with this computer and can't switch it)
+    if (!TAURI && !onThisComputer()) {
+      out.append(section('Where Bots run', card(row(h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()), null, `Your Bots run on this computer. This ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} is paired with it.`))));
+    } else {
     const seg = h(
       'div',
       { class: 'segmented' },
@@ -5573,6 +5708,7 @@
       );
     }
     out.append(section('Where Bots run', runsOn));
+    }
 
     // status
     if (c) {
@@ -5744,6 +5880,22 @@
           `Enter this code on the new device. It works once, for ${left} more minute${left === 1 ? '' : 's'}.`
         )
       );
+      // A phone with Tailscale on scans this to open openbot and pair in one step.
+      if (st.code.qr)
+        rows.push(
+          h(
+            'div',
+            { class: 'set-row pair-qr-row' },
+            h('div', { class: 'pair-qr', html: st.code.qr, role: 'img', 'aria-label': 'QR code for pairing a phone' }),
+            h(
+              'div',
+              { class: 'set-row-text' },
+              h('div', { class: 'set-row-title' }, 'Pair your phone'),
+              h('div', { class: 'set-row-sub' }, 'Turn on Tailscale on your phone, then scan this with its camera. On an iPhone, tap Share › Add to Home Screen afterwards to open openbot like an app.'),
+              h('div', { class: 'set-row-sub mono ellipsis', title: st.code.link }, st.code.link.split('#')[0])
+            )
+          )
+        );
     }
     if (st.err) rows.push(row('Couldn’t load paired devices', btn('Try again', load), st.err));
     else if (st.list && !st.list.length) rows.push(row('No paired devices', null, 'Only this computer’s own openbot app can use it right now.'));
@@ -7947,8 +8099,121 @@
     if (S.settingsUI && (S.settingsUI.tab === 'usage' || S.settingsUI.tab === 'computer')) rerenderSettings();
   }, 60000);
 
+  // ───────────────────────────── phone notifications (sw.js, push.rs) ─────────────────────────────
+  // Web Push needs the service worker. On an iPhone it only works once openbot is on the Home Screen.
+  const pushPossible = () => !TAURI && window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const isIOS = () => /iPhone|iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+  const standalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  let swReg = null;
+  async function registerSW() {
+    if (TAURI || !window.isSecureContext || !('serviceWorker' in navigator)) return null;
+    try {
+      swReg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    } catch {
+      swReg = null;
+    }
+    return swReg;
+  }
+  if (!TAURI && 'serviceWorker' in navigator) {
+    // A notification was tapped while openbot was open: show that chat.
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      const bot = e.data && e.data.type === 'open-bot' && e.data.bot;
+      if (bot && S.bots.has(bot)) selectBot(bot, { focus: true });
+    });
+  }
+  function b64urlToBytes(s) {
+    const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
+    return Uint8Array.from(b, (c) => c.charCodeAt(0));
+  }
+  async function currentPushSub() {
+    const reg = swReg || (await registerSW());
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+  // Must run straight from a tap: iPhones only ask for permission then.
+  async function enablePush() {
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Notifications are blocked for openbot. Allow them in this phone’s Settings › Notifications › openbot.' : 'Notifications weren’t allowed.');
+    const reg = swReg || (await registerSW());
+    if (!reg) throw new Error('This browser can’t show notifications from openbot.');
+    const { key } = await api('/api/push/key');
+    let sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      // Subscribed for another computer's key: start over.
+      const k = sub.options && sub.options.applicationServerKey;
+      const same = k && btoa(String.fromCharCode(...new Uint8Array(k))) === btoa(String.fromCharCode(...b64urlToBytes(key)));
+      if (!same) {
+        await sub.unsubscribe().catch(() => {});
+        sub = null;
+      }
+    }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToBytes(key) });
+    await api('/api/push/subscribe', { method: 'POST', body: sub.toJSON() });
+    return sub;
+  }
+  async function disablePush() {
+    const sub = await currentPushSub();
+    if (!sub) return;
+    await api('/api/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+  }
+  // Settings › General › Notifications (in a browser; the desktop app has its own).
+  function pushSection() {
+    if (TAURI) return null;
+    const st = (S.pushUI = S.pushUI || { sub: undefined, busy: false, msg: '' });
+    if (st.sub === undefined && pushPossible()) {
+      st.sub = null;
+      currentPushSub().then((sub) => {
+        st.sub = sub || null;
+        rerenderSettings(true);
+      });
+    }
+    let body;
+    if (isIOS() && !standalone()) {
+      body = row('Notifications on this phone', null, 'Add openbot to your Home Screen first: tap Share, then Add to Home Screen. Open openbot from there and turn this on.');
+    } else if (!pushPossible()) {
+      body = row('Notifications on this device', null, window.isSecureContext ? 'This browser can’t show notifications from openbot.' : 'Open openbot at its https:// Tailscale address to get notifications.');
+    } else {
+      const on = !!st.sub;
+      const toggle = toggleEl(on, async (v) => {
+        st.busy = true;
+        st.msg = '';
+        try {
+          if (v) st.sub = await enablePush();
+          else {
+            await disablePush();
+            st.sub = null;
+          }
+        } catch (e) {
+          st.msg = e.message;
+          toggle.checked = !v;
+        }
+        st.busy = false;
+        rerenderSettings(true);
+      });
+      toggle.disabled = st.busy;
+      const test = async () => {
+        st.msg = 'Sending…';
+        rerenderSettings(true);
+        try {
+          await api('/api/push/test', { method: 'POST', body: { endpoint: st.sub.endpoint } });
+          st.msg = 'Sent. It should arrive in a few seconds.';
+        } catch (e) {
+          st.msg = e.message;
+          if (e.status === 502 && /turned off/.test(e.message)) st.sub = null;
+        }
+        rerenderSettings(true);
+      };
+      body = [
+        row('Notifications on this device', toggle, st.msg || 'When a Bot finishes or needs you while openbot isn’t open anywhere. Bots you’ve muted stay quiet.'),
+        on ? row('Test', pillBtn('Send a Test', test), 'Check that notifications reach this device') : null,
+      ];
+    }
+    return section('Notifications', card(body));
+  }
+
   // ───────────────────────────── start ─────────────────────────────
   initToken();
+  registerSW();
   loadDraftStore();
   applyTheme();
   layoutShell();

@@ -151,6 +151,7 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("No device with id {id}");
                 std::process::exit(1);
             }
+            openbot_core::push::forget_device(&mut cfg, id);
             cfg.save(&path)?;
             println!("Removed. Restart openbot-server if it's running so the change takes effect now.");
             return Ok(());

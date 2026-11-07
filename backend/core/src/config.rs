@@ -94,6 +94,8 @@ pub struct Config {
     pub accounts: Vec<crate::accounts::Account>,
     /// Override the built-in Google / Microsoft sign-in apps (for development).
     pub oauth: crate::accounts::OAuthApps,
+    /// Phone notifications: this computer's push key and the phones that subscribed (see push.rs).
+    pub push: crate::push::PushConfig,
 }
 
 impl Default for Config {
@@ -126,6 +128,7 @@ impl Default for Config {
             contacts: vec![],
             accounts: vec![],
             oauth: Default::default(),
+            push: Default::default(),
         }
     }
 }

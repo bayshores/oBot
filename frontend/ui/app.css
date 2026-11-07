@@ -152,7 +152,11 @@ b, strong { font-weight: var(--w-semibold); }
   display: grid;
   grid-template-columns: var(--sbw) minmax(0, 1fr) auto;
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
+  box-sizing: border-box;
+  /* On a phone's home screen openbot runs behind the status bar and home bar: keep clear of them. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--chrome);
   transition: opacity .2s;
 }
@@ -1509,7 +1513,7 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .toast.error .ico { color: var(--danger-text); }
 
 /* full screens (token / offline / boot) */
-.screen { position: fixed; inset: 0; z-index: 40; background: var(--chrome); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.screen { position: fixed; inset: 0; z-index: 40; background: var(--chrome); display: flex; align-items: center; justify-content: center; padding: calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom)); }
 .screen-card { width: min(420px, 100%); text-align: center; display: flex; flex-direction: column; align-items: center; animation: rise .25s ease-out; }
 .screen-card.plain { gap: 14px; color: var(--text-3); }
 .screen-art { margin-bottom: 8px; }
@@ -1870,8 +1874,8 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
   .app, .app.rail { grid-template-columns: 0 minmax(0, 1fr) 0; }
   .sidebar {
     position: fixed;
-    top: 0;
-    bottom: 0;
+    top: env(safe-area-inset-top);
+    bottom: env(safe-area-inset-bottom);
     left: 0;
     width: min(300px, 86vw);
     transform: translateX(-102%);
@@ -1884,8 +1888,8 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
   .scrim { display: block; position: fixed; inset: 0; background: var(--scrim); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 25; }
   .app.sidebar-open .scrim { opacity: 1; pointer-events: auto; }
   .menu-btn { display: inline-flex; }
-  .panel { position: fixed; inset: 0; width: 100%; }
-  .overlay.settings-overlay { padding: 12px; }
+  .panel { position: fixed; inset: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); width: 100%; }
+  .overlay.settings-overlay { padding: calc(12px + env(safe-area-inset-top)) 12px calc(12px + env(safe-area-inset-bottom)); }
   .settings { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .set-nav { flex-direction: row; overflow-x: auto; box-shadow: inset 0 -.5px 0 var(--b3); padding: 12px 56px 12px 12px; }
   .set-nav-item { flex: none; height: 36px; font-size: 14px; }
@@ -1909,6 +1913,11 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 
 /* paired devices */
 .pair-code { font-size: 22px; font-weight: 600; letter-spacing: .08em; }
+.pair-qr-row { align-items: center; gap: 16px; }
+.pair-qr { flex: none; width: 132px; height: 132px; padding: 6px; border-radius: 10px; background: #fff; }
+.pair-qr svg { display: block; width: 100%; height: 100%; }
+.pair-input { text-align: center; font-size: 20px; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
+.screen-alt { margin-top: 10px; }
 .set-row-title .chip, .set-row-text .chip { margin-left: 8px; vertical-align: middle; }
 
 /* bot screens: toolbar button, live viewer, hand-over card, settings row */

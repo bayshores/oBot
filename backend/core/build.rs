@@ -28,6 +28,11 @@ fn main() {
     println!("cargo:rerun-if-changed={}", ui.display());
     let mut files = vec![];
     collect(&ui, &ui, &mut files);
+    // The phone home-screen icons (generated sizes live with the desktop app's icons).
+    let icons = ui.join("../desktop/icons");
+    for n in [180, 192, 512] {
+        files.push((format!("icons/phone-{n}.png"), icons.join(format!("phone-{n}.png"))));
+    }
     let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join("ui_assets.rs");
     let mut f = std::fs::File::create(out).unwrap();
     writeln!(f, "pub static UI_FILES: &[(&str, &[u8])] = &[").unwrap();
