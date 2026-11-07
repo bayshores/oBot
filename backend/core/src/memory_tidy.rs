@@ -103,7 +103,8 @@ fn prompt(main: bool) -> String {
          2. Merge duplicates into one fact (update_memory the best one, forget the rest).\n\
          3. Fix or forget facts that are outdated or contradicted by newer ones.\n\
          4. The profile is only for standing instructions and core identity (name, location, role, family, strong \
-            preferences, how the user wants you to work). Move such facts from the log into the profile with \
+            preferences, how the user wants you to work, and rules like \"always\", \"never\" or \"sign in to this site this \
+            way\"). Move such facts from the log into the profile with \
             update_memory tier:'profile'. Move anything else in the profile to the log.\n\
          5. Keep the profile under about 40 short facts. Never delete something the user explicitly asked you to remember.\n\
          6. Don't message the user about this unless something needs their decision. End with one short line saying \

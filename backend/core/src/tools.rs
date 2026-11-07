@@ -55,13 +55,13 @@ pub fn definitions() -> Value {
         },
         {
             "name": "remember",
-            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Keep each fact short and self-contained. Pick the tier: \"profile\" is only for standing instructions and core identity (name, location, role, family, strong preferences, how they want you to work); it's in your prompt every time, so keep it small. Everything else (events, plans, one-off details, things you did, what you learned) goes in \"log\", which you search with recall. To hand a fact to another of the user's Bots, give its name in \"bot\": it becomes that Bot's own memory.",
+            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Keep each fact short and self-contained. Pick the tier: \"profile\" is only for standing instructions and core identity (name, location, role, family, strong preferences, how they want you to work). Rules about how to do things (\"always\", \"never\", \"don't ask me to\", which way to sign in to a site, a workaround you were told to use) are standing instructions: put them in the profile. It's in your prompt every time, so keep it small. Everything else (events, plans, one-off details, things you did, what you learned) goes in \"log\", which you search with recall. To hand a fact to another of the user's Bots, give its name in \"bot\": it becomes that Bot's own memory.",
             "inputSchema": {"type": "object", "properties": {
                 "fact": {"type": "string"},
-                "tier": {"type": "string", "enum": ["profile", "log"], "description": "Default log"},
+                "tier": {"type": "string", "enum": ["profile", "log"], "description": "profile: a rule or standing instruction (always / never / don't ask me to / how to get into a site) or core identity. log: anything else"},
                 "about": {"type": "string", "enum": ["user", "me"], "description": "'user' = about the user (shared with all bots), 'me' = only for this bot"},
                 "bot": {"type": "string", "description": "Optional: another Bot's name or id to save this for (only that Bot sees it)"}
-            }, "required": ["fact"]}
+            }, "required": ["fact", "tier"]}
         },
         {
             "name": "recall",
