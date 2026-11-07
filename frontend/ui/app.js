@@ -1869,7 +1869,7 @@
     if (m.role === 'tool') return S.prefs.showTools === true;
     return true;
   };
-  const speakerOf = (role) => (role === 'user' ? 'user' : role === 'event' || role === 'system' ? 'center' : 'bot');
+  const speakerOf = (role) => (role === 'user' ? 'user' : role === 'event' || role === 'system' || role === 'relay' ? 'center' : 'bot');
   // a widget is "open" when it has no answer yet
   const openWidget = (list) => {
     for (let i = list.length - 1; i >= 0; i--) {
@@ -1882,7 +1882,7 @@
   };
   function sigOf(m) {
     const meta = m.meta || {};
-    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, m.role === 'tool' && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? approvalAnswers.get(meta.approval_id) || '' : ''].join('|');
+    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, (m.role === 'tool' || m.role === 'relay') && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? approvalAnswers.get(meta.approval_id) || '' : ''].join('|');
   }
 
   let renderQueued = false;
@@ -2154,6 +2154,9 @@
       case 'event':
         stack.append(eventLine(m));
         break;
+      case 'relay':
+        stack.append(relayRow(m));
+        break;
       default:
         stack.append(h('div', { class: 'event-line', title }, m.text));
     }
@@ -2210,6 +2213,7 @@
       );
       fig.append(pre, copyBtn);
     }
+    mentionify(md);
     bubble.textContent = '';
     bubble.append(md);
   }
@@ -3016,6 +3020,53 @@
         );
     }
     return row;
+  }
+  // A message one Bot passed to another: "Messaged School Bot" here, "Message from General Bot" there.
+  function relayRow(m) {
+    const x = m.meta || {};
+    const other = S.bots.get(x.bot_id);
+    const name = (other && other.name) || x.name || 'another Bot';
+    const incoming = x.direction === 'from';
+    const open = incoming ? !S.expanded.has(m.id) : S.expanded.has(m.id);
+    const toggle = () => {
+      if (S.expanded.has(m.id)) S.expanded.delete(m.id);
+      else S.expanded.add(m.id);
+      scheduleRender();
+    };
+    const dot = h('span', { class: 'relay-dot', style: { background: other ? inkOf(lookOf(other).color) : 'var(--icon-3)' } });
+    const head = h(
+      'div',
+      { class: 'event-line relay-head', title: m.created_at ? fmtTime(m.created_at) : null },
+      h('button', { class: 'relay-toggle', 'aria-expanded': open ? 'true' : 'false', onclick: toggle }, dot, h('span', null, incoming ? `Message from ${name}` : `Messaged ${name}`), icon('chevronDown', 12, open ? 'flip' : '', 2.2)),
+      other ? h('button', { class: 'event-open', onclick: () => selectBot(other.id) }, 'Open ' + other.name) : null
+    );
+    const box = h('div', { class: 'relay' }, head);
+    if (open) box.append(h('div', { class: 'relay-text' }, m.text || ''));
+    return box;
+  }
+  // "@School Bot" in a Bot's reply becomes a button that opens that Bot.
+  function mentionify(root) {
+    const bots = [...S.bots.values()].filter((b) => b.name).sort((a, b) => b.name.length - a.name.length);
+    if (!bots.length || !root.textContent.includes('@')) return;
+    const re = new RegExp('@(' + bots.map((b) => b.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?![\\w])', 'gi');
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement.closest('code, pre, a') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const n of nodes) {
+      const t = n.nodeValue;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      let mm;
+      re.lastIndex = 0;
+      while ((mm = re.exec(t))) {
+        const b = bots.find((x) => x.name.toLowerCase() === mm[1].toLowerCase());
+        frag.append(t.slice(last, mm.index), h('button', { class: 'mention', onclick: () => selectBot(b.id) }, '@' + b.name));
+        last = mm.index + mm[0].length;
+      }
+      if (!last) continue;
+      frag.append(t.slice(last));
+      n.replaceWith(frag);
+    }
   }
   function eventLine(m) {
     const meta = m.meta || {};

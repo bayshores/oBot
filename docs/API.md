@@ -63,7 +63,7 @@ Bot = {
 Message = {
   id: string, bot_id: string,
   role: "user" | "bot" | "tool" | "approval" | "error" | "system"
-      | "widget" | "form" | "attachment" | "visualization" | "calendar" | "event",
+      | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
   status: "done" | "running" | "ok" | "failed" | "stopped" | "pending" | "allowed" | "denied" | "expired" | "replaced",
@@ -93,6 +93,8 @@ Message = {
 //            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
+//  relay:    { direction: "to"|"from", bot_id, name }   a message one Bot passed to another (message_bot); it is in
+//            both chats ("Messaged <name>" / "Message from <name>"); text = the message
 //  calendar: an event the Bot added or changed without asking (a calendar card): { action: "create"|"update",
 //            account, provider, calendar (name, "" = main), id, title, start, end (unix ms), all_day, first_day,
 //            last_day ("2026-11-05"), when, location, organizer, guests: [{email, name, response: "yes"|"no"|"maybe"|"waiting",
@@ -288,6 +290,7 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `create_bot {name, instructions, label?, look?, memories?[], routines?[], briefing?}` | new bot, ready from its first message; it says hello in its own chat. Names must be unique; max 50 bots |
 | `update_bot {bot, name?, label?, look?, instructions?, add_instructions?}` | change a bot (or itself) |
 | `delete_bot {bot, reason?}` | retire a bot. Always shows an Allow / Deny card and waits, whatever the permission mode. Not the Main Bot, not itself |
+| `message_bot {bot, message}` | pass a task or question to another Bot: the message shows in both chats (`relay`) and starts a turn in that Bot, which works on it in its own chat. At most 4 messages between the same two Bots in 10 minutes. Each Bot's instructions list the user's other Bots, so it can say when a task fits another one better (`backend/core/src/relay.rs`) |
 | `set_status {text}` | status line under the bot's name |
 | `list_accounts` | the connected accounts this bot may use (Settings › Connections) |
 | `email_search {account?, query?, max?}` · `email_read {account?, id}` · `email_attachment {account?, id, attachment_id}` | find and read email; save an attachment into the bot's folder (`attachments/`) |

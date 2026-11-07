@@ -192,6 +192,7 @@ pub fn definitions() -> Value {
         a.extend(crate::calendar::tool_definitions());
         a.extend(crate::drive::tool_definitions());
         a.extend(crate::jobs::tool_definitions());
+        a.push(crate::relay::tool_definition());
     }
     // Bots get their own screen where this computer can run one (Windows + WSL, or Linux), and
     // can sign in on it with Vault logins or a secure form.
@@ -215,7 +216,7 @@ fn s<'a>(args: &'a Value, k: &str) -> &'a str {
 }
 
 /// Find one of the user's Bots by id or name (names match without caring about case).
-fn find_bot(state: &Shared, key: &str) -> Result<Bot, String> {
+pub(crate) fn find_bot(state: &Shared, key: &str) -> Result<Bot, String> {
     let key = key.trim();
     if key.is_empty() {
         return Err("Say which Bot (its name or id)".into());
@@ -399,13 +400,15 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
     }
-    if crate::accounts::is_tool(name) || crate::calendar::is_tool(name) || crate::drive::is_tool(name) || crate::jobs::is_tool(name) {
+    if crate::accounts::is_tool(name) || crate::calendar::is_tool(name) || crate::drive::is_tool(name) || crate::jobs::is_tool(name) || crate::relay::is_tool(name) {
         let bot = match state.db.get_bot(bot_id) {
             Ok(Some(b)) => b,
             _ => return ToolResult { text: "this bot no longer exists".into(), is_error: true, image: None },
         };
         let out = if crate::jobs::is_tool(name) {
             crate::jobs::tool(state, &bot, name, args).await
+        } else if crate::relay::is_tool(name) {
+            crate::relay::tool(state, &bot, args).await
         } else if crate::drive::is_tool(name) {
             crate::drive::tool(state, &bot, name, args).await
         } else if crate::calendar::is_tool(name) {

@@ -269,6 +269,7 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__openbot__remember" | "mcp__openbot__recall" | "mcp__openbot__forget" | "mcp__openbot__update_memory" => ("thinking", "Remembering".into()),
         "mcp__openbot__list_bots" | "mcp__openbot__get_bot" => ("reading_file", "Looking at your Bots".into()),
         "mcp__openbot__create_bot" => ("working", "Setting up a Bot".into()),
+        "mcp__openbot__message_bot" => ("working", "Messaging another Bot".into()),
         "mcp__openbot__update_bot" | "mcp__openbot__move_routine" => ("working", "Updating your Bots".into()),
         "mcp__openbot__delete_bot" => ("waiting_for_you", "Waiting for your OK".into()),
         "mcp__openbot__list_accounts" => ("thinking", "Checking accounts".into()),
@@ -560,6 +561,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          to your plan. When splitting work across Bots, move each Bot's private facts and routines to it, and \
          retire old Bots only after everything worth keeping has been moved.\n",
     );
+    s.push_str(&crate::relay::persona(state, bot));
     if crate::screen::platform_ok().is_ok() {
         s.push_str(
             "\nYou also have your own computer screen: a 1280 x 800 Linux desktop with a Chromium browser that \
@@ -1045,6 +1047,7 @@ pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
         "TodoWrite" => verb("Updated its to-do list", "Update its to-do list"),
         "Task" | "Agent" => format!("{} a helper: {}", verb("Started", "Start"), truncate_chars(&s("description"), 60)),
         "Skill" => format!("{} the {} skill", verb("Used", "Use"), crate::skills::display_name(&s("skill"))),
+        "mcp__openbot__message_bot" => format!("{} {}", verb("Messaged", "Message"), truncate_chars(&s("bot"), 40)),
         "mcp__openbot__calendar_list" => verb("Looked at the calendars", "Look at the calendars"),
         "mcp__openbot__calendar_events" | "mcp__openbot__calendar_get" => verb("Checked the calendar", "Check the calendar"),
         "mcp__openbot__calendar_free_time" => verb("Looked for free time", "Look for free time"),

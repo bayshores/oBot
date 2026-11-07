@@ -22,6 +22,7 @@ pub mod logins;
 pub mod markdown;
 pub mod memory_tidy;
 pub mod mcp;
+pub mod relay;
 pub mod review;
 pub mod routines;
 pub mod runner;

@@ -690,6 +690,15 @@ b, strong { font-weight: var(--w-semibold); }
 .event-line .ico { color: var(--icon-3); }
 .event-open { margin-left: 2px; padding: 0 6px; height: 20px; border-radius: 6px; font-size: 12px; font-weight: var(--w-medium); color: var(--accent-text); max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; }
 .event-open:hover { background: var(--hover); }
+/* Bot-to-Bot messages and @Bot mentions */
+.relay { align-self: center; width: min(88%, 560px, calc(100% - 82px)); display: flex; flex-direction: column; align-items: center; }
+.relay-toggle { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 6px; border-radius: 6px; color: var(--text-2); font-size: 12px; }
+.relay-toggle:hover { background: var(--hover); color: var(--text); }
+.relay-toggle .flip { transform: rotate(180deg); }
+.relay-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.relay-text { margin-top: 6px; width: 100%; padding: 10px 12px; border-radius: 14px; background: var(--secondary); font-size: 13px; line-height: 19px; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.mention { display: inline; padding: 0 4px; border-radius: 5px; background: var(--accent-2); color: var(--accent-text); font: inherit; font-weight: var(--w-medium); }
+.mention:hover { text-decoration: underline; }
 
 /* activity line (working indicator) */
 .activity {
