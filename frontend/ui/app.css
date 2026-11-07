@@ -1896,7 +1896,12 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
   .set-body { padding: 24px 18px 36px; }
   .set-close { top: 12px; right: 10px; }
   .set-row { flex-wrap: wrap; }
-  .set-row-ctl { max-width: 100%; }
+  .set-row-ctl { max-width: 100%; min-width: 0; }
+  /* A long choice (a timezone) moves under the row's name instead of covering it, and shortens with "…". */
+  .set-row-text { min-width: 96px; }
+  .set-row-ctl > .pill-btn { min-width: 0; max-width: 100%; }
+  /* Tabs scrolled under the close button fade out instead of showing through it. */
+  .set-nav { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 72px), transparent calc(100% - 48px)); mask-image: linear-gradient(to right, #000 calc(100% - 72px), transparent calc(100% - 48px)); }
   .set-row-ctl.mem { width: 100%; align-items: stretch; }
   .dialog.onboard { padding: 36px 20px 22px; }
   .wz-name { display: none; }
