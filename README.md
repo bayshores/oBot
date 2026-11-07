@@ -31,7 +31,8 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
 Bots use **Sonnet 5.5 at extra-high effort** unless you change it in Settings › General (or per Bot).
 Bots get only the tools openbot gives them: your personal Claude Code plugins, MCP servers, skills and
 settings on the PC are not loaded into Bots (add MCP servers in Settings › Computer › Plugins). Settings
-files a Bot writes in its own folder are ignored too, so it can't give itself permissions.
+files a Bot writes in its own folder are ignored too, so it can't give itself permissions. To give a Bot one
+of your skills, add it in the Bot's panel under **Skills**, or ask the Bot to copy it into its folder.
 
 ## Folders
 

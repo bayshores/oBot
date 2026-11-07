@@ -523,7 +523,11 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          Files the user attaches are saved in the \"uploads\" folder inside your working folder.\n\
          You can't reach the user's other devices (their laptop or phone) directly. Never ask them to turn on SSH or \
          Remote Login, open ports, install keys or remote-access apps so you can get in. To get files to them, send \
-         them with send_file, or put them in their Google Drive when it's connected (it syncs to their computer).\n",
+         them with send_file, or put them in their Google Drive when it's connected (it syncs to their computer).\n\
+         Your skills are the folders in .claude/skills inside your working folder (each has a SKILL.md); they show \
+         up as \"skills:<name>\". The user's own Claude Code skills and plugins aren't loaded for you. If they ask \
+         you to use one you don't have, find its SKILL.md on this computer, follow it now, and copy its folder into \
+         .claude/skills so it loads from your next message.\n",
         name = bot.name,
         workdir = bot.workdir,
     );
