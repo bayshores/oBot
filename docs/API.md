@@ -298,6 +298,8 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 ### How a turn runs
 
 * Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`).
+* The current time is sent at the start of each message (`[openbot: It's Friday 2026-11-06 20:01 now.]`), not in the
+  system prompt, so the system prompt stays the same between messages and the cached conversation is reused.
 * Bots don't load any Claude Code settings files: runs use `--strict-mcp-config` and `--setting-sources=` (none). So the
   only MCP servers are `openbot` plus Settings › Computer › Plugins, and the computer's personal setup (`~/.claude`: plugins,
   skills, hooks, permission rules, CLAUDE.md, output style) is skipped. The bot folder's own `.claude/settings*.json` and
