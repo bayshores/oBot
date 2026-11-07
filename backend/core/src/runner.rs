@@ -272,6 +272,9 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__openbot__email_send" => ("working", "Writing an email".into()),
         "mcp__openbot__email_update" => ("working", "Organizing email".into()),
         "mcp__openbot__calendar_events" => ("reading_file", "Checking the calendar".into()),
+        "mcp__openbot__drive_search" | "mcp__openbot__drive_list" | "mcp__openbot__drive_download" => ("reading_file", "Looking in Google Drive".into()),
+        "mcp__openbot__drive_trash" => ("waiting_for_you", "Waiting for your OK".into()),
+        n if n.starts_with("mcp__openbot__drive_") => ("working", "Organizing Google Drive".into()),
         n if n.starts_with("mcp__openbot__calendar_") => ("working", "Updating the calendar".into()),
         n if n.starts_with("mcp__openbot__") => ("working", "Working".into()),
         n if n.starts_with("mcp__playwright") || n.contains("browser") => ("browsing", "Browsing the web".into()),
@@ -1023,6 +1026,14 @@ pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
         "TodoWrite" => verb("Updated its to-do list", "Update its to-do list"),
         "Task" | "Agent" => format!("{} a helper: {}", verb("Started", "Start"), truncate_chars(&s("description"), 60)),
         "Skill" => format!("{} the {} skill", verb("Used", "Use"), crate::skills::display_name(&s("skill"))),
+        "mcp__openbot__drive_search" if !s("query").is_empty() => format!("{} Google Drive for “{}”", verb("Searched", "Search"), truncate_chars(&s("query"), 60)),
+        "mcp__openbot__drive_search" | "mcp__openbot__drive_list" => verb("Looked in Google Drive", "Look in Google Drive"),
+        "mcp__openbot__drive_download" => verb("Downloaded a file from Google Drive", "Download a file from Google Drive"),
+        "mcp__openbot__drive_upload" => format!("{} {} to Google Drive", verb("Uploaded", "Upload"), short(s("path"))),
+        "mcp__openbot__drive_create_folder" => format!("{} the folder {} in Google Drive", verb("Made", "Make"), truncate_chars(&s("path"), 60)),
+        "mcp__openbot__drive_move" => verb("Moved a file in Google Drive", "Move a file in Google Drive"),
+        "mcp__openbot__drive_copy" => verb("Copied a file in Google Drive", "Copy a file in Google Drive"),
+        "mcp__openbot__drive_trash" => verb("Moved a file in Google Drive to the trash", "Move a file in Google Drive to the trash"),
         n if n.starts_with("mcp__") => {
             let mut p = n.splitn(3, "__").skip(1);
             let server = p.next().unwrap_or("");

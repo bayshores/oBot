@@ -29,23 +29,28 @@ For development you can instead put them in `config.json` on the computer your B
 - Either one stops working if the person changes their password (some cases), removes openbot's
   access from their account, or an admin revokes it. The account then shows **Signed out** in
   Settings › Connections with a **Reconnect** button.
+- Google accounts connected before Google Drive was added (or where Drive was unticked on the
+  permission screen) show **Add Google Drive**. It runs the same sign-in again; openbot keeps what
+  Google reports the account allowed (`scopes` in config.json) and updates it on every token refresh.
+- If a Google API isn't enabled in the project, Bots get an error with the link that turns it on.
 
 ## Google
 
 1. Open [console.cloud.google.com](https://console.cloud.google.com), create a project named `openbot`.
-2. **APIs & Services › Library**: enable **Gmail API** and **Google Calendar API**.
+2. **APIs & Services › Library**: enable **Gmail API**, **Google Calendar API** and **Google Drive API**.
 3. **Google Auth Platform › Branding**: app name `openbot`, your support email, developer contact email.
 4. **Audience**: user type **External**.
 5. **Data access › Add or remove scopes**: `openid`, `.../auth/userinfo.email`, `.../auth/userinfo.profile`,
-   `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/calendar.events`.
+   `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/calendar.events`,
+   `https://www.googleapis.com/auth/drive`.
 6. **Clients › Create client**: application type **Desktop app**, name `openbot`. Copy the client ID
    and client secret. (Desktop clients accept any `http://127.0.0.1:<port>` return address, which
    openbot uses.)
 7. **Audience › Publish app** → **In production**. Don't skip this (see above).
 
 Until Google verifies the app, people see a "Google hasn't verified this app" screen once
-(Advanced › Go to openbot), and at most 100 people can connect. Gmail access is a "restricted"
-scope, so going past 100 people needs Google's verification, including a yearly security
+(Advanced › Go to openbot), and at most 100 people can connect. Gmail and Drive access are
+"restricted" scopes, so going past 100 people needs Google's verification, including a yearly security
 assessment by a Google-approved company
 ([Google: when verification is needed](https://support.google.com/cloud/answer/13464323)).
 

@@ -6269,7 +6269,7 @@
       h(
         'div',
         { class: 'set-section' },
-        h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Email and calendar'), h('div', { class: 'set-explain' }, 'Connect Gmail or Outlook so your Bots can read, write and organize email and manage your calendar. You sign in once and stay connected.'))),
+        h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Email, calendar and files'), h('div', { class: 'set-explain' }, 'Connect Google or Microsoft so your Bots can read, write and organize email, manage your calendar and, with Google, work with your Google Drive files. You sign in once and stay connected.'))),
         h('div', { class: 'acct-connects' }, connectBtn('google'), connectBtn('microsoft')),
         !ready.google || !ready.microsoft ? h('div', { class: 'f-hint' }, `${[!ready.google && 'Google', !ready.microsoft && 'Microsoft'].filter(Boolean).join(' and ')} sign-in isn’t set up in this version of openbot yet.`) : null
       )
@@ -6283,6 +6283,7 @@
           'div',
           { class: 'secret-ctl' },
           a.needs_reconnect && pillBtn('Reconnect', () => connectAccount(a.provider, a.id), { disabled: busy }),
+          !a.needs_reconnect && a.missing_drive && pillBtn('Add Google Drive', () => connectAccount(a.provider, a.id), { disabled: busy, 'aria-label': `Let Bots use the Google Drive of ${a.email}` }),
           pillBtn('Bots', () => ((ui.acctEdit = { id: a.id, bots: a.bots ? a.bots.slice() : null }), rerenderSettings(true)), { disabled: busy, 'aria-label': `Which Bots can use ${a.email}` }),
           pillBtn('Remove', () => removeAccount(a), { disabled: busy, 'aria-label': `Remove ${a.email}` })
         ),
@@ -6291,7 +6292,8 @@
           null,
           h('span', { class: 'secret-desc' }, a.services),
           h('span', { class: 'secret-access' }, scopeText(a.bots, 'Bots')),
-          a.needs_reconnect && h('span', { class: 'secret-problem' }, `${PROVIDER_NAME[a.provider]} stopped accepting openbot’s sign-in (for example after a password change). Click Reconnect and sign in again.`)
+          a.needs_reconnect && h('span', { class: 'secret-problem' }, `${PROVIDER_NAME[a.provider]} stopped accepting openbot’s sign-in (for example after a password change). Click Reconnect and sign in again.`),
+          !a.needs_reconnect && a.missing_drive && h('span', { class: 'secret-access' }, 'Google Drive isn’t allowed yet. Click Add Google Drive, sign in and tick Google Drive on the permission screen.')
         )
       );
     });

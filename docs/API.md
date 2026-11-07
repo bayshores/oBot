@@ -122,7 +122,10 @@ Settings = {
   vault_reserved: { names: string[], prefixes: string[] }  // refused secret names (compared ignoring case)
   accounts: [{ id, provider: "google"|"microsoft", email, name, services: string,
                bots: string[] | null,                // Bot ids that may use it; null = every Bot
-               added_at, needs_reconnect: boolean }] // Settings › Connections (tokens are never sent)
+               added_at, needs_reconnect: boolean,
+               drive: boolean,                       // Google account allowed Google Drive
+               missing_drive: boolean }]             // Google account without Drive: show "Add Google Drive"
+                                                     // (Settings › Connections; tokens are never sent)
   accounts_ready: { google: boolean, microsoft: boolean }  // can this build connect accounts?
   auto_review: boolean,                              // Settings › Permissions › Auto-Review (default true)
   review_ask: string[],   // "Always Ask" plain-language rules (max 20, 1000 chars each; wins over allow)
@@ -284,6 +287,11 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `email_update {account?, ids[], read?, archive?, star?, trash?, add_labels[]?, remove_labels[]?}` | organize email; `trash` asks first. Labels are Gmail only |
 | `calendar_events {account?, from?, to?, query?, max?}` | events (default the next 7 days) |
 | `calendar_create {account?, title, start, end, all_day?, location?, description?, attendees[]?}` · `calendar_update {account?, id, …}` · `calendar_delete {account?, id}` | change the calendar. Asks first when attendees get notified, and always for delete |
+| `drive_search {account?, query?, folder?, shared_with_me?, max?}` · `drive_list {account?, folder?}` | find Google Drive files (name or text inside) · list a folder. `folder` is an id or a My Drive path like `School/CSE 21`. Google accounts only, and only ones that allowed Drive (`backend/core/src/drive.rs`) |
+| `drive_download {account?, id, to?, format?}` | save a file into the bot's folder (default `drive/<name>`, max 100 MB). Docs, Sheets, Slides and Drawings are converted (default PDF; `docx`, `xlsx`, `pptx`, `csv`, `txt`, `md`, `png`) |
+| `drive_upload {account?, path, folder?, name?, replace?}` | upload a file from the bot's folder (max 100 MB). Stops if the folder has a file with that name, unless `replace` (Drive keeps the old version) |
+| `drive_create_folder {account?, path, parent?}` · `drive_move {account?, id, folder?, name?}` · `drive_copy {account?, id, folder?, name?}` | make folders (all levels of a path; returns an existing one) · move and/or rename · copy a file (not folders) |
+| `drive_trash {account?, id}` | move a file or folder to Drive's trash. Always shows an Allow / Deny card and waits |
 
 ### How a turn runs
 
