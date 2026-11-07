@@ -1,13 +1,20 @@
-// Fills boxes on the page in front of a Bot's screen (saved logins, secure forms).
+// Controls the browser on a Bot's screen through its local debugging port: which page is in front,
+// filling boxes (saved logins, secure forms), opening pages and managing tabs.
 //
-// screen.rs runs this inside Linux with `node -e`, talking to the screen's browser through its
-// local debugging port (the browser writes the port to DevToolsActivePort in its profile).
+// screen.rs runs this inside Linux with `node -e`. The browser writes its port to
+// DevToolsActivePort in its profile (it's started with --remote-debugging-port=0, local only).
 // Input (environment):
 //   OB_BOT  the Bot's id (its browser profile is ~/.openbot/screens/<id>/profile)
-//   OB_REQ  JSON {mode: "inspect"} or {mode: "fill", host, fields: [{target, value}]}
-//           target: "username" | "password" | "new_password" | "one_time_code" | "focused" | a CSS selector
-// Output: one JSON line. inspect -> {url, title}; fill -> {url, filled: [targets], missing: [targets]};
-// or {error: "sentence for the Bot"}. Values are only typed into the page, never printed.
+//   OB_REQ  JSON, one of:
+//     {mode: "inspect"}                          -> {url, title}
+//     {mode: "fill", host, fields: [{target, value}]} -> {url, filled: [targets], missing: [targets]}
+//         target: "username" | "password" | "new_password" | "one_time_code" | "focused" | a CSS selector
+//     {mode: "navigate", url}                    -> {url}   (in the tab in front)
+//     {mode: "tabs"}                             -> {tabs: [{id, title, url, front}]}  most recently used first
+//     {mode: "switch", id} / {mode: "close", id} -> {tabs}
+//     {mode: "close_others"}                     -> {tabs}
+//     {mode: "trim", keep}                       -> {tabs}   close the oldest tabs beyond `keep` (blank ones first)
+// Output: one JSON line, or {error: "sentence for the Bot"}. Values are only typed into the page, never printed.
 'use strict';
 const fs = require('fs');
 const os = require('os');
@@ -116,20 +123,27 @@ const FIND = function (target) {
   return document.activeElement === el;
 };
 
+const short = (id) => id.slice(0, 6).toLowerCase();
+const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
+
 (async () => {
-  if (typeof WebSocket !== 'function') done({ error: 'Filling pages needs Node.js 22 or newer inside Linux.' });
+  if (typeof WebSocket !== 'function') done({ error: 'Controlling the browser needs Node.js 22 or newer inside Linux.' });
   const req = JSON.parse(process.env.OB_REQ || '{}');
+  const portFile = `${os.homedir()}/.openbot/screens/${process.env.OB_BOT}/profile/DevToolsActivePort`;
+  const http = (port, path, method = 'GET') => fetch(`http://127.0.0.1:${port}${path}`, { method });
+  // A browser that just started may still be writing its port or restoring tabs: wait a little.
   let port = '';
-  try {
-    port = fs.readFileSync(`${os.homedir()}/.openbot/screens/${process.env.OB_BOT}/profile/DevToolsActivePort`, 'utf8').split('\n')[0].trim();
-  } catch {}
-  if (!/^\d+$/.test(port)) done({ error: NOT_OPEN });
-  let pages = [];
-  try {
-    pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  } catch {
-    done({ error: NOT_OPEN });
+  let pages = null;
+  for (let i = 0; i < (req.mode === 'trim' ? 10 : 1); i++) {
+    try {
+      port = fs.readFileSync(portFile, 'utf8').split('\n')[0].trim();
+      pages = await (await http(port, '/json/list')).json();
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
   }
+  if (!pages) done({ error: NOT_OPEN });
   pages = pages.filter((p) => p.type === 'page' && p.webSocketDebuggerUrl);
 
   // The tab in front is the visible one. With several browser windows, the window title decides.
@@ -151,8 +165,51 @@ const FIND = function (target) {
     const longest = Math.max(0, ...front.map(({ p }) => p.title.length));
     front = front.filter(({ p }) => p.title.length === longest);
   }
-  if (front.length !== 1) done({ error: "Can't tell which page is in front on your screen. Close extra browser windows or click on the page, then try again." });
+  const frontId = front.length === 1 ? front[0].p.id : null;
+
+  // Tab management.
+  const list = async (fid = frontId) => {
+    await new Promise((r) => setTimeout(r, 300));
+    const now = (await (await http(port, '/json/list')).json()).filter((p) => p.type === 'page');
+    if (!now.some((p) => p.id === fid)) fid = now[0] && now[0].id;
+    return now.map((p) => ({ id: short(p.id), title: p.title, url: p.url, front: p.id === fid }));
+  };
+  const byShort = (id) => pages.find((p) => short(p.id) === String(id || '').toLowerCase());
+  if (req.mode === 'tabs') done({ tabs: await list() });
+  if (req.mode === 'switch' || req.mode === 'close') {
+    const t = byShort(req.id);
+    if (!t) done({ error: `No tab with id ${req.id}. List the tabs again.` });
+    if (req.mode === 'close' && pages.length === 1) done({ error: "That's the only tab; open another page instead of closing it." });
+    await http(port, `/json/${req.mode === 'switch' ? 'activate' : 'close'}/${t.id}`);
+    done({ tabs: await list(req.mode === 'switch' ? t.id : frontId) });
+  }
+  if (req.mode === 'close_others' || req.mode === 'trim') {
+    let keepId = frontId || (pages[0] && pages[0].id);
+    // A blank tab in front (a freshly started browser) gives way to the last real page.
+    const realTab = pages.find((p) => !BLANK.test(p.url));
+    const keepPage = pages.find((p) => p.id === keepId);
+    if (req.mode === 'trim' && keepPage && BLANK.test(keepPage.url) && realTab) {
+      keepId = realTab.id;
+      await http(port, `/json/activate/${keepId}`);
+    }
+    let extra = pages.filter((p) => p.id !== keepId);
+    if (req.mode === 'trim') {
+      // Blank tabs go first, then the least recently used ones.
+      const keep = Math.max(1, Number(req.keep) || 1) - 1;
+      const real = extra.filter((p) => !BLANK.test(p.url));
+      extra = [...extra.filter((p) => BLANK.test(p.url)), ...real.slice(keep)];
+    }
+    for (const p of extra) await http(port, `/json/close/${p.id}`);
+    done({ tabs: await list(keepId) });
+  }
+
+  if (!frontId) done({ error: "Can't tell which page is in front on your screen. Close extra browser windows or click on the page, then try again." });
   const { p, c } = front[0];
+  if (req.mode === 'navigate') {
+    await c.send('Page.navigate', { url: req.url });
+    await new Promise((r) => setTimeout(r, 1500));
+    done({ url: req.url });
+  }
   const url = await evaluate(c, 'location.href');
   if (req.mode === 'inspect') done({ url, title: p.title });
 
@@ -174,4 +231,4 @@ const FIND = function (target) {
     filled.push(f.target);
   }
   done({ url, filled, missing });
-})().catch((e) => done({ error: `Couldn't reach the page on your screen (${e.message}).` }));
+})().catch((e) => done({ error: `Couldn't reach the browser on your screen (${e.message}).` }));

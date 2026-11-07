@@ -318,12 +318,15 @@ first use and stop after 30 minutes with no bot run and no viewer.
 The bot gets these MCP tools (each returns a screenshot): `computer_screenshot`,
 `computer_click {x,y,button?,count?}`, `computer_move {x,y}`, `computer_drag {from_x,from_y,to_x,to_y}`,
 `computer_scroll {x,y,direction,amount?}`, `computer_type {text}`, `computer_key {keys}` (xdotool
-names like `ctrl+l`), `computer_open {url}` and `computer_wait {seconds?}`. While it uses them,
+names like `ctrl+l`), `computer_open {url, new_tab?}` (opens in the tab in front unless `new_tab`),
+`computer_tabs {action: "list"|"switch"|"close"|"close_others", id?}` and `computer_wait {seconds?}`.
+A Bot's browser keeps at most 6 tabs (blank, then least recently used ones close first), and when a
+screen starts only the 3 newest of the reopened tabs are kept. While it uses them,
 `bot.activity.kind` is `on_its_computer`. `request_control {reason}` posts a widget message with
 `meta.screen:true` and the option "I'm done": the user opens the screen, chooses Take control,
 does the step (a login, a code, a payment), and answers.
 
-Signing in (logins.rs, secure_form.rs, page_fill.js): `list_logins {site?}` shows the Bot its Vault
+Signing in (logins.rs, secure_form.rs, browser.js): `list_logins {site?}` shows the Bot its Vault
 logins without passwords; `fill_login {id}` types the username and password into the page in front,
 only when that page is `https://` on one of the login's websites or a subdomain. `request_form
 {title, reason?, fields:[{label, type, target?}]}` posts a `form` message tied to the website in

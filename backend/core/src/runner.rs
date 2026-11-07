@@ -549,7 +549,9 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
              keeps your logins. The user can watch it live and take control. Use it for websites that need a real \
              browser (clicking through pages, filling forms, logged-in sites): computer_open (open a URL), \
              computer_screenshot, computer_click, computer_type, computer_key, computer_scroll, computer_move, \
-             computer_drag and computer_wait. Every action returns a fresh screenshot; look at it before the next \
+             computer_drag, computer_wait and computer_tabs. computer_open uses the tab in front; open a new tab only \
+             when you need to keep the current page, and close tabs you're done with. Every action returns a fresh \
+             screenshot; look at it before the next \
              step. Never type passwords or 2FA codes yourself: sign in with fill_login or request_form (see Vault \
              below). For payments or a CAPTCHA, or when you're stuck, call request_control, say what you need, and end \
              your turn. Before anything that can't \

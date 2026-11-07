@@ -85,14 +85,18 @@ ob_browser() {
 }
 "#;
 
-/// Runs page_fill.js (filling saved logins and secure forms into the page in front). The browser
+/// Runs browser.js (the page in front, filling boxes, opening pages, tabs). The browser
 /// picks its debugging port itself (--remote-debugging-port=0, reachable only from this computer)
 /// and writes it to DevToolsActivePort in the profile.
 const NODE_SCRIPT: &str = r#"[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1
 export DISPLAY=":$OB_DISPLAY"
 command -v node >/dev/null || { echo "Filling pages needs Node.js inside Linux. Open Settings › Computer › Bot screens and choose Set up again." >&2; exit 1; }
 exec node -e "$OB_JS""#;
-const PAGE_JS: &str = include_str!("page_fill.js");
+const BROWSER_JS: &str = include_str!("browser.js");
+/// A Bot's browser keeps at most this many tabs; older ones are closed when it opens more.
+const MAX_TABS: usize = 6;
+/// Tabs kept when a screen starts (the browser reopens the last session's tabs).
+const START_TABS: usize = 3;
 
 /// The page in front of a Bot's screen.
 pub struct Page {
@@ -116,14 +120,19 @@ pub struct Filled {
 async fn page_call(state: &Shared, bot_id: &str, req: Value) -> Result<Value, String> {
     let info = state.screens.ensure(state, bot_id).await?;
     let cfg = state.config.read().await.clone();
+    let v = browser_run(&cfg, info.display, bot_id, req).await;
+    state.screens.touch(bot_id, 0).await;
+    v
+}
+
+async fn browser_run(cfg: &Config, display: u16, bot_id: &str, req: Value) -> Result<Value, String> {
     let env = [
-        ("OB_DISPLAY", info.display.to_string()),
+        ("OB_DISPLAY", display.to_string()),
         ("OB_BOT", bot_id.to_string()),
-        ("OB_JS", PAGE_JS.to_string()),
+        ("OB_JS", BROWSER_JS.to_string()),
         ("OB_REQ", req.to_string()),
     ];
-    let out = run(&cfg, NODE_SCRIPT, &env, 45).await?;
-    state.screens.touch(bot_id, 0).await;
+    let out = run(cfg, NODE_SCRIPT, &env, 45).await?;
     let text = String::from_utf8_lossy(&out);
     let v: Value = text.lines().rev().find_map(|l| serde_json::from_str(l).ok()).ok_or("The page helper didn't answer")?;
     match v.get("error").and_then(Value::as_str) {
@@ -396,6 +405,11 @@ impl Screens {
         map.insert(bot_id.to_string(), Screen { display, password: password.clone(), child, last_used: now_ms(), viewers: 0 });
         drop(map);
         state.emit("screen.updated", json!({"bot_id": bot_id, "running": true}));
+        // The browser reopened the last session's tabs (that keeps logins); close all but the newest few.
+        let (c, b) = (cfg.clone(), bot_id.to_string());
+        tokio::spawn(async move {
+            let _ = browser_run(&c, display, &b, json!({"mode": "trim", "keep": START_TABS})).await;
+        });
         Ok(Info { display, port: port_of(display), password })
     }
 
@@ -588,9 +602,43 @@ pub async fn computer_tool(state: &Shared, bot_id: &str, name: &str, args: &Valu
             if !(url.starts_with("https://") || url.starts_with("http://") || url == "about:blank") || url.len() > 4000 {
                 return Err("url must start with https:// or http://".into());
             }
-            let script = format!("export DISPLAY=\":$OB_DISPLAY\"; {FIND_BROWSER}ob_browser \"$OB_URL\" && sleep 2");
-            run(&cfg, &script, &[d.clone(), ("OB_BOT", bot_id.to_string()), ("OB_URL", url.clone())], 30).await?;
-            format!("Opened {url} in the browser on your screen.")
+            let new_tab = args.get("new_tab").and_then(Value::as_bool).unwrap_or(false);
+            // Normally the page opens in the tab in front, so tabs don't pile up.
+            let same_tab = !new_tab && browser_run(&cfg, info.display, bot_id, json!({"mode": "navigate", "url": url})).await.is_ok();
+            if !same_tab {
+                let script = format!("export DISPLAY=\":$OB_DISPLAY\"; {FIND_BROWSER}ob_browser \"$OB_URL\" && sleep 2");
+                run(&cfg, &script, &[d.clone(), ("OB_BOT", bot_id.to_string()), ("OB_URL", url.clone())], 30).await?;
+                let _ = browser_run(&cfg, info.display, bot_id, json!({"mode": "trim", "keep": MAX_TABS})).await;
+            }
+            if same_tab {
+                format!("Opened {url} in the tab in front.")
+            } else {
+                format!("Opened {url} in a new tab (at most {MAX_TABS} tabs are kept; the oldest close by themselves).")
+            }
+        }
+        "computer_tabs" => {
+            let action = args.get("action").and_then(Value::as_str).unwrap_or("list");
+            let id = args.get("id").and_then(Value::as_str).unwrap_or("").trim();
+            let req = match action {
+                "list" => json!({"mode": "tabs"}),
+                "switch" | "close" if !id.is_empty() => json!({"mode": action, "id": id}),
+                "switch" | "close" => return Err(format!("Give the id of the tab to {action} (from action list).")),
+                "close_others" => json!({"mode": "close_others"}),
+                _ => return Err("action must be list, switch, close or close_others".into()),
+            };
+            let v = browser_run(&cfg, info.display, bot_id, req).await?;
+            let tabs: Vec<String> = v["tabs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|t| {
+                    let mark = if t["front"] == json!(true) { " (in front)" } else { "" };
+                    let title = crate::util::truncate_chars(t["title"].as_str().unwrap_or(""), 80);
+                    let url = crate::util::truncate_chars(t["url"].as_str().unwrap_or(""), 160);
+                    format!("- [{}] {title} — {url}{mark}", t["id"].as_str().unwrap_or(""))
+                })
+                .collect();
+            format!("Tabs, most recently used first:\n{}\n", tabs.join("\n"))
         }
         "computer_wait" => {
             let secs = args.get("seconds").and_then(Value::as_f64).unwrap_or(2.0).clamp(0.5, 30.0);
@@ -611,7 +659,8 @@ pub fn tool_definitions() -> Vec<Value> {
     let xy = |desc: &str| json!({"type": "integer", "description": desc});
     vec![
         json!({"name": "computer_screenshot", "description": "See your own computer screen (a 1280 x 800 Linux desktop with a Chromium browser). The user can watch it live and take over. Coordinates in the other computer_* tools are pixels on this screenshot, (0,0) = top left.", "inputSchema": {"type": "object", "properties": {}}}),
-        json!({"name": "computer_open", "description": "Open a web page in the browser on your screen (new tab if the browser is already open). Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}),
+        json!({"name": "computer_open", "description": "Open a web page in the browser on your screen, in the tab in front (or a new tab with new_tab:true, to keep the current page open). Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}, "new_tab": {"type": "boolean"}}, "required": ["url"]}}),
+        json!({"name": "computer_tabs", "description": "Manage the browser tabs on your screen: action list (each tab's id, title and address), switch or close (with the tab's id), or close_others (close every tab except the one in front). Close tabs you're done with. Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["list", "switch", "close", "close_others"]}, "id": {"type": "string"}}, "required": ["action"]}}),
         json!({"name": "computer_click", "description": "Click on your screen at (x, y). Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"x": xy("pixels from the left"), "y": xy("pixels from the top"), "button": {"type": "string", "enum": ["left", "right", "middle"]}, "count": {"type": "integer", "description": "2 = double click"}}, "required": ["x", "y"]}}),
         json!({"name": "computer_type", "description": "Type text on your screen (into whatever has focus; click a field first). Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}),
         json!({"name": "computer_key", "description": "Press keys on your screen, e.g. 'Return', 'Tab', 'ctrl+l', 'ctrl+t', 'Page_Down', 'BackSpace'. Several presses: separate with spaces. Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"keys": {"type": "string"}}, "required": ["keys"]}}),

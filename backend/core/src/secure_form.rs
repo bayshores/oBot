@@ -1,7 +1,7 @@
 //! Secure forms: how a Bot asks the user for a password, a 2FA code or another private value.
 //!
 //! The Bot calls `request_form` while a login page is in front on its screen. A form card shows in
-//! the chat; what the user types there goes straight into that page (see screen::page_fill) and is
+//! the chat; what the user types there goes straight into that page (see screen::page_fill and browser.js) and is
 //! never shown to the Bot or saved in the chat. The card is tied to the website that was in front
 //! when the Bot asked, so if the page changes to another website nothing is filled. A password can
 //! also be saved to the Vault as a login. Afterwards the Bot gets a short note saying which boxes
