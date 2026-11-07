@@ -666,13 +666,6 @@ b, strong { font-weight: var(--w-semibold); }
 .code-fig:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
 .code-copy:hover { color: var(--icon); }
 
-/* typing dots */
-.dots { display: inline-flex; align-items: center; gap: 4px; height: 22px; }
-.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); animation: dot 1.4s ease-in-out infinite; }
-.dots i:nth-child(1) { animation-delay: -.32s; }
-.dots i:nth-child(2) { animation-delay: -.16s; }
-@keyframes dot { 0%, 60%, 100% { opacity: .35; transform: none; } 30% { opacity: 1; transform: translateY(-2px); } }
-
 /* time label, NEW divider, events */
 .tsep { align-self: center; height: 28px; padding: 6px 0; margin: 14px 0 8px; font-size: 12px; line-height: 16px; color: var(--text-2); white-space: nowrap; }
 .tsep:first-child { margin-top: 0; }

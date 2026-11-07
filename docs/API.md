@@ -66,7 +66,7 @@ Message = {
       | "widget" | "form" | "attachment" | "visualization" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
-  status: "streaming" | "done" | "running" | "ok" | "failed" | "stopped" | "pending" | "allowed" | "denied" | "expired" | "replaced",
+  status: "done" | "running" | "ok" | "failed" | "stopped" | "pending" | "allowed" | "denied" | "expired" | "replaced",
           // expired = approval left open when openbot restarted; stopped = a tool cut off by Stop or by a new
           // message; replaced = a secure form closed because the Bot asked again with a newer one
   meta: object,           // see below
@@ -250,7 +250,7 @@ Errors: non-2xx with `{error: string}`.
 
 * `hello {version}`
 * `bot.created {bot}` · `bot.updated {bot}` · `bot.deleted {bot_id}`
-* `message.created {message}` · `message.updated {message}` (streaming text, tool finished, approval decided, queued mark changed) · `messages.cleared {bot_id}` · `messages.deleted {bot_id, ids[]}`
+* `message.created {message}` (a Bot reply arrives once, when it's finished; while it's being written, `bot.activity.label` is "Writing") · `message.updated {message}` (tool finished, approval decided, queued mark changed) · `messages.cleared {bot_id}` · `messages.deleted {bot_id, ids[]}`
 * `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished)
 * `devices.updated` (a device was paired or removed; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)

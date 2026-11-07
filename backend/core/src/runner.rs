@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::anyhow;
 use serde_json::{json, Value};
@@ -951,7 +951,7 @@ async fn drive(
     let stderr = stderr_buf.lock().await.clone();
 
     if resume && (turn.resume_failed || (!turn.got_result && resume_failed(&stderr))) {
-        turn.cleanup(true);
+        turn.cleanup();
         return Ok(Outcome::ResumeFailed);
     }
     let end = if steer.load(Ordering::SeqCst) {
@@ -975,8 +975,8 @@ struct Turn {
     cur_api_msg: String,
     /// content-block index -> message id (text blocks of the current model message)
     blocks: HashMap<u64, String>,
-    /// messages currently streaming in
-    live: HashMap<String, (Message, bool /*saved*/, Instant /*last emit*/)>,
+    /// Bot replies still being written. Each is shown once, when it's finished.
+    live: HashMap<String, Message>,
     streamed_api_msgs: HashSet<String>,
     /// Text Claude Code made up itself (model "<synthetic>"), e.g. "You've hit your weekly limit".
     /// Held back until the run's result: an error result shows the same text as an error, so
@@ -1159,9 +1159,10 @@ impl Turn {
                     set_activity(&self.state, &self.bot_id, Some((kind, &label))).await;
                 }
                 if bt == "text" {
-                    let m = self.new_msg("bot", "", "streaming", json!({}));
+                    set_activity(&self.state, &self.bot_id, Some(("thinking", "Writing"))).await;
+                    let m = self.new_msg("bot", "", "done", json!({}));
                     self.blocks.insert(idx, m.id.clone());
-                    self.live.insert(m.id.clone(), (m, false, Instant::now()));
+                    self.live.insert(m.id.clone(), m);
                     self.streamed_api_msgs.insert(self.cur_api_msg.clone());
                 }
             }
@@ -1171,26 +1172,14 @@ impl Turn {
                 }
                 let delta = ev.pointer("/delta/text").and_then(Value::as_str).unwrap_or("");
                 let Some(id) = self.blocks.get(&idx).cloned() else { return };
-                let Some((m, saved, last)) = self.live.get_mut(&id) else { return };
-                m.text.push_str(delta);
-                if !*saved {
-                    if m.text.trim().is_empty() {
-                        return;
-                    }
-                    m.html = markdown::render(&m.text);
-                    let _ = self.state.db.upsert_message(m);
-                    self.state.emit_message(true, m);
-                    *saved = true;
-                    *last = Instant::now();
-                } else if last.elapsed() >= Duration::from_millis(50) {
-                    m.html = markdown::render(&m.text);
-                    self.state.emit_message(false, m);
-                    *last = Instant::now();
+                if let Some(m) = self.live.get_mut(&id) {
+                    m.text.push_str(delta);
                 }
             }
             "content_block_stop" => {
                 if let Some(id) = self.blocks.remove(&idx) {
                     self.finalize(&id).await;
+                    set_activity(&self.state, &self.bot_id, Some(("thinking", "Thinking"))).await;
                 }
             }
             _ => {}
@@ -1198,18 +1187,14 @@ impl Turn {
     }
 
     async fn finalize(&mut self, id: &str) {
-        let Some((mut m, saved, _)) = self.live.remove(id) else { return };
+        let Some(mut m) = self.live.remove(id) else { return };
         if m.text.trim().is_empty() {
-            if saved {
-                let _ = self.state.db.delete_message(&m.id);
-            }
             return;
         }
-        m.status = "done".into();
         m.text = m.text.trim().to_string();
         m.html = markdown::render(&m.text);
         let _ = self.state.db.upsert_message(&m);
-        self.state.emit_message(!saved, &m);
+        self.state.emit_message(true, &m);
         self.bump_bot(&m.text, 1).await;
     }
 
@@ -1372,13 +1357,9 @@ impl Turn {
         }
     }
 
-    /// Close anything still open without adding messages.
-    fn cleanup(&mut self, delete: bool) {
-        for (_, (m, saved, _)) in self.live.drain() {
-            if saved && delete {
-                let _ = self.state.db.delete_message(&m.id);
-            }
-        }
+    /// Drop replies still being written, without showing them.
+    fn cleanup(&mut self) {
+        self.live.clear();
     }
 
     /// Close the turn. Returns the failure to report, if it failed (and wasn't stopped).

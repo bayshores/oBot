@@ -2018,7 +2018,6 @@
   function activityFor(b, list) {
     if (!b.running) return null;
     const last = list[list.length - 1];
-    if (last && last.role === 'bot' && last.status === 'streaming') return null;
     if (last && last.role === 'approval' && last.status === 'pending') return null;
     if (last && (last.role === 'widget' || last.role === 'form') && openWidget(list)) return null;
     if (!actEl) {
@@ -2182,12 +2181,6 @@
     return w;
   }
   function fillBotBubble(bubble, m) {
-    bubble.classList.toggle('streaming', m.status === 'streaming');
-    if (!m.text && !m.html && m.status === 'streaming') {
-      bubble.textContent = '';
-      bubble.append(h('span', { class: 'dots', 'aria-label': 'Typing' }, h('i'), h('i'), h('i')));
-      return;
-    }
     if (bubble.classList.contains('emoji')) {
       bubble.textContent = m.text;
       return;
