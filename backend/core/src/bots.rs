@@ -99,12 +99,12 @@ pub async fn create(st: &Shared, b: &NewBot) -> anyhow::Result<Bot> {
 /// message, e.g. why another Bot set it up.
 pub async fn say_hello(st: &Shared, bot: &Bot, briefing: &str) {
     let mut intro = if bot.instructions.trim().is_empty() {
-        "[openbot] You were just created and this is the start of your chat with the user. Say hi in one or two short, \
+        "[oBot] You were just created and this is the start of your chat with the user. Say hi in one or two short, \
          friendly messages: introduce yourself by name, say what you can do on this computer, and ask what they'd \
          like help with or what you should focus on. Don't use any tools."
             .to_string()
     } else {
-        "[openbot] You were just created and this is the start of your chat with the user. Say hi in one or two short, \
+        "[oBot] You were just created and this is the start of your chat with the user. Say hi in one or two short, \
          friendly messages: introduce yourself by name and your role (from your standing instructions) and ask how \
          you can help. Don't use any tools."
             .to_string()

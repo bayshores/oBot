@@ -487,7 +487,7 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
             let summary = format!("Share the {what} “{}” in {}'s Google Drive: {who}", s(&f, "name"), a.email);
             let note = s(args, "message");
             let input = json!({"kind": "drive", "action": "share", "account": a.email, "name": s(&f, "name"), "id": s(&f, "id"), "with": s(args, "with"), "message": note});
-            let ok = crate::api::ask_approval(st, &bot.id, "mcp__openbot__drive_share", &summary, &input, "", "")
+            let ok = crate::api::ask_approval(st, &bot.id, "mcp__obot__drive_share", &summary, &input, "", "")
                 .await
                 .map_err(|e| e.to_string())?;
             if !ok {
@@ -505,7 +505,7 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
             let what = if s(&f, "mimeType") == FOLDER { "folder" } else { "file" };
             let summary = format!("Move the {what} “{}” in {}'s Google Drive to the trash", s(&f, "name"), a.email);
             let input = json!({"kind": "drive", "action": "trash", "account": a.email, "name": s(&f, "name"), "id": s(&f, "id")});
-            let ok = crate::api::ask_approval(st, &bot.id, "mcp__openbot__drive_trash", &summary, &input, "", "")
+            let ok = crate::api::ask_approval(st, &bot.id, "mcp__obot__drive_trash", &summary, &input, "", "")
                 .await
                 .map_err(|e| e.to_string())?;
             if !ok {

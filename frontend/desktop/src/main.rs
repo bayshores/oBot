@@ -1,8 +1,8 @@
-//! openbot desktop app.
+//! oBot desktop app.
 //!
-//! Starts the openbot server inside the app (only reachable from this computer), then opens a
+//! Starts the oBot server inside the app (only reachable from this computer), then opens a
 //! window showing its UI. In Settings > Computer the UI can switch to a remote computer
-//! (e.g. a Windows PC running `openbot-server` 24/7).
+//! (e.g. a Windows PC running `obot-server` 24/7).
 
 // No extra console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -26,7 +26,7 @@ fn set_badge(app: tauri::AppHandle, count: i64) {
     }
 }
 
-/// Is the openbot window focused? (No notification when you're already looking.)
+/// Is the oBot window focused? (No notification when you're already looking.)
 #[tauri::command]
 fn is_focused(app: tauri::AppHandle) -> bool {
     app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
@@ -109,7 +109,7 @@ fn free_path(dir: &Path, name: &str) -> PathBuf {
 #[tauri::command]
 async fn save_file(url: String, name: String, open: bool) -> Result<(String, bool), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) || !url.contains("/files/") {
-        return Err("Only files from openbot can be saved".into());
+        return Err("Only files from oBot can be saved".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let dir = dirs::download_dir().ok_or("Couldn't find the Downloads folder")?;
@@ -137,32 +137,32 @@ async fn save_file(url: String, name: String, open: bool) -> Result<(String, boo
 fn main() {
     // Claude Code starts this same program with `mcp-approve` to ask the user for permission.
     if std::env::args().nth(1).as_deref() == Some("mcp-approve") {
-        if let Err(e) = openbot_core::mcp::run_approval_mcp() {
-            eprintln!("openbot approval helper failed: {e}");
+        if let Err(e) = obot_core::mcp::run_approval_mcp() {
+            eprintln!("oBot approval helper failed: {e}");
         }
         return;
     }
-    // ...and with `hook <event>` at certain moments of a run (see openbot_core::hooks).
+    // ...and with `hook <event>` at certain moments of a run (see obot_core::hooks).
     if std::env::args().nth(1).as_deref() == Some("hook") {
         let args: Vec<String> = std::env::args().skip(2).collect();
-        std::process::exit(openbot_core::hooks::run(&args));
+        std::process::exit(obot_core::hooks::run(&args));
     }
 
-    openbot_core::util::fix_path_env();
+    obot_core::util::fix_path_env();
 
-    let server = tauri::async_runtime::block_on(openbot_core::start(openbot_core::ServeOptions {
+    let server = tauri::async_runtime::block_on(obot_core::start(obot_core::ServeOptions {
         host: "127.0.0.1".into(),
         port: 0,
         data_dir: None,
     }))
-    .expect("openbot couldn't start its local server");
+    .expect("oBot couldn't start its local server");
 
     let url = format!("http://127.0.0.1:{}/?token={}", server.addr.port(), server.token);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file])
-        // Menu bar: openbot › Settings… (⌘,) and Connect to Remote Computer…
+        // Menu bar: oBot › Settings… (⌘,) and Connect to Remote Computer…
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;
             #[cfg(target_os = "macos")]
@@ -178,8 +178,8 @@ fn main() {
         })
         .on_menu_event(|app, event| {
             let call = match event.id().as_ref() {
-                "settings" => "window.openbotOpenSettings && window.openbotOpenSettings()",
-                "remote" => "window.openbotOpenSettings && window.openbotOpenSettings('computer')",
+                "settings" => "window.obotOpenSettings && window.obotOpenSettings()",
+                "remote" => "window.obotOpenSettings && window.obotOpenSettings('computer')",
                 _ => return,
             };
             if let Some(w) = app.get_webview_window("main") {
@@ -189,14 +189,14 @@ fn main() {
         })
         .setup(move |app| {
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
-                .title("openbot")
+                .title("oBot")
                 .inner_size(1040.0, 760.0)
                 .min_inner_size(720.0, 520.0)
-                // openbot is always dark (no light mode), so the window frame and loading background match.
+                // oBot is always dark (no light mode), so the window frame and loading background match.
                 .theme(Some(tauri::Theme::Dark))
                 .background_color(tauri::window::Color(11, 11, 12, 255))
                 // A link that asks for a new window opens in the normal web browser, never in a bare
-                // openbot window.
+                // oBot window.
                 .on_new_window(|url, _| {
                     if matches!(url.scheme(), "http" | "https") {
                         let _ = os_open(url.as_str(), false);
@@ -211,7 +211,7 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running openbot");
+        .expect("error while running oBot");
 }
 
 #[cfg(test)]
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn saved_names_never_overwrite() {
-        let dir = std::env::temp_dir().join(format!("openbot-save-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("oBot-save-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(free_path(&dir, "notes.txt"), dir.join("notes.txt"));
         std::fs::write(dir.join("notes.txt"), "a").unwrap();

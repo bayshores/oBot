@@ -1,7 +1,7 @@
 //! GitHub for Bots (Settings › Connections › Connect GitHub).
 //!
-//! Signing in uses GitHub's device flow: openbot shows a short code, the user enters it on
-//! github.com/login/device (from any device, phone included) and allows openbot. The token is saved
+//! Signing in uses GitHub's device flow: oBot shows a short code, the user enters it on
+//! github.com/login/device (from any device, phone included) and allows oBot. The token is saved
 //! encrypted (see vault.rs) on the computer the Bots run on, and only the Bots the user picked can
 //! use it.
 //!
@@ -97,7 +97,7 @@ fn agent() -> ureq::Agent {
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
         .timeout_write(Duration::from_secs(30))
-        .user_agent("openbot")
+        .user_agent("oBot")
         .build()
 }
 
@@ -162,7 +162,7 @@ async fn gh(st: &Shared, method: &str, path: &str, body: Option<Value>) -> Resul
             let settings = st.config.read().await.settings_json();
             st.emit("settings.updated", json!({ "settings": settings }));
             tracing::warn!("github: {} needs reconnecting", login.unwrap_or_default());
-            Err("GitHub stopped accepting openbot's access. Ask the user to open Settings › Connections and click Reconnect next to GitHub.".into())
+            Err("GitHub stopped accepting oBot's access. Ask the user to open Settings › Connections and click Reconnect next to GitHub.".into())
         }
         Err((404, _)) => Err(format!("GitHub says {path} doesn't exist, or the user's account can't see it")),
         Err((403, msg)) if msg.contains("OAuth App access restrictions") => {
@@ -194,7 +194,7 @@ fn post_form(url: &str, form: &[(&str, &str)]) -> Result<Value, (u16, String)> {
 /// Start signing in. Returns the code to show and where to enter it; the result arrives later as
 /// a `github.connected` or `github.failed` event.
 pub async fn connect(st: &Shared) -> Result<Value, String> {
-    let client = st.config.read().await.oauth.github().ok_or("GitHub sign-in isn't set up in this version of openbot")?;
+    let client = st.config.read().await.oauth.github().ok_or("GitHub sign-in isn't set up in this version of oBot")?;
     let c2 = client.clone();
     let v = tokio::task::spawn_blocking(move || post_form("https://github.com/login/device/code", &[("client_id", &c2), ("scope", SCOPES)]))
         .await
@@ -202,7 +202,7 @@ pub async fn connect(st: &Shared) -> Result<Value, String> {
         .map_err(|(code, msg)| format!("GitHub: {msg} (HTTP {code})"))?;
     if let Some(err) = v.get("error").and_then(Value::as_str) {
         return Err(match err {
-            "device_flow_disabled" => "Device sign-in is turned off for openbot's GitHub app. Turn on Enable Device Flow in the app's settings on github.com.".into(),
+            "device_flow_disabled" => "Device sign-in is turned off for oBot's GitHub app. Turn on Enable Device Flow in the app's settings on github.com.".into(),
             _ => format!("GitHub: {}", v.get("error_description").and_then(Value::as_str).unwrap_or(err)),
         });
     }
@@ -264,7 +264,7 @@ async fn wait_for_user(st: Shared, client: String, device: String, mut interval:
         }
         let token = v.get("access_token").and_then(Value::as_str).unwrap_or("").to_string();
         if token.is_empty() {
-            return fail(&st, "GitHub didn't give openbot access. Try again.".into());
+            return fail(&st, "GitHub didn't give oBot access. Try again.".into());
         }
         let scopes = v.get("scope").and_then(Value::as_str).unwrap_or("").replace(',', " ");
         let t = token.clone();
@@ -303,7 +303,7 @@ async fn wait_for_user(st: Shared, client: String, device: String, mut interval:
     }
 }
 
-/// Forget the connection. (The user can also remove openbot under github.com › Settings ›
+/// Forget the connection. (The user can also remove oBot under github.com › Settings ›
 /// Applications › Authorized OAuth Apps; revoking from here would need the app's secret.)
 pub async fn remove(st: &Shared) -> Result<(), String> {
     st.config.write().await.github = None;
@@ -704,7 +704,7 @@ async fn login(st: &Shared) -> String {
 }
 
 async fn approve(st: &Shared, bot: &Bot, tool: &str, summary: &str, input: Value) -> Result<bool, String> {
-    crate::api::ask_approval(st, &bot.id, &format!("mcp__openbot__{tool}"), summary, &input, "", "").await.map_err(|e| e.to_string())
+    crate::api::ask_approval(st, &bot.id, &format!("mcp__obot__{tool}"), summary, &input, "", "").await.map_err(|e| e.to_string())
 }
 
 // ------------------------------------------------------------------ git
@@ -838,7 +838,7 @@ async fn push(st: &Shared, bot: &Bot, args: &Value) -> Result<String, String> {
         return Ok(format!("Nothing to push: {repo} {branch} already has every commit."));
     }
     if exists && git(st, &dir, &["merge-base", "--is-ancestor", &remote, "HEAD"]).await.is_err() {
-        return Err(format!("GitHub's {branch} has commits this copy doesn't. Pull (or rebase) first; openbot never force-pushes."));
+        return Err(format!("GitHub's {branch} has commits this copy doesn't. Pull (or rebase) first; oBot never force-pushes."));
     }
     let count = log.lines().count();
     let summary = format!(

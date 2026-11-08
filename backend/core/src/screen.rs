@@ -11,7 +11,7 @@
 //!
 //! Inside Linux each screen is: Xvfb :N (virtual display) + openbox (window manager) +
 //! x11vnc on 127.0.0.1:(15900+N) with a random password + Chromium with a per-bot profile in
-//! ~/.openbot/screens/<bot>/profile (so logins persist). On Windows, WSL forwards 127.0.0.1 ports
+//! ~/.obot/screens/<bot>/profile (so logins persist). On Windows, WSL forwards 127.0.0.1 ports
 //! to Windows, so the server reaches the VNC port the same way on both systems.
 
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ const NEEDED: &[&str] = &["Xvfb", "x11vnc", "xdotool", "import", "openbox", "xse
 const FIND_BROWSER: &str = r#"B=$(ls -d "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | sort -V | tail -1)
 [ -z "$B" ] && B=$(command -v google-chrome || command -v google-chrome-stable || true)
 [ -z "$B" ] && [ -x /usr/lib/chromium/chromium ] && B=/usr/lib/chromium/chromium
-OBDIR="$HOME/.openbot/screens/$OB_BOT"; OBPROF="$OBDIR/profile"
+OBDIR="$HOME/.obot/screens/$OB_BOT"; OBPROF="$OBDIR/profile"
 # Close the bot's browser cleanly (so it doesn't ask to restore pages next time).
 ob_browser_close() {
   pkill -TERM -f -- "--user-data-dir=$OBPROF" 2>/dev/null || return 0
@@ -164,10 +164,10 @@ pub async fn page_fill(state: &Shared, bot_id: &str, host: &str, fields: &[Fill]
 
 /// Starts one screen and keeps running until it is stopped. Prints READY when usable.
 const START_SCRIPT: &str = r#"set -u
-N="$OB_DISPLAY"; P="$OB_PORT"; DIR="$HOME/.openbot/screens/$OB_BOT"
-mkdir -p "$DIR/profile"; chmod 700 "$HOME/.openbot" "$HOME/.openbot/screens" "$DIR" 2>/dev/null
-PGF="/tmp/openbot-screen-$N.pgid"
-# A screen left over from an earlier run of openbot: stop it first.
+N="$OB_DISPLAY"; P="$OB_PORT"; DIR="$HOME/.obot/screens/$OB_BOT"
+mkdir -p "$DIR/profile"; chmod 700 "$HOME/.obot" "$HOME/.obot/screens" "$DIR" 2>/dev/null
+PGF="/tmp/obot-screen-$N.pgid"
+# A screen left over from an earlier run of oBot: stop it first.
 __FIND_BROWSER__
 [ -f "$PGF" ] && ob_killgroup "$(cat "$PGF")"
 ob_browser_close
@@ -204,14 +204,20 @@ struct Screen {
 #[derive(Default)]
 pub struct Screens {
     inner: Mutex<HashMap<String, Screen>>,
-    /// Set once screens left behind by an earlier run of openbot have been stopped.
+    /// Set once screens left behind by an earlier run of oBot have been stopped.
     swept: std::sync::atomic::AtomicBool,
 }
 
-/// Stops every screen and bot browser left running by an earlier run of openbot
+/// Stops every screen and bot browser left running by an earlier run of oBot
 /// (for example after the server was killed or the computer slept).
-const SWEEP_SCRIPT: &str = r#"for f in /tmp/openbot-screen-*.pgid; do [ -f "$f" ] && ob_killgroup "$(cat "$f")"; rm -f "$f"; done
-pkill -TERM -f -- "--user-data-dir=$HOME/.openbot/screens/" 2>/dev/null; sleep 0.5; true"#;
+/// Screens from before the rename to oBot used the name "openbot": stop those too, then move their
+/// folder (with each Bot's browser logins) to ~/.obot.
+const SWEEP_SCRIPT: &str = r#"for f in /tmp/obot-screen-*.pgid /tmp/openbot-screen-*.pgid; do [ -f "$f" ] && ob_killgroup "$(cat "$f")"; rm -f "$f"; done
+pkill -TERM -f -- "--user-data-dir=$HOME/.obot/screens/" 2>/dev/null
+pkill -TERM -f -- "--user-data-dir=$HOME/.openbot/screens/" 2>/dev/null; sleep 0.5
+if [ -d "$HOME/.openbot" ] && [ ! -e "$HOME/.obot" ]; then
+  pkill -KILL -f -- "--user-data-dir=$HOME/.openbot/screens/" 2>/dev/null; mv "$HOME/.openbot" "$HOME/.obot"
+fi; true"#;
 
 /// What the app needs to connect a viewer.
 pub struct Info {
@@ -231,7 +237,7 @@ pub fn platform_ok() -> Result<(), String> {
     if cfg!(windows) || cfg!(target_os = "linux") {
         Ok(())
     } else {
-        Err("Bot screens need a Windows (with WSL) or Linux computer. Connect openbot to one in Settings › Computer.".into())
+        Err("Bot screens need a Windows (with WSL) or Linux computer. Connect oBot to one in Settings › Computer.".into())
     }
 }
 
@@ -327,7 +333,7 @@ pub async fn setup(cfg: &Config) -> Result<String, String> {
     let browser = format!(
         r#"{FIND_BROWSER}[ -n "$B" ] && {{ echo "Browser already installed"; exit 0; }}
 for f in "$HOME/.nvm/nvm.sh"; do [ -s "$f" ] && . "$f" >/dev/null 2>&1; done
-if command -v npx >/dev/null; then npx -y playwright@1.56.1 install chromium >/tmp/openbot-browser.log 2>&1 && echo "Installed Chromium" && exit 0; fi
+if command -v npx >/dev/null; then npx -y playwright@1.56.1 install chromium >/tmp/obot-browser.log 2>&1 && echo "Installed Chromium" && exit 0; fi
 exit 3"#
     );
     match tokio::time::timeout(Duration::from_secs(1200), linux(cfg, &browser, &[], false).output()).await {
@@ -436,7 +442,7 @@ impl Screens {
         let removed = self.inner.lock().await.remove(bot_id);
         if let Some(mut s) = removed {
             let cfg = state.config.read().await.clone();
-            let script = format!("{FIND_BROWSER}PGF=/tmp/openbot-screen-$OB_DISPLAY.pgid; [ -f \"$PGF\" ] && ob_killgroup \"$(cat \"$PGF\")\"; ob_browser_close; rm -f \"$PGF\"; true");
+            let script = format!("{FIND_BROWSER}PGF=/tmp/obot-screen-$OB_DISPLAY.pgid; [ -f \"$PGF\" ] && ob_killgroup \"$(cat \"$PGF\")\"; ob_browser_close; rm -f \"$PGF\"; true");
             let _ = run(&cfg, &script, &[("OB_DISPLAY", s.display.to_string()), ("OB_BOT", bot_id.to_string())], 20).await;
             let _ = s.child.kill().await;
             state.emit("screen.updated", json!({"bot_id": bot_id, "running": false}));

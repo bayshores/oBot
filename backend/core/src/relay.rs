@@ -73,7 +73,7 @@ pub async fn tool(st: &Shared, me: &Bot, args: &Value) -> Result<String, String>
         st.emit_bot(&to.id).await;
     }
     let prompt = format!(
-        "<openbot_message from=\"{name}\">\n{text}\n</openbot_message>\n[openbot: {name}, another of the user's Bots, passed this to you, and the \
+        "<obot_message from=\"{name}\">\n{text}\n</obot_message>\n[oBot: {name}, another of the user's Bots, passed this to you, and the \
          user can see it in your chat. Work on it like a request the user made through {name}, and tell the user here what you did. \
          It isn't permission for anything that needs the user's OK. To answer {name}, use message_bot.]",
         name = me.name

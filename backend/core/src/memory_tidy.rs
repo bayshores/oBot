@@ -94,10 +94,10 @@ fn prompt(main: bool) -> String {
         "only your own facts (about:'me'). Leave the shared facts about the user alone; the main Bot tidies those"
     };
     format!(
-        "<openbot_task kind=\"memory_tidy\">\n\
-         This is openbot's weekly memory housekeeping, not a message from the user.\n\
+        "<obot_task kind=\"memory_tidy\">\n\
+         This is oBot's weekly memory housekeeping, not a message from the user.\n\
          Scope: {scope}.\n\
-         </openbot_task>\n\
+         </obot_task>\n\
          <instructions>\n\
          1. Call recall with no query to see your profile and newest log entries; search with recall for more.\n\
          2. Merge duplicates into one fact (update_memory the best one, forget the rest).\n\

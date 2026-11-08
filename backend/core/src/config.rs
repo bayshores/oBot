@@ -105,7 +105,7 @@ impl Default for Config {
     fn default() -> Self {
         let root = dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("OpenBot");
+            .join("oBot");
         Self {
             token: random_token(32),
             auth_mode: "subscription".into(),
@@ -231,15 +231,13 @@ fn mask_mcp(v: &Value) -> Value {
     v
 }
 
-/// Where openbot keeps its files.
-/// macOS: ~/Library/Application Support/openbot · Windows: %APPDATA%\openbot · Linux: ~/.local/share/openbot
+/// Where oBot keeps its files.
+/// macOS: ~/Library/Application Support/oBot · Windows: %APPDATA%\oBot · Linux: ~/.local/share/oBot
 pub fn default_data_dir() -> PathBuf {
-    if let Ok(d) = std::env::var("OPENBOT_DATA_DIR") {
+    if let Ok(d) = std::env::var("OBOT_DATA_DIR") {
         if !d.trim().is_empty() {
             return PathBuf::from(d);
         }
     }
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("openbot")
+    crate::migrate::data_dir(&dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")))
 }

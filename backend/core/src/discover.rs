@@ -1,7 +1,7 @@
-//! Finding computers that run openbot, for the "Connect to another computer" setup.
+//! Finding computers that run oBot, for the "Connect to another computer" setup.
 //!
-//! openbot only answers on Tailscale (see README), so discovery asks this computer's Tailscale
-//! for the list of your devices and checks each online one for openbot at
+//! oBot only answers on Tailscale (see README), so discovery asks this computer's Tailscale
+//! for the list of your devices and checks each online one for oBot at
 //! `https://<device>.<tailnet>.ts.net/api/hello`.
 
 use std::path::PathBuf;
@@ -81,14 +81,15 @@ pub async fn tailscale_status() -> Value {
     })
 }
 
-/// Ask one address whether openbot runs there. Returns its /api/hello answer.
+/// Ask one address whether oBot runs there. Returns its /api/hello answer.
 pub fn probe(url: &str) -> Option<Value> {
     let agent = ureq::AgentBuilder::new().timeout(Duration::from_millis(3500)).build();
     let v: Value = agent.get(&format!("{}/api/hello", url.trim_end_matches('/'))).call().ok()?.into_json().ok()?;
-    (v.get("app").and_then(Value::as_str) == Some("openbot")).then_some(v)
+    // "openbot" is what computers answer before they update to oBot.
+    matches!(v.get("app").and_then(Value::as_str), Some("oBot" | "openbot")).then_some(v)
 }
 
-/// Check every online Tailscale device for openbot (in parallel). `[{name, dns, os, url, version, computer_name}]`
+/// Check every online Tailscale device for oBot (in parallel). `[{name, dns, os, url, version, computer_name}]`
 pub async fn discover() -> Value {
     let status = tailscale_status().await;
     let peers: Vec<Value> = status["peers"]

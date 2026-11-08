@@ -68,7 +68,7 @@ pub async fn user_react(st: &Shared, msg_id: &str, emoji: &str, on: bool) -> Res
             let mut notes = st.db.kv_get(&key).unwrap_or_default();
             // Keep it short if the user reacts a lot before writing again.
             if notes.lines().count() < 10 {
-                notes.push_str(&format!("[openbot: The user reacted {emoji} to your message \"{}\".]\n", truncate_chars(&preview(&m.text), 160)));
+                notes.push_str(&format!("[oBot: The user reacted {emoji} to your message \"{}\".]\n", truncate_chars(&preview(&m.text), 160)));
                 st.db.kv_set(&key, &notes);
             }
         }
@@ -102,7 +102,7 @@ pub fn reply_note(reply: &Value, me: &str) -> String {
         Some(_) => format!("{}'s", reply.get("who").and_then(Value::as_str).unwrap_or("another Bot")),
         None => "their own".to_string(),
     };
-    format!("[openbot: The user is replying to {whose} message \"{quote}\".]\n")
+    format!("[oBot: The user is replying to {whose} message \"{quote}\".]\n")
 }
 
 pub fn tool_definition() -> Value {
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn reply_notes_say_whose() {
         let r = json!({"who": "Food Bot", "bot": "f1", "quote": "Try the salmon"});
-        assert_eq!(reply_note(&r, "f1"), "[openbot: The user is replying to your message \"Try the salmon\".]\n");
+        assert_eq!(reply_note(&r, "f1"), "[oBot: The user is replying to your message \"Try the salmon\".]\n");
         assert!(reply_note(&r, "s2").contains("Food Bot's message"));
         assert!(reply_note(&json!({"who": "You", "bot": null, "quote": "hi"}), "s2").contains("their own message"));
     }

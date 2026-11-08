@@ -1,6 +1,6 @@
-//! Phone notifications (Web Push). A phone that added openbot to its home screen subscribes in
-//! Settings › General › Notifications. When a Bot finishes or needs you and no openbot window is in
-//! use anywhere, openbot sends the phone a notification through its browser's push service (Apple's
+//! Phone notifications (Web Push). A phone that added oBot to its home screen subscribes in
+//! Settings › General › Notifications. When a Bot finishes or needs you and no oBot window is in
+//! use anywhere, oBot sends the phone a notification through its browser's push service (Apple's
 //! for iPhones). The message is encrypted for that phone, so the push service can't read it, and it
 //! goes out from this computer: the phone doesn't need to reach it for the notification to arrive.
 
@@ -20,7 +20,7 @@ use crate::state::Shared;
 use crate::util::{now_ms, preview, truncate_chars};
 
 /// Push services want to know who sends (RFC 8292). This names the app, not the user.
-const CONTACT: &str = "https://github.com/bayshores/openbot";
+const CONTACT: &str = "https://github.com/bayshores/oBot";
 /// Most phones a user would subscribe; old ones are dropped first.
 const MAX_SUBS: usize = 20;
 /// How long a push service keeps a notification for a phone that's off.
@@ -227,7 +227,7 @@ fn unread_total(st: &Shared) -> i64 {
 
 // ---------------------------------------------------------------- when to notify
 
-/// Open openbot windows (event connections) → whether someone is using that window right now:
+/// Open oBot windows (event connections) → whether someone is using that window right now:
 /// it's in front, focused, and was touched in the last couple of minutes.
 static ACTIVE: Mutex<Option<HashMap<u64, bool>>> = Mutex::new(None);
 /// Notifications already sent (message id + kind), so an edited message doesn't notify again.
@@ -266,7 +266,7 @@ fn worth_telling(created: bool, m: &Message) -> Option<(String, bool, String)> {
     }
 }
 
-/// Called for every message openbot shows. Cheap when there's nothing to send.
+/// Called for every message oBot shows. Cheap when there's nothing to send.
 pub fn on_message(st: &Shared, created: bool, m: &Message) {
     let Some((key, urgent, text)) = worth_telling(created, m) else { return };
     // Older messages being edited (a reaction, say) aren't news.

@@ -1,6 +1,6 @@
-# Using openbot from a phone
+# Using oBot from a phone
 
-How other always-on, self-hosted agent apps put themselves on a phone, and why openbot uses a home-screen
+How other always-on, self-hosted agent apps put themselves on a phone, and why oBot uses a home-screen
 web app over Tailscale with Web Push. Researched November 2026 from the public sources linked below.
 
 ## What similar apps do
@@ -18,7 +18,7 @@ Sources: [OpenClaw iOS docs](https://docs.openclaw.ai/platforms/ios), [OpenClaw 
 [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control), [Home Assistant notifications](https://companion.home-assistant.io/docs/notifications/actionable-notifications/),
 [Open WebUI as an app](https://docs.openwebui.com/getting-started/open-webui-as-app).
 
-## Options for openbot
+## Options for oBot
 
 * **Native app (Tauri 2 for iOS).** Needs the paid Apple Developer Program: free signing expires after 7 days
   and can't use push notifications ([Apple memberships](https://developer.apple.com/support/compare-memberships/),
@@ -28,7 +28,7 @@ Sources: [OpenClaw iOS docs](https://docs.openclaw.ai/platforms/ios), [OpenClaw 
   see every message, anyone can message a bot, and a leaked bot token controls it
   ([Bot API](https://core.telegram.org/bots/api), [FAQ](https://telegram.org/faq)). OpenClaw's docs note that
   allowlists don't stop prompt injection from untrusted content.
-* **Home-screen web app (chosen).** openbot already serves its UI over Tailscale Serve HTTPS. Since iOS 16.4 a
+* **Home-screen web app (chosen).** oBot already serves its UI over Tailscale Serve HTTPS. Since iOS 16.4 a
   web app added to the Home Screen can get Web Push, with no developer account
   ([WebKit](https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/)). The computer sends the push
   out to Apple, so it works even though the computer is only reachable on the tailnet, and the message is
@@ -47,10 +47,10 @@ Sources: [OpenClaw iOS docs](https://docs.openclaw.ai/platforms/ios), [OpenClaw 
 ## Security lessons applied
 
 * OpenClaw's CVE-2026-25253: its web UI took a server address from the link and sent its token there
-  ([advisory](https://github.com/advisories/GHSA-g8p2-7wf7-98mq)). openbot never takes a server address from a
+  ([advisory](https://github.com/advisories/GHSA-g8p2-7wf7-98mq)). oBot never takes a server address from a
   link, and keeps tokens out of web addresses (headers and WebSocket subprotocols; a file-only key for images).
 * Exposed instances: tens of thousands of OpenClaw gateways were found on the open internet
-  ([Infosecurity](https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw)). openbot listens
+  ([Infosecurity](https://www.infosecurity-magazine.com/news/researchers-40000-exposed-openclaw)). oBot listens
   on 127.0.0.1 and is reached only through Tailscale Serve.
 * Pairing codes are single use, expire in 10 minutes and are rate limited; the QR link keeps the code after `#`,
   which the browser never sends.

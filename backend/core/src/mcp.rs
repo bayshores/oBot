@@ -1,8 +1,8 @@
 //! The permission helper.
 //!
-//! Claude Code is started with `--permission-prompt-tool mcp__openbot__approve`. When it wants to
+//! Claude Code is started with `--permission-prompt-tool mcp__obot__approve`. When it wants to
 //! do something that needs approval, it calls this tiny MCP server (this same program started with
-//! the `mcp-approve` argument). We forward the request to the openbot server, which shows an
+//! the `mcp-approve` argument). We forward the request to the oBot server, which shows an
 //! Allow / Deny card in the chat and waits for the user's click.
 
 use std::io::{BufRead, Write};
@@ -34,8 +34,8 @@ fn ask_server(url: &str, token: &str, bot_id: &str, args: &Value) -> Value {
     {
         Ok(resp) => resp
             .into_json::<Value>()
-            .unwrap_or_else(|_| json!({"behavior": "deny", "message": "openbot sent an unreadable answer."})),
-        Err(e) => json!({"behavior": "deny", "message": format!("openbot could not ask the user: {e}")}),
+            .unwrap_or_else(|_| json!({"behavior": "deny", "message": "oBot sent an unreadable answer."})),
+        Err(e) => json!({"behavior": "deny", "message": format!("oBot could not ask the user: {e}")}),
     }
 }
 
@@ -58,17 +58,17 @@ fn call_tool(url: &str, token: &str, bot_id: &str, name: &str, args: &Value) -> 
                 v.get("is_error").and_then(Value::as_bool).unwrap_or(false),
                 v.get("image").and_then(|i| Some((i.get("data")?.as_str()?.to_string(), i.get("mime")?.as_str()?.to_string()))),
             ),
-            Err(e) => (format!("openbot sent an unreadable answer: {e}"), true, None),
+            Err(e) => (format!("oBot sent an unreadable answer: {e}"), true, None),
         },
-        Err(e) => (format!("openbot couldn't run the tool: {e}"), true, None),
+        Err(e) => (format!("oBot couldn't run the tool: {e}"), true, None),
     }
 }
 
 /// Run the MCP server on stdin/stdout until Claude Code closes it.
 pub fn run_approval_mcp() -> anyhow::Result<()> {
-    let url = std::env::var("OPENBOT_URL").unwrap_or_else(|_| "http://127.0.0.1:7777".into());
-    let token = std::env::var("OPENBOT_TOKEN").unwrap_or_default();
-    let bot_id = std::env::var("OPENBOT_BOT_ID").unwrap_or_default();
+    let url = std::env::var("OBOT_URL").unwrap_or_else(|_| "http://127.0.0.1:7777".into());
+    let token = std::env::var("OBOT_TOKEN").unwrap_or_default();
+    let bot_id = std::env::var("OBOT_BOT_ID").unwrap_or_default();
     let out = Arc::new(Mutex::new(std::io::stdout()));
 
     let stdin = std::io::stdin();
@@ -91,14 +91,14 @@ pub fn run_approval_mcp() -> anyhow::Result<()> {
                 send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {
                     "protocolVersion": pv,
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "openbot", "version": crate::VERSION}
+                    "serverInfo": {"name": "oBot", "version": crate::VERSION}
                 }}));
             }
             "ping" => send(&out, json!({"jsonrpc": "2.0", "id": id, "result": {}})),
             "tools/list" => {
                 let mut tools = vec![json!({
                     "name": "approve",
-                    "description": "Internal: openbot uses this to ask the user for permission. Don't call it yourself.",
+                    "description": "Internal: oBot uses this to ask the user for permission. Don't call it yourself.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {

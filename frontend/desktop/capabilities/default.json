@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the openbot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser and save files a Bot sent.",
+  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser and save files a Bot sent.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [

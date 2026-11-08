@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, Mutex, Notify, RwLock};
 use crate::config::Config;
 use crate::db::{Bot, Db, Message};
 
-/// Something waiting for the bot: a user message, or a turn openbot starts (routine, wake-up...).
+/// Something waiting for the bot: a user message, or a turn oBot starts (routine, wake-up...).
 pub struct Job {
     /// What the model is told.
     pub prompt: String,

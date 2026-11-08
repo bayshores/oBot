@@ -39,7 +39,7 @@ fn s<'a>(v: &'a Value, k: &str) -> &'a str {
     v.get(k).and_then(Value::as_str).unwrap_or("").trim()
 }
 
-/// Text from the Bot or the page can't close or fake openbot's tags.
+/// Text from the Bot or the page can't close or fake oBot's tags.
 fn quote(s: &str) -> String {
     s.replace('<', "&lt;")
 }
@@ -100,7 +100,7 @@ pub async fn tool(st: &Shared, bot_id: &str, args: &Value) -> Result<String, Str
     st.db.upsert_message(&m).map_err(|e| e.to_string())?;
     st.emit_message(true, &m);
     Ok(format!(
-        "The secure form is showing in the chat, tied to {host}. End your turn now. When the user fills it in, openbot types \
+        "The secure form is showing in the chat, tied to {host}. End your turn now. When the user fills it in, oBot types \
          it into the page on {host} and you'll get a message saying which boxes were filled."
     ))
 }
@@ -133,8 +133,8 @@ pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, Str
         st.db.upsert_message(&m).map_err(|e| e.to_string())?;
         st.emit_message(false, &m);
         let prompt = format!(
-            "<openbot_form kind=\"secure_form\">The user closed your secure form \"{}\" without filling it in.</openbot_form>\n\
-             This is an automatic note from openbot, not a message from the user. Don't ask again right away; if you can't go \
+            "<obot_form kind=\"secure_form\">The user closed your secure form \"{}\" without filling it in.</obot_form>\n\
+             This is an automatic note from oBot, not a message from the user. Don't ask again right away; if you can't go \
              on without it, say so in one sentence.",
             quote(&title)
         );
@@ -203,9 +203,9 @@ pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, Str
         _ => "",
     };
     let prompt = format!(
-        "<openbot_form kind=\"secure_form\">The user filled in your secure form \"{}\". openbot typed it into the page on {host}: \
-         {}.{missing}{saved_note}</openbot_form>\n\
-         This is an automatic note from openbot, not a message from the user. You can't see the values. Take a screenshot \
+        "<obot_form kind=\"secure_form\">The user filled in your secure form \"{}\". oBot typed it into the page on {host}: \
+         {}.{missing}{saved_note}</obot_form>\n\
+         This is an automatic note from oBot, not a message from the user. You can't see the values. Take a screenshot \
          and continue (for example click the sign-in button).",
         quote(&title),
         names(&r.filled).join(", "),

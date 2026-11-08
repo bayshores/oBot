@@ -1,4 +1,4 @@
-//! openbot's own tools for bots (served to Claude Code through the `openbot` MCP server in mcp.rs).
+//! oBot's own tools for bots (served to Claude Code through the `oBot` MCP server in mcp.rs).
 //! They give bots extra abilities: quick-reply buttons, sending files, showing pages,
 //! memory, routines, check-ins, a status line, setting up or retiring the user's other Bots, and
 //! email + calendar of connected accounts (accounts.rs).
@@ -46,7 +46,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "show_page",
-            "description": "Show an interactive HTML page inside the chat (charts, tables, small apps, visual summaries). Give either full HTML or a path to an .html file. openbot is dark-themed: use a dark background (#0b0b0c) with light text unless the user asks otherwise. Scripts run in a sandbox without network access to the user's data.",
+            "description": "Show an interactive HTML page inside the chat (charts, tables, small apps, visual summaries). Give either full HTML or a path to an .html file. oBot is dark-themed: use a dark background (#0b0b0c) with light text unless the user asks otherwise. Scripts run in a sandbox without network access to the user's data.",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "html": {"type": "string"},
@@ -382,7 +382,7 @@ pub fn recall_text(mems: &[Memory], query: &str) -> String {
 }
 
 
-/// Run one openbot tool.
+/// Run one oBot tool.
 pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> ToolResult {
     if name.starts_with("computer_") {
         if state.db.get_bot(bot_id).ok().flatten().is_none() {
@@ -895,7 +895,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 if rcount > 0 { format!("Its chat, its own memories and its {} are", count(rcount, "routine", "routines")) } else { "Its chat and its own memories are".to_string() }
             );
             // Always asks, whatever the permission settings: this can't be undone.
-            let ok = crate::api::ask_approval(state, bot_id, "mcp__openbot__delete_bot", &summary, &json!({"bot": b.name, "bot_id": b.id, "reason": reason}), "", "")
+            let ok = crate::api::ask_approval(state, bot_id, "mcp__obot__delete_bot", &summary, &json!({"bot": b.name, "bot_id": b.id, "reason": reason}), "", "")
                 .await
                 .map_err(|e| e.to_string())?;
             if !ok {
@@ -927,7 +927,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             Ok("Status shown.".into())
         }
 
-        other => Err(format!("Unknown openbot tool {other}")),
+        other => Err(format!("Unknown oBot tool {other}")),
     }
 }
 

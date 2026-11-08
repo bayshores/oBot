@@ -1,4 +1,4 @@
-/* openbot styles. Always dark (there is no light mode). */
+/* oBot styles. Always dark (there is no light mode). */
 
 /* ───────────── 1. tokens ───────────── */
 :root {
@@ -155,7 +155,7 @@ b, strong { font-weight: var(--w-semibold); }
   height: 100dvh;
   width: 100vw;
   box-sizing: border-box;
-  /* On a phone's home screen openbot runs behind the status bar and home bar: keep clear of them. */
+  /* On a phone's home screen oBot runs behind the status bar and home bar: keep clear of them. */
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background: var(--chrome);
   transition: opacity .2s;

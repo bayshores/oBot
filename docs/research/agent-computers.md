@@ -1,4 +1,4 @@
-# How agent apps give a bot "its own computer" (and what openbot should do on Windows)
+# How agent apps give a bot "its own computer" (and what oBot should do on Windows)
 
 Researched November 2026. Every claim has a numbered source at the bottom. Items we could not confirm are marked **(unverified)**.
 
@@ -12,7 +12,7 @@ No popular agent app protects the user by running the agent as the user's own ac
 | **A container or VM on the user's PC** (optional) | Hermes Agent (Docker backend), OpenClaw (sandbox mode) |
 | **A separate, weaker Windows user account** | OpenAI Codex on Windows, Microsoft's Windows "Agent Workspace" (preview) |
 
-openbot runs on your own Windows PC, so the cloud option is out. **Recommendation: give the bots their own locked-down Linux computer inside WSL2 on the PC**, with a separate low-privilege Windows account as a later add-on for Windows-only jobs. See [What openbot should do](#what-openbot-should-do).
+oBot runs on your own Windows PC, so the cloud option is out. **Recommendation: give the bots their own locked-down Linux computer inside WSL2 on the PC**, with a separate low-privilege Windows account as a later add-on for Windows-only jobs. See [What oBot should do](#what-oBot-should-do).
 
 ## Hermes Agent (Nous Research)
 
@@ -51,7 +51,7 @@ You pick one "terminal backend" in the config: `local`, `docker`, `ssh`, `modal`
 ## Other apps, for comparison
 
 - **Claude Code's own sandbox** works on macOS, Linux and WSL2, but "on native Windows, Claude Code runs commands unsandboxed" [12].
-  - For unattended runs, Anthropic says to use a container, a VM, or the sandbox inside WSL2 [13]. That fits openbot, which runs Claude Code unattended.
+  - For unattended runs, Anthropic says to use a container, a VM, or the sandbox inside WSL2 [13]. That fits oBot, which runs Claude Code unattended.
 - **OpenAI Codex on Windows** creates dedicated lower-privilege Windows users plus firewall rules. Setting it up needs admin approval [14].
 - **Manus** gives each task an isolated cloud VM. Its paid "Cloud Computer" is a persistent Ubuntu VM that runs 24/7 [15][16].
 - **ChatGPT agent** (formerly Operator) works on "its own computer", a remote virtual machine you can take over [17]. Secondary source only.
@@ -59,33 +59,33 @@ You pick one "terminal backend" in the config: `local`, `docker`, `ssh`, `modal`
   - Each agent gets its own Windows account and its own desktop in a separate session.
   - You choose per agent which of your folders it can see.
   - It's still a preview for Windows Insiders and is off by default.
-  - We found no way for a third-party app like openbot to use it yet **(unverified)**. Worth checking again later.
+  - We found no way for a third-party app like oBot to use it yet **(unverified)**. Worth checking again later.
 
 ## Ways to isolate a bot on a Windows 11 PC
 
-| Option | Works on Windows Home? | Can openbot's installer set it up? | Keeps files? | Gives the bot a screen to use | Claude Code inside? | How strongly it walls off your files |
+| Option | Works on Windows Home? | Can oBot's installer set it up? | Keeps files? | Gives the bot a screen to use | Claude Code inside? | How strongly it walls off your files |
 |---|---|---|---|---|---|---|
 | Run as you (today) | Yes | Nothing to set up | Yes | Your real desktop | Yes, unsandboxed [12] | Not at all |
 | Separate low-privilege Windows account | Yes | Yes, easily [14] | Yes | Only if that user is logged in **(unverified on Home)** | Yes | Medium (Windows file permissions) |
 | AppContainer (restricted Windows process) | Yes | Hard, needs custom code [22] | Yes | No | Probably fragile **(unverified)** | Medium–high |
-| **WSL2 Linux, owned by openbot and locked down** | **Yes** | **Yes** [7][23] | **Yes** | **Yes (a virtual Linux desktop, viewable from the Mac)** | **Yes, plus its sandbox** [12] | Medium–high, *if* access to `C:\` and Windows programs is turned off [24] |
+| **WSL2 Linux, owned by oBot and locked down** | **Yes** | **Yes** [7][23] | **Yes** | **Yes (a virtual Linux desktop, viewable from the Mac)** | **Yes, plus its sandbox** [12] | Medium–high, *if* access to `C:\` and Windows programs is turned off [24] |
 | Docker (Desktop or inside WSL2) | Yes | Heavy install [25] | Yes (volumes) | Possible (noVNC) | Yes [13] | Medium (shares WSL's kernel) |
 | Docker Sandboxes (`sbx`) | **(unverified)** | Yes, but needs a Docker account [26] | Yes [27] | **(unverified)** | Yes, built in [26] | High (own mini VM) |
 | Hyper-V virtual machine | **No, Pro only** [28] | Possible but heavy | Yes | Full Windows or Linux desktop | Yes | Highest |
 | Windows Sandbox | **No, Pro only** [29] | Partly; can't read command output [30] | **No, wiped when closed** [29] | Yes | Would need reinstalling every time | High, but useless for 24/7 |
 | Windows Agent Workspace | **(unverified)** | Not open to other apps yet [18] | Yes | Yes | **(unverified)** | Medium |
 
-## What openbot should do
+## What oBot should do
 
-**Plan: an app-owned WSL2 Linux computer called `openbot-computer`.**
+**Plan: an app-owned WSL2 Linux computer called `oBot-computer`.**
 
-1. **Install.** `install-host.ps1` turns on WSL if needed, then imports a ready-made Ubuntu image as a separate Linux install called `openbot-computer`. This is the same approach as OpenClaw's Windows app [7].
+1. **Install.** `install-host.ps1` turns on WSL if needed, then imports a ready-made Ubuntu image as a separate Linux install called `oBot-computer`. This is the same approach as OpenClaw's Windows app [7].
 2. **Lock it down** in `/etc/wsl.conf` [24]:
    - Turn off automatic mounting of `C:\`, so the bots can't see your files.
    - Turn off Windows interop, so the bots can't launch Windows programs.
-   - Share exactly one Windows folder, for example `C:\Users\<you>\OpenBot\Shared`.
+   - Share exactly one Windows folder, for example `C:\Users\<you>\oBot\Shared`.
 3. **Run Claude Code inside it** as a normal (non-admin) Linux user `bot`, with Claude Code's sandbox turned on [12][13].
-   - The openbot server stays on Windows and starts each job with `wsl.exe -d openbot-computer -u bot -- claude -p ...`.
+   - The oBot server stays on Windows and starts each job with `wsl.exe -d oBot-computer -u bot -- claude -p ...`.
    - This is the same split as OpenClaw: the controller on the PC, the work inside the sandbox [5].
 4. **Give each bot a screen.** Run a virtual Linux desktop per bot inside the WSL computer (Xvfb, a small window manager and Chromium).
    - Stream it over VNC, reachable only through Tailscale.
@@ -93,7 +93,7 @@ You pick one "terminal backend" in the config: `local`, `docker`, `ssh`, `modal`
 5. **Keep it running 24/7** [4][7][24]:
    - In `.wslconfig`, stop WSL from shutting down when idle and cap its RAM and CPU.
    - Add a keep-alive task that starts at boot.
-6. **Later, for Windows-only jobs** (Office files, Windows apps): add a second runner as a dedicated standard Windows account (`openbot-agent`) [14].
+6. **Later, for Windows-only jobs** (Office files, Windows apps): add a second runner as a dedicated standard Windows account (`oBot-agent`) [14].
    - It can only reach chosen folders.
    - You approve each job in the app.
 7. **Security rules learned from OpenClaw** [8][10]:

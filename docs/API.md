@@ -1,9 +1,9 @@
-# openbot HTTP / WebSocket API (contract between `ui/` and `openbot-core`)
+# oBot HTTP / WebSocket API (contract between `ui/` and `obot-core`)
 
 All JSON. All `/api/*` routes (except `POST /api/pair`) need a token in the header
 `Authorization: Bearer <token>`. A token is never accepted in the address (it could end up in logs):
-* WebSockets (browsers can't set that header) offer it as a subprotocol: `["openbot", "openbot.auth.<token>"]`
-  for `/api/events` (the server answers `openbot`), `["binary", "openbot.auth.<token>"]` for a Bot screen.
+* WebSockets (browsers can't set that header) offer it as a subprotocol: `["obot", "obot.auth.<token>"]`
+  for `/api/events` (the server answers `oBot`), `["binary", "obot.auth.<token>"]` for a Bot screen.
 * Bot files in `<img src>` and download links use `?fk=<file_key>` instead: a key from `/api/bootstrap`
   that opens only `GET /api/bots/:id/files/*`. It's made from the credential's hash, so it stops working
   when that device is removed.
@@ -15,14 +15,14 @@ Two kinds of token work:
 Security rules (see `backend/core/src/security.rs`):
 * The server listens on 127.0.0.1 by default. Remote devices come in through Tailscale Serve (HTTPS) or an SSH tunnel.
 * `Host` must be an IP, `localhost`, a `*.ts.net` name, this computer's name (or `name.local`), or a name in
-  `OPENBOT_ALLOWED_HOSTS` (comma list). Otherwise 403 (blocks DNS rebinding).
+  `OBOT_ALLOWED_HOSTS` (comma list). Otherwise 403 (blocks DNS rebinding).
 * `/api/*` requests with an `Origin` header are refused (403) unless the origin is `http://127.0.0.1:*`,
   `http://localhost:*`, `tauri://localhost`, or the same origin as the `Host` the request came in on.
   CORS allows exactly those origins.
 * 20 failed tokens / pairing codes per minute from one client → 429 for 5 minutes (`Retry-After` set). Behind
   Tailscale Serve the client is the first `X-Forwarded-For` address (trusted only from loopback).
 
-The UI is served by an openbot server at `/`. The desktop app opens it as `/?token=<token>`; the UI stores
+The UI is served by an oBot server at `/`. The desktop app opens it as `/?token=<token>`; the UI stores
 that token in `sessionStorage` and removes it from the address bar. A browser on another device (a phone
 over Tailscale) has no token: it shows a pairing screen, trades a 6-digit code for a device token with
 `POST /api/pair`, and keeps that in `localStorage`. The pairing link `https://<computer>.ts.net/#pair=<code>`
@@ -95,7 +95,7 @@ Message = {
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
   status: "done" | "running" | "ok" | "failed" | "stopped" | "declined" | "pending" | "allowed" | "denied" | "expired" | "skipped" | "replaced",
-          // expired = approval left open when the turn ended or openbot restarted; skipped = approval closed because the
+          // expired = approval left open when the turn ended or oBot restarted; skipped = approval closed because the
           // user pressed Stop or sent a new message (a new message while a card waits stops the turn and is read right away); stopped = a tool cut off by Stop or by a new
           // message; declined = a tool that didn't run because the user said no (or moved on) at its card; replaced = a secure form closed because the Bot asked again with a newer one
   meta: object,           // see below
@@ -104,7 +104,7 @@ Message = {
 // meta by role:
 //  user:     { attachments: [{ name, path, mime, size, url }],    url is relative: "/api/bots/{id}/files/{path}" (append ?fk=<file_key>)
 //              queued?: bool,     sent while the bot was busy; waiting ("Send now" = POST /api/bots/:id/steer)
-//              not_sent?: bool }  the user pressed Stop (or openbot restarted) before the bot read it
+//              not_sent?: bool }  the user pressed Stop (or oBot restarted) before the bot read it
 //  tool:     { tool_use_id, name, summary, output }            summary e.g. "Ran `ls -la`", output truncated text
 //  approval: { approval_id, tool_name, summary, input }        status pending|allowed|denied
 //  error:    { code, actions[] }  code: "usage_limit"|"rate_limit"|"overloaded"|"too_long"|"auth"|"setup"|"crashed"|"other"
@@ -229,7 +229,7 @@ Usage = {
 | GET | /api/bots/:id/messages?before=<ms>&limit=200 | – | `[Message]` oldest→newest |
 | POST | /api/bots/:id/messages | `{text, attachments:[{name,path,mime,url}], reply_to?: message id}` | `Message` (the user message; a reply gets `meta.reply_to`, and the Bot is told what it quotes) |
 | POST | /api/messages/:id/react | `{emoji, on}` (`on:false` takes the user's reaction back) | `Message` (`meta.reactions`). The Bot that wrote it hears about it with the user's next message |
-| POST | /api/bots/:id/stop | – | `{ok:true}` (also drops the user's queued messages: they get `meta.not_sent`; openbot's own queued turns still run) |
+| POST | /api/bots/:id/stop | – | `{ok:true}` (also drops the user's queued messages: they get `meta.not_sent`; oBot's own queued turns still run) |
 | POST | /api/bots/:id/steer | `{message_id}` | `{ok}` "Send now": stops the current turn and runs the queued messages right away. `ok:false` if that message is no longer queued |
 | POST | /api/bots/:id/retry | – | `{ok:true}` "Try again": runs the last turn's prompt again (400 if there is none or the bot is busy) |
 | POST | /api/bots/:id/new-conversation | – | `{ok:true}` Claude Code starts a new conversation; chat, memory, files, routines stay |
@@ -247,7 +247,7 @@ Usage = {
 | POST | /api/github/connect | – | `{user_code, verification_uri, expires_in}`: the code to enter on github.com. The result arrives as `github.connected {login}` or `github.failed {error}` (and `settings.updated`) |
 | DELETE | /api/github/connect | – | `{ok}`: stops waiting for the code |
 | PATCH | /api/github | `{bots}` (null = every Bot, else Bot ids) | `Settings` |
-| DELETE | /api/github | – (openbot forgets the token; the user can also remove openbot on github.com) | `Settings` |
+| DELETE | /api/github | – (oBot forgets the token; the user can also remove oBot on github.com) | `Settings` |
 | GET | /oauth/callback | `?state&code` (no token; a browser page load) | HTML page. Finishes the sign-in here, or passes it to the remote computer from `/api/connection` |
 | DELETE | /api/vault/:name | – | `Settings` |
 | POST | /api/vault/logins | `{sites, username, password, hints, bots}` | `Settings`. `sites`: 1 to 10 addresses, tidied to hosts like `ucsd.edu` (`www.` dropped); a login also fills on subdomains. 400 if the Vault is full (2000) |
@@ -259,9 +259,9 @@ Usage = {
 | POST | /api/vault/import | `{rows:[{url, username, password, name}], apply}`: rows the app read from a password manager's CSV export | `{ready, duplicates, errors, skipped_full, items:[{row, title, username, status:"ready"\|"duplicate"\|"error"\|"full", error?}]}`; with `apply:true` the ready ones are added and `settings` is included. Same website + username = already in the Vault |
 | POST | /api/messages/:id/form | `{values:{<field id>: value}, save}` or `{dismiss:true}` | `Message`. Types the values into the page on the Bot's screen, only if it's still on `meta.host`; 400 with a sentence if not (the form stays open). `save` also saves the password as a Vault login |
 | GET | /api/computer | `?refresh=1` re-checks Claude Code now | `Computer` |
-| GET | /api/hello | – (no token) | `{app:"openbot", version, name}`: lets setup recognize an openbot computer |
+| GET | /api/hello | – (no token) | `{app:"oBot", version, name}`: lets setup recognize an oBot computer |
 | GET | /api/tailscale | – | home only: `{installed, running, needs_login, state, self:{name,dns,os,online}, peers:[{name,dns,os,online}]}` |
-| POST | /api/discover | – | home only, ~4 s: `{tailscale, found:[{name, dns, os, url, version, computer_name}]}` your Tailscale devices that run openbot |
+| POST | /api/discover | – | home only, ~4 s: `{tailscale, found:[{name, dns, os, url, version, computer_name}]}` your Tailscale devices that run oBot |
 | GET | /api/usage | – | `Usage` |
 | GET | /api/search?q= | – | `{bots:[Bot], messages:[Message]}` (max 50) |
 | POST | /api/messages/:id/answer | `{value}` | `Message` (the user's answer, sent as a normal user message) |
@@ -271,7 +271,7 @@ Usage = {
 | POST | /api/routines/:id/run | – | `{ok}` ("Test routine": run once now) |
 | GET | /api/bots/:id/memories | – | `[{id, bot_id (null = about the user), text, created_at}]` |
 | DELETE | /api/memories/:id | – | `{ok}` |
-| GET | /pages/:id | – | HTML made by a bot (sandboxed by CSP). The server appends a script that posts `{type:'openbot:height', height}` to the parent. |
+| GET | /pages/:id | – | HTML made by a bot (sandboxed by CSP). The server appends a script that posts `{type:'obot:height', height}` to the parent. |
 | PUT | /api/settings | also `{auto_review, review_ask, review_allow}` | `Settings` |
 | POST | /api/vault | `{name, value, description, bots}`: adds or edits a secret. Empty `value` = keep the saved one. `bots`: null = every Bot, else a non-empty list of Bot ids. 400 for reserved names (see `vault_reserved`), values over 4 KiB, or an empty `bots` list. Saved values are replaced with `••••` in chats and memories from then on, including older ones. | `Settings` |
 | POST | /api/bots/:id/make-main | – | `{ok}` ("Replace with different Bot") |
@@ -294,17 +294,17 @@ Usage = {
 | POST | /api/bots/:id/screen/stop | – | `{running:false}` closes the bot's browser and screen (its browser profile, so logins, stays) |
 | GET (ws) | /api/bots/:id/screen/ws | – | WebSocket (subprotocol `binary`) piped to the screen's VNC server; the UI connects noVNC here |
 | GET | /vendor/*path | – | third-party UI files (`frontend/ui/vendor/`, e.g. noVNC) |
-| GET (ws) | /api/events | – | stream of events (subprotocol `openbot`); the UI sends `presence` messages back |
+| GET (ws) | /api/events | – | stream of events (subprotocol `oBot`); the UI sends `presence` messages back |
 
 Errors: non-2xx with `{error: string}`.
 
 ### Phone notifications (push.rs)
 
-A phone that added openbot to its home screen turns on Settings › General › Notifications: the UI asks for
+A phone that added oBot to its home screen turns on Settings › General › Notifications: the UI asks for
 permission, subscribes with the key from `/api/push/key` and sends the subscription to `/api/push/subscribe`.
-openbot then sends a Web Push message (encrypted for that phone, so the push service can't read it) for the
+oBot then sends a Web Push message (encrypted for that phone, so the push service can't read it) for the
 same things the desktop app notifies about: a finished reply, a file or page, an approval, a question or a
-secure form. Only when no openbot window is `active` (see `presence` above), only for messages from the last
+secure form. Only when no oBot window is `active` (see `presence` above), only for messages from the last
 30 minutes, at most one "finished" notification per chat every 5 seconds, and never for hidden Bots or Bots
 with notifications turned off. The message is `{title, body, bot, tag, badge}` (`badge` = unread count for the
 app icon); approvals and questions go out with `Urgency: high`, and `Topic` is the chat id. A 404/410 from the
@@ -329,9 +329,9 @@ Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday 
 //         | {kind:"weekly",day:"monday",time} | {kind:"monthly",day:1..31,time}
 ```
 
-## Bot tools (the `openbot` MCP server)
+## Bot tools (the `oBot` MCP server)
 
-Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they never need approval except `delete_bot` and the email/calendar actions marked below.
+Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never need approval except `delete_bot` and the email/calendar actions marked below.
 
 | Tool | What it does |
 |---|---|
@@ -340,7 +340,7 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `remember {fact, tier: "profile"\|"log", about?: "user"\|"me", bot?}` | save a fact. `profile` (standing instructions and rules like "never ask me to sign in to X", core identity) is in the bot's prompt every turn; `log` (everything else) is searched with `recall`, and only its newest 15 entries are in the prompt. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
 | `recall {query?, bot?}` · `update_memory {id, fact?, tier?}` · `forget {id}` | search facts by words (no query: profile + newest log) · fix one or move it between tiers · delete one |
 | `check_back_later {note, in_minutes \| at}` | one-time wake-up |
-| `run_in_background {command, name, note?, max_minutes?}` · `background_jobs {id?}` · `stop_background_job {id}` | a long command run by the openbot server (not Claude Code), output in `<data>/bots/<id>/jobs/<job>.log`. Goes through the same permission check as a shell command (mode, saved rules, auto-review, then an Allow / Deny card); with `runner = "wsl"` jobs run outside Claude Code's sandbox, so they always get a card. Saved prefix rules like `Bash(git log:*)` never cover commands with `; & | $( \` < >` or newlines. Anything the command leaves running is stopped when it ends. When it ends (or openbot restarts while it runs) the bot gets a wake-up turn with the exit code and last 40 lines. Max 5 running per bot, 24 h each |
+| `run_in_background {command, name, note?, max_minutes?}` · `background_jobs {id?}` · `stop_background_job {id}` | a long command run by the oBot server (not Claude Code), output in `<data>/bots/<id>/jobs/<job>.log`. Goes through the same permission check as a shell command (mode, saved rules, auto-review, then an Allow / Deny card); with `runner = "wsl"` jobs run outside Claude Code's sandbox, so they always get a card. Saved prefix rules like `Bash(git log:*)` never cover commands with `; & | $( \` < >` or newlines. Anything the command leaves running is stopped when it ends. When it ends (or oBot restarts while it runs) the bot gets a wake-up turn with the exit code and last 40 lines. Max 5 running per bot, 24 h each |
 | `create_routine {name, prompt, schedule, bot?}` · `list_routines {bot?, all?}` · `update_routine {id, …}` · `delete_routine {id}` · `move_routine {id, to_bot}` | routines, for this bot or another |
 | `list_bots` · `get_bot {bot}` | see the user's bots (instructions, private memories, routines) |
 | `create_bot {name, instructions, label?, look?, memories?[], routines?[], briefing?}` | new bot, ready from its first message; it says hello in its own chat. Names must be unique; max 50 bots |
@@ -373,35 +373,35 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 ### How a turn runs
 
 * Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`).
-* The current time is sent at the start of each message (`[openbot: It's Friday 2026-11-06 20:01 now.]`), not in the
+* The current time is sent at the start of each message (`[oBot: It's Friday 2026-11-06 20:01 now.]`), not in the
   system prompt, so the system prompt stays the same between messages and the cached conversation is reused.
 * For the same reason a conversation keeps the instructions it started with. When they change (a new memory, a rename,
   new routines, another Bot's tagline), the Bot gets the changed lines as a note at the start of its next message
-  (`[openbot: Your setup changed since this conversation started …]`). A new conversation, or Claude Code summarizing
+  (`[oBot: Your setup changed since this conversation started …]`). A new conversation, or Claude Code summarizing
   the old one, starts from the current instructions.
 * The message goes to Claude Code as one JSON line on stdin (`--input-format stream-json`). With plain text, Claude Code
   sometimes wrote a different number into its own tool descriptions from one run to the next, and any change there
   makes the model re-read the whole conversation at full price.
-* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` (unless openbot-server was started with its own value), so Claude
+* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` (unless obot-server was started with its own value), so Claude
   Code summarizes older messages once a conversation reaches about 200k tokens instead of near the model's 1M limit.
   Every message re-reads the whole conversation, so a long one makes every message cost more.
   Their settings also set `autoCompactEnabled: true`, so turning summarizing off for your own Claude Code on the PC
   (`/config`, saved in `~/.claude.json`) doesn't turn it off for Bots.
 * Bots don't load any Claude Code settings files: runs use `--strict-mcp-config` and `--setting-sources=` (none). So the
-  only MCP servers are `openbot` plus Settings › Computer › Plugins, and the computer's personal setup (`~/.claude`: plugins,
+  only MCP servers are `oBot` plus Settings › Computer › Plugins, and the computer's personal setup (`~/.claude`: plugins,
   skills, hooks, permission rules, CLAUDE.md, output style) is skipped. The bot folder's own `.claude/settings*.json` and
-  `.claude/agents` are skipped too, because a bot can write those itself to give itself permissions. Only openbot's
+  `.claude/agents` are skipped too, because a bot can write those itself to give itself permissions. Only oBot's
   `--settings` file below applies. The auto-review check uses the same `--setting-sources=`.
 * Skills in the bot folder (`.claude/skills/<name>/SKILL.md`, see `/api/bots/:id/skills`) are copied before each run into
   `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
   `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
   skill folder is limited to 200 files and 5 MB.
-* Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with two Claude Code hooks that start the openbot program as
-  `<openbot> hook stop|precompact --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
+* Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with two Claude Code hooks that start the oBot program as
+  `<obot> hook stop|precompact --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself.
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event.
-* Turns openbot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
-  (`<openbot_routine>`, `<openbot_wakeup>`, `<openbot_task>`) with numbered instructions; the chat only shows a short event line.
+* Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
+  (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.
 * Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn
   (`backend/core/src/memory_tidy.rs`): merge duplicates, fix stale facts, keep the profile small. One bot per hour; a copy of
   the memories is saved first to `<data>/bots/<id>/memory-backup.json`. Overdue after 9 days, it runs at any hour.
@@ -421,7 +421,7 @@ Actions on other bots leave an `event` message in both chats with `meta {kind, b
 
 Each bot can have its own Linux screen: a virtual display (Xvfb, 1280×800) with the openbox
 window manager, a Chrome/Chromium window with the bot's own profile
-(`~/.openbot/screens/<bot>/profile` inside Linux), and an x11vnc server on 127.0.0.1 only.
+(`~/.obot/screens/<bot>/profile` inside Linux), and an x11vnc server on 127.0.0.1 only.
 On Windows hosts it runs inside WSL (`wsl_distro`); on Linux hosts directly. Screens start on
 first use and stop after 30 minutes with no bot run and no viewer. A starting screen waits for the browser
 window (it reopens the last tabs), and the first computer tool result then tells the bot its screen was off
@@ -445,14 +445,14 @@ an unknown one) it uses the only login for that website, and lists the choices w
 {title, reason?, fields:[{label, type, target?}]}` posts a `form` message tied to the website in
 front; what the user types there is typed into the page (never shown to the Bot), optionally saved as a
 login, and the Bot then gets a note saying which boxes were filled. `list_contact_info` returns the
-Vault's contact info. openbot finds the page in front through the browser's local debugging port
+Vault's contact info. oBot finds the page in front through the browser's local debugging port
 (`--remote-debugging-port=0`, 127.0.0.1 only, port read from `DevToolsActivePort`): the visible tab,
 or with several windows the one whose title matches the active window. Filling needs Node.js 22+
 inside Linux (installed with the screen setup).
 
 The app's viewer (noVNC) is view-only until the user chooses Take control.
 
-## Desktop bridge (only inside the openbot desktop app)
+## Desktop bridge (only inside the oBot desktop app)
 
 When `window.__TAURI_INTERNALS__` exists, the UI can call:
 * `invoke('notify', {title, body})` → OS notification (send when a bot finishes or needs you and the window isn't focused)

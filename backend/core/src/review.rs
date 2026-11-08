@@ -100,7 +100,7 @@ pub async fn review(
     .stdout(Stdio::piped())
     .stderr(Stdio::null())
     .kill_on_drop(true)
-    .env("OPENBOT", "1");
+    .env("OBOT", "1");
     if cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() {
         cmd.env("ANTHROPIC_API_KEY", &cfg.api_key);
     } else {

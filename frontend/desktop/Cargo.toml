@@ -1,15 +1,15 @@
 [package]
-name = "openbot"
+name = "obot"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "openbot desktop app"
+description = "oBot desktop app"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-openbot-core = { path = "../../backend/core" }
+obot-core = { path = "../../backend/core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
 ureq = "2"

@@ -45,8 +45,9 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     let data_dir = opts.data_dir.unwrap_or_else(default_data_dir);
     std::fs::create_dir_all(&data_dir)?;
     let config_path = data_dir.join("config.json");
-    let config = Config::load_or_create(&config_path)?;
-    let db = Db::open(&data_dir.join("openbot.db"))?;
+    let mut config = Config::load_or_create(&config_path)?;
+    let db = Db::open(&crate::migrate::db_file(&data_dir))?;
+    crate::migrate::bots_and_rules(&mut config, &config_path, &db);
     db.close_dangling()?;
     if !crate::util::set_timezone(&config.timezone) {
         tracing::warn!("unknown timezone {:?}; using this computer's timezone", config.timezone);
@@ -216,7 +217,7 @@ fn router(state: Shared) -> Router {
         .route("/pages/{id}", get(get_page))
         // No token needed: a new device trades a pairing code for its own token here.
         .route("/api/pair", post(pair_device))
-        // No token needed: lets the setup screen recognize an openbot computer (name + version only).
+        // No token needed: lets the setup screen recognize an oBot computer (name + version only).
         .route("/api/hello", get(hello))
         .route("/oauth/callback", get(oauth_callback))
         .merge(api)
@@ -263,7 +264,7 @@ fn peer_of(req: &Request) -> Option<SocketAddr> {
 }
 
 /// The token, from the Authorization header, or (for WebSockets, which can't send that header from
-/// a browser) from the offered subprotocols: `openbot.auth.<token>`. Never from the address, where
+/// a browser) from the offered subprotocols: `oBot.auth.<token>`. Never from the address, where
 /// it could end up in logs or history.
 fn token_of(req: &Request) -> Option<String> {
     let h = req.headers();
@@ -271,7 +272,7 @@ fn token_of(req: &Request) -> Option<String> {
     bearer.or_else(|| {
         h.get(header::SEC_WEBSOCKET_PROTOCOL)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').find_map(|p| p.trim().strip_prefix("openbot.auth.").map(str::to_string)))
+            .and_then(|v| v.split(',').find_map(|p| p.trim().strip_prefix("obot.auth.").or_else(|| p.trim().strip_prefix("openbot.auth.")).map(str::to_string)))
     })
 }
 
@@ -279,7 +280,7 @@ fn token_of(req: &Request) -> Option<String> {
 /// send a header, so it carries this instead of the token: a leaked file key can't run Bots or change
 /// anything. It's made from the credential's hash, so it stops working when that device is removed.
 fn file_key(token_hash: &str) -> String {
-    sha256_hex(&format!("openbot-files:{token_hash}"))[..40].to_string()
+    sha256_hex(&format!("oBot-files:{token_hash}"))[..40].to_string()
 }
 
 /// `GET /api/bots/<id>/files/...?fk=<file key>`: which credential the file key belongs to.
@@ -351,19 +352,19 @@ async fn require_token(State(st): State<Shared>, mut req: Request, next: Next) -
     next.run(req).await
 }
 
-/// Refuse requests from web pages that aren't openbot's own (stops a malicious site from
-/// talking to openbot in the background), and requests for unexpected host names
+/// Refuse requests from web pages that aren't oBot's own (stops a malicious site from
+/// talking to oBot in the background), and requests for unexpected host names
 /// (DNS rebinding).
 async fn guard_origin(req: Request, next: Next) -> Response {
     if !crate::security::host_allowed(req.headers()) {
-        return ApiError(StatusCode::FORBIDDEN, "Unknown host name. Set OPENBOT_ALLOWED_HOSTS to allow it.".into()).into_response();
+        return ApiError(StatusCode::FORBIDDEN, "Unknown host name. Set OBOT_ALLOWED_HOSTS to allow it.".into()).into_response();
     }
     let path = req.uri().path();
     if path.starts_with("/api/") {
         if let Some(o) = req.headers().get(header::ORIGIN) {
             if !crate::security::origin_allowed(o, req.headers()) {
                 tracing::warn!("blocked a request from web page origin {:?}", o);
-                return ApiError(StatusCode::FORBIDDEN, "This web page isn't allowed to use openbot".into()).into_response();
+                return ApiError(StatusCode::FORBIDDEN, "This web page isn't allowed to use oBot".into()).into_response();
             }
         }
     }
@@ -417,13 +418,13 @@ mod ui_assets {
     include!(concat!(env!("OUT_DIR"), "/ui_assets.rs"));
 }
 
-/// Serve a UI file. OPENBOT_UI_DIR=/path/to/ui reads from disk instead (handy while editing the UI).
+/// Serve a UI file. OBOT_UI_DIR=/path/to/ui reads from disk instead (handy while editing the UI).
 fn ui_response(name: &str) -> Response {
     // Subfolders are allowed (vendor/novnc/core/rfb.js); climbing out isn't.
     if name.is_empty() || name.contains("..") || name.contains('\\') || name.starts_with('/') || name.contains("//") {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let bytes: Option<Vec<u8>> = std::env::var("OPENBOT_UI_DIR")
+    let bytes: Option<Vec<u8>> = std::env::var("OBOT_UI_DIR")
         .ok()
         .and_then(|dir| std::fs::read(Path::new(&dir).join(name)).ok())
         .or_else(|| {
@@ -545,7 +546,7 @@ async fn pair_device(
             st.limiter.fail(&key);
             return ApiError(
                 StatusCode::UNAUTHORIZED,
-                "No pairing code is active. On the host computer run `openbot-server pair` to get a new one.".into(),
+                "No pairing code is active. On the host computer run `obot-server pair` to get a new one.".into(),
             )
             .into_response();
         }
@@ -668,7 +669,7 @@ async fn push_unsubscribe(State(st): State<Shared>, Json(b): Json<EndpointBody>)
 /// Settings › "Send a test": a notification to this one device, right now.
 async fn push_test(State(st): State<Shared>, Json(b): Json<EndpointBody>) -> ApiResult<Json<Value>> {
     let note = crate::push::Note {
-        title: "openbot".into(),
+        title: "oBot".into(),
         body: "Notifications work. You'll get one when a Bot finishes or needs you while you're away.".into(),
         bot: String::new(),
         urgent: true,
@@ -685,7 +686,7 @@ struct PairWithBody {
 
 async fn hello() -> Json<Value> {
     Json(json!({
-        "app": "openbot",
+        "app": "oBot",
         "version": crate::VERSION,
         "name": sysinfo::System::host_name().unwrap_or_default(),
     }))
@@ -696,7 +697,7 @@ async fn get_tailscale() -> Json<Value> {
     Json(crate::discover::tailscale_status().await)
 }
 
-/// Home server: find your devices (on Tailscale) that run openbot.
+/// Home server: find your devices (on Tailscale) that run oBot.
 async fn discover_computers() -> Json<Value> {
     Json(crate::discover::discover().await)
 }
@@ -708,7 +709,7 @@ async fn pair_with_computer(axum::Extension(who): axum::Extension<AuthDevice>, J
     }
     let url = b.url.trim().trim_end_matches('/').to_string();
     let code = b.code.trim().to_string();
-    let name = sysinfo::System::host_name().unwrap_or_else(|| "openbot app".into());
+    let name = sysinfo::System::host_name().unwrap_or_else(|| "oBot app".into());
     let res = tokio::task::spawn_blocking(move || {
         let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build();
         agent.post(&format!("{url}/api/pair")).send_json(json!({ "code": code, "device_name": name }))
@@ -717,7 +718,7 @@ async fn pair_with_computer(axum::Extension(who): axum::Extension<AuthDevice>, J
     Json(match res {
         Ok(Ok(r)) => match r.into_json::<Value>() {
             Ok(v) if v.get("token").and_then(Value::as_str).is_some() => json!({ "ok": true, "token": v["token"], "computer": v["computer"] }),
-            Ok(_) | Err(_) => json!({ "ok": false, "error": "That address answered, but it doesn't look like openbot." }),
+            Ok(_) | Err(_) => json!({ "ok": false, "error": "That address answered, but it doesn't look like oBot." }),
         },
         Ok(Err(ureq::Error::Status(_, r))) => {
             let msg = r
@@ -1007,7 +1008,7 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody, only: Option<&str
         st.db.kv_set(&format!("withdrawn:{id}"), "");
         if !old.is_empty() {
             prompt.push_str(&format!(
-                "[openbot: The user withdrew their previous message (it failed) and sent the one below instead. Ignore the withdrawn one: \"{}\"]\n",
+                "[oBot: The user withdrew their previous message (it failed) and sent the one below instead. Ignore the withdrawn one: \"{}\"]\n",
                 crate::util::truncate_chars(&old, 300)
             ));
         }
@@ -1234,7 +1235,7 @@ pub(crate) fn rule_allows(rules: &[String], tool: &str, command: &str) -> bool {
     })
 }
 
-/// openbot's own permission check for an action a Bot asks for outside Claude Code (for example a
+/// oBot's own permission check for an action a Bot asks for outside Claude Code (for example a
 /// background job): permission mode, saved rules, auto-review, then an Allow / Deny card.
 /// `always_ask`: the action runs outside the sandbox the saved rules were meant for, so skip the
 /// rules and auto-review and always show the card (without "Always allow").
@@ -1248,7 +1249,7 @@ pub(crate) async fn check_permission(st: &Shared, bot_id: &str, tool_name: &str,
     }
     if always_ask {
         let summary = runner::tool_summary(tool_name, input, false);
-        let reason = "This runs outside the Bot's sandbox, so openbot always asks.";
+        let reason = "This runs outside the Bot's sandbox, so oBot always asks.";
         return ask_approval(st, bot_id, tool_name, &summary, input, "", reason).await;
     }
     if rule_allows(&cfg.allow_rules, tool_name, command) {
@@ -1358,7 +1359,7 @@ async fn decide_approval(State(st): State<Shared>, UrlPath(id): UrlPath<String>,
         .remove(&id)
         .ok_or_else(|| not_found("This request already ended"))?;
     let allow = d.decision == "allow" || d.decision == "always";
-    if d.decision == "always" && !p.tool_name.starts_with("mcp__openbot__") {
+    if d.decision == "always" && !p.tool_name.starts_with("mcp__obot__") {
         let rule = rule_for(&p.tool_name, &p.input);
         let proposed = st
             .db
@@ -1398,7 +1399,7 @@ async fn decide_approval(State(st): State<Shared>, UrlPath(id): UrlPath<String>,
     Ok(Json(json!({ "ok": true })))
 }
 
-// ---------------------------------------------------------------- openbot tools, widgets, routines, memories, pages
+// ---------------------------------------------------------------- oBot tools, widgets, routines, memories, pages
 
 #[derive(Deserialize)]
 struct ToolCall {
@@ -1587,7 +1588,7 @@ async fn get_page(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> Res
 }
 
 // `:where(html)` has no weight, so a page that sets its own colors keeps them.
-const PAGE_HEIGHT_SCRIPT: &str = "\n<style>:where(html){color-scheme:dark;background:#0b0b0c;color:#ececec}</style><script>(function(){function s(){try{parent.postMessage({type:'openbot:height',height:document.documentElement.scrollHeight},'*')}catch(e){}}addEventListener('load',s);addEventListener('resize',s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}setTimeout(s,0)})();</script>\n";
+const PAGE_HEIGHT_SCRIPT: &str = "\n<style>:where(html){color-scheme:dark;background:#0b0b0c;color:#ececec}</style><script>(function(){function s(){try{parent.postMessage({type:'obot:height',height:document.documentElement.scrollHeight},'*')}catch(e){}}addEventListener('load',s);addEventListener('resize',s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}setTimeout(s,0)})();</script>\n";
 
 async fn make_main(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let bot = get_bot(&st, &id).await?;
@@ -1748,7 +1749,7 @@ async fn list_library(State(st): State<Shared>, UrlPath(id): UrlPath<String>) ->
 /// Add or replace one of the user's MCP servers.
 async fn add_mcp_server(State(st): State<Shared>, Json(v): Json<Value>) -> ApiResult<Json<Value>> {
     let name = v.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
-    if name.is_empty() || name == "openbot" || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if name.is_empty() || name == "obot" || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
         return Err(bad("Give the server a name with letters, numbers, - or _"));
     }
     let kind = v.get("type").and_then(Value::as_str).unwrap_or("http");
@@ -2302,14 +2303,14 @@ async fn oauth_callback(State(st): State<Shared>, Query(q): Query<HashMap<String
     if let Some(err) = q.get("error") {
         let detail = q.get("error_description").cloned().unwrap_or_default();
         let why = if err == "access_denied" { "The sign-in was cancelled.".to_string() } else { format!("{err} {detail}") };
-        return page(false, &format!("{} You can close this tab and try again in openbot.", why.trim()));
+        return page(false, &format!("{} You can close this tab and try again in oBot.", why.trim()));
     }
     if state.is_empty() || code.is_empty() {
         return page(false, "This page is only used at the end of signing in to an account.");
     }
     if crate::accounts::is_pending(&state) {
         return match crate::accounts::finish_login(&st, &state, &code).await {
-            Ok(email) => page(true, &format!("{email} is connected. You can close this tab and go back to openbot.")),
+            Ok(email) => page(true, &format!("{email} is connected. You can close this tab and go back to oBot.")),
             Err(e) => page(false, &e),
         };
     }
@@ -2332,7 +2333,7 @@ async fn oauth_callback(State(st): State<Shared>, Query(q): Query<HashMap<String
         Ok(Ok(r)) => {
             let v: Value = r.into_json().unwrap_or(Value::Null);
             let email = v.get("email").and_then(Value::as_str).unwrap_or("The account");
-            page(true, &format!("{email} is connected. You can close this tab and go back to openbot."))
+            page(true, &format!("{email} is connected. You can close this tab and go back to oBot."))
         }
         Ok(Err(ureq::Error::Status(_, r))) => {
             let v: Value = r.into_json().unwrap_or(Value::Null);
@@ -2393,11 +2394,12 @@ async fn open_folder(Json(b): Json<FolderBody>) -> ApiResult<Json<Value>> {
 }
 
 async fn events(State(st): State<Shared>, ws: WebSocketUpgrade) -> Response {
-    // The browser offered "openbot" plus its token as a subprotocol; answering "openbot" lets it connect.
-    ws.protocols(["openbot"]).on_upgrade(move |socket| ws_loop(st, socket))
+    // The browser offered "obot" plus its token as a subprotocol; answering "obot" lets it connect.
+    // ("openbot" is the name pages from before the rename to oBot offer.)
+    ws.protocols(["obot", "openbot"]).on_upgrade(move |socket| ws_loop(st, socket))
 }
 
-/// Each open openbot window, so phone notifications wait while one is in use (see push.rs).
+/// Each open oBot window, so phone notifications wait while one is in use (see push.rs).
 static NEXT_CONN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 async fn ws_loop(st: Shared, socket: WebSocket) {

@@ -2,7 +2,7 @@
 //! a failed-login rate limiter.
 //!
 //! How a new device gets access:
-//!   1. On the host PC, `openbot-server pair` (or the startup banner, or Settings) creates a
+//!   1. On the host PC, `obot-server pair` (or the startup banner, or Settings) creates a
 //!      6-digit pairing code. It works once, for 10 minutes, and dies after 5 wrong tries.
 //!   2. The other device sends the code to `POST /api/pair`. It gets back its own long random
 //!      token. The server only keeps a SHA-256 hash of that token.
@@ -52,7 +52,7 @@ pub fn new_device_token() -> String {
 
 // ---------------------------------------------------------------- pairing codes
 
-/// Kept in `<data dir>/pairing.json` so the `openbot-server pair` command and the running
+/// Kept in `<data dir>/pairing.json` so the `obot-server pair` command and the running
 /// server (two different programs) share it.
 #[derive(Serialize, Deserialize, Default)]
 struct PairFile {
@@ -219,7 +219,7 @@ pub fn host_allowed(headers: &HeaderMap) -> bool {
             return true;
         }
     }
-    if let Ok(extra) = std::env::var("OPENBOT_ALLOWED_HOSTS") {
+    if let Ok(extra) = std::env::var("OBOT_ALLOWED_HOSTS") {
         if extra.split(',').map(|s| s.trim().to_ascii_lowercase()).any(|s| !s.is_empty() && s == host) {
             return true;
         }
@@ -228,7 +228,7 @@ pub fn host_allowed(headers: &HeaderMap) -> bool {
 }
 
 /// May a page from `origin` call this server? Allowed: this server's own address (same Host),
-/// openbot pages on this computer (http://127.0.0.1:*, http://localhost:*) and the desktop app.
+/// oBot pages on this computer (http://127.0.0.1:*, http://localhost:*) and the desktop app.
 pub fn origin_allowed(origin: &HeaderValue, headers: &HeaderMap) -> bool {
     let Ok(origin) = origin.to_str() else { return false };
     let origin = origin.trim().to_ascii_lowercase();
@@ -285,7 +285,7 @@ mod tests {
 
     #[test]
     fn pairing_code_flow() {
-        let dir = std::env::temp_dir().join(format!("openbot-pair-test-{}", random_token(8)));
+        let dir = std::env::temp_dir().join(format!("oBot-pair-test-{}", random_token(8)));
         let (code, _) = new_pairing_code(&dir).unwrap();
         let wrong = if code == "000000" { "000001" } else { "000000" };
         assert!(matches!(check_pairing_code(&dir, wrong), PairCheck::Wrong { tries_left: 4 }));

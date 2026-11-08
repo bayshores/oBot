@@ -1,4 +1,4 @@
-//! SQLite storage. One small file: `<data dir>/openbot.db`.
+//! SQLite storage. One small file: `<data dir>/oBot.db`.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -435,7 +435,7 @@ impl Db {
     /// Mark any approval / tool rows left "pending"/"running" (e.g. after a crash) as finished.
     pub fn close_dangling(&self) -> anyhow::Result<()> {
         let c = self.c();
-        // Approvals still open when openbot stopped can't be answered any more.
+        // Approvals still open when oBot stopped can't be answered any more.
         c.execute("UPDATE messages SET status='expired' WHERE role='approval' AND status='pending'", [])?;
         c.execute("UPDATE messages SET status='failed' WHERE role='tool' AND status='running'", [])?;
         c.execute("UPDATE messages SET status='done' WHERE role='bot' AND status='streaming'", [])?;

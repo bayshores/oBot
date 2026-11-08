@@ -1,6 +1,6 @@
-<p align="center"><img src="frontend/assets/icon.png" width="140" alt="openbot icon"></p>
+<p align="center"><img src="frontend/assets/icon.png" width="140" alt="oBot icon"></p>
 
-# openbot
+# oBot
 
 Always-on AI Bots that chat with you and do real work on a computer: browse, sign in, run commands,
 handle email and calendar. They run on **Claude Code** with your **Claude subscription** (or an
@@ -8,7 +8,7 @@ Anthropic API key). A Rust server and a small Tauri desktop app.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
-  <img src="docs/images/architecture-light.svg" alt="The openbot app on your Mac talks over Tailscale to openbot-server on a PC that stays on. The server runs Claude Code, Bot screens, the Vault, memory and files, routines and background jobs, and Gmail and Outlook connections.">
+  <img src="docs/images/architecture-light.svg" alt="The oBot app on your Mac talks over Tailscale to obot-server on a PC that stays on. The server runs Claude Code, Bot screens, the Vault, memory and files, routines and background jobs, and Gmail and Outlook connections.">
 </picture>
 
 The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/architecture.excalidraw) (open it at excalidraw.com).
@@ -41,7 +41,7 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   **Queued** (tap **Send now** to interrupt it).
 
 Bots use **Sonnet 5.5 at extra-high effort** unless you change it in Settings › General (or per Bot).
-Bots get only the tools openbot gives them: your personal Claude Code plugins, MCP servers, skills and
+Bots get only the tools oBot gives them: your personal Claude Code plugins, MCP servers, skills and
 settings on the PC are not loaded into Bots (add MCP servers in Settings › Computer › Plugins). Settings
 files a Bot writes in its own folder are ignored too, so it can't give itself permissions. To give a Bot one
 of your skills, add it in the Bot's panel under **Skills**, or ask the Bot to copy it into its folder.
@@ -54,7 +54,7 @@ of your skills, add it in the Bot's panel under **Skills**, or ask the Bot to co
 | `frontend/desktop/` | The desktop app (Tauri window + built-in local server). |
 | `frontend/assets/` | The app icon. |
 | `backend/core/` | All server logic: API, Claude Code runner, Bot screens, Vault, storage, security. |
-| `backend/server/` | The `openbot-server` command. |
+| `backend/server/` | The `obot-server` command. |
 | `backend/install/windows/` | `install-host.ps1`: makes a Windows PC the always-on Bot computer. |
 | `docs/` | Documentation, starting at [`docs/README.md`](docs/README.md). API: [`docs/API.md`](docs/API.md). |
 
@@ -67,12 +67,12 @@ account. This is how the app reaches the PC privately, from anywhere.
 
 1. Install [Claude Code](https://claude.com/claude-code) (`irm https://claude.ai/install.ps1 | iex`) and
    [Git for Windows](https://git-scm.com/download/win). Run `claude` once and log in.
-2. Get `openbot-server.exe`: download it from this repository's **Actions** tab (artifact
-   `openbot-windows-latest`), or build it with [Rust](https://rustup.rs): `cargo build --release -p openbot-server`.
+2. Get `obot-server.exe`: download it from this repository's **Actions** tab (artifact
+   `obot-windows-latest`), or build it with [Rust](https://rustup.rs): `cargo build --release -p obot-server`.
 3. In **PowerShell as Administrator**, in this folder:
    ```powershell
    Set-ExecutionPolicy -Scope Process Bypass
-   .\backend\install\windows\install-host.ps1 -ServerExe <path to openbot-server.exe> -KeepAwake
+   .\backend\install\windows\install-host.ps1 -ServerExe <path to obot-server.exe> -KeepAwake
    ```
    It starts the server at every boot, keeps the PC awake while plugged in, turns on Tailscale Serve,
    and prints an **address** and a **6-digit pairing code**.
@@ -84,11 +84,11 @@ account. This is how the app reaches the PC privately, from anywhere.
 **Remote computer** and enter the address and pairing code.
 
 **4. On your iPhone (or any phone)**, install Tailscale and sign in with the same account. In the Mac
-app choose Settings › Computer › **Pair a new device** and scan the QR code with the phone's camera: openbot
-opens in Safari and pairs. Then tap Share › **Add to Home Screen**, open openbot from the Home Screen, and
+app choose Settings › Computer › **Pair a new device** and scan the QR code with the phone's camera: oBot
+opens in Safari and pairs. Then tap Share › **Add to Home Screen**, open oBot from the Home Screen, and
 turn on Settings › General › **Notifications** to hear when a Bot finishes or needs you while you're away.
 
-Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPROFILE%\OpenBot`.
+Data lives in `%APPDATA%\oBot` (settings, chats), and Bot folders in `%USERPROFILE%\oBot`.
 
 ## Security
 
@@ -96,7 +96,7 @@ Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPR
   your own devices can open. Never use `tailscale funnel` or forward port 7777.
 * Each device pairs once with a code that works once, for 10 minutes. The PC stores only a hash of each
   device's key. Keys travel in request headers, never in web addresses, and the server's log file doesn't
-  contain the sign-in link or pairing codes (run `openbot-server token` or `openbot-server pair` for those).
+  contain the sign-in link or pairing codes (run `obot-server token` or `obot-server pair` for those).
 * Phone notifications are encrypted for the phone, so Apple's or Google's push service can't read them.
 * Requests from other websites and unknown host names are refused, and repeated wrong
   tries (20 in a minute) lock that address out for 5 minutes.
@@ -125,18 +125,18 @@ Setting up the Google and Microsoft sign-in apps for a build: [docs/connections-
 ## Commands on the PC
 
 ```powershell
-openbot-server pair         # new pairing code for another device
-openbot-server devices      # list paired devices (unpair <id> removes one)
-openbot-server token        # owner token, for an SSH tunnel instead of Tailscale
-Get-Content "$env:LOCALAPPDATA\openbot\openbot-server.log" -Tail 50
+obot-server pair         # new pairing code for another device
+obot-server devices      # list paired devices (unpair <id> removes one)
+obot-server token        # owner token, for an SSH tunnel instead of Tailscale
+Get-Content "$env:LOCALAPPDATA\oBot\obot-server.log" -Tail 50
 .\backend\install\windows\install-host.ps1 -Uninstall
 ```
 
 ## Development
 
 ```bash
-OPENBOT_UI_DIR=$PWD/frontend/ui cargo run -p openbot-server -- --local-only   # UI reloads from disk
-cargo run -p openbot                                                         # the desktop app
+OBOT_UI_DIR=$PWD/frontend/ui cargo run -p obot-server -- --local-only   # UI reloads from disk
+cargo run -p obot                                                         # the desktop app
 ```
 
 `.github/workflows/build.yml` builds the Windows server and the Mac `.dmg` on every push. Repo rules
@@ -144,11 +144,11 @@ are in [`CLAUDE.md`](CLAUDE.md).
 
 ## License
 
-openbot is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). You can use,
+oBot is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). You can use,
 change and share it, but if you share a changed version, or run one as a service for other people, you must
 publish its full source code under the same license. Third-party code in `frontend/ui/vendor/` keeps its own
 license (see the license file in each folder).
 
 ---
 
-openbot is an independent project, not affiliated with or endorsed by Anthropic.
+oBot is an independent project, not affiliated with or endorsed by Anthropic.

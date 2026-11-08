@@ -1,4 +1,4 @@
-# Builds openbot for Windows and macOS on GitHub's computers.
+# Builds oBot for Windows and macOS on GitHub's computers.
 # Push this repo to GitHub, open the "Actions" tab, and download the files from the finished run.
 name: build
 on:
@@ -16,27 +16,28 @@ jobs:
     env:
       # The Google / Microsoft / GitHub sign-in apps for Settings › Connections (repository secrets,
       # see docs/connections-setup.md). Builds without them just can't connect accounts.
-      OPENBOT_GOOGLE_CLIENT_ID: ${{ secrets.OPENBOT_GOOGLE_CLIENT_ID }}
-      OPENBOT_GOOGLE_CLIENT_SECRET: ${{ secrets.OPENBOT_GOOGLE_CLIENT_SECRET }}
-      OPENBOT_MICROSOFT_CLIENT_ID: ${{ secrets.OPENBOT_MICROSOFT_CLIENT_ID }}
-      OPENBOT_GITHUB_CLIENT_ID: ${{ secrets.OPENBOT_GITHUB_CLIENT_ID }}
+      # The secrets keep the names from before the rename to oBot (GitHub can't rename a secret).
+      OBOT_GOOGLE_CLIENT_ID: ${{ secrets.OPENBOT_GOOGLE_CLIENT_ID }}
+      OBOT_GOOGLE_CLIENT_SECRET: ${{ secrets.OPENBOT_GOOGLE_CLIENT_SECRET }}
+      OBOT_MICROSOFT_CLIENT_ID: ${{ secrets.OPENBOT_MICROSOFT_CLIENT_ID }}
+      OBOT_GITHUB_CLIENT_ID: ${{ secrets.OPENBOT_GITHUB_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2" --locked
-      - name: Build openbot-server
-        run: cargo build --release -p openbot-server
-      - name: Build openbot app
+      - name: Build obot-server
+        run: cargo build --release -p obot-server
+      - name: Build oBot app
         working-directory: frontend/desktop
         run: cargo tauri build
       - uses: actions/upload-artifact@v4
         with:
-          name: openbot-${{ matrix.os }}
+          name: obot-${{ matrix.os }}
           path: |
-            target/release/openbot-server
-            target/release/openbot-server.exe
+            target/release/obot-server
+            target/release/obot-server.exe
             target/release/bundle/**/*.dmg
             target/release/bundle/**/*.msi
             target/release/bundle/**/*-setup.exe

@@ -1,4 +1,4 @@
-//! `openbot-server`: the always-on "computer" for your bots.
+//! `obot-server`: the always-on "computer" for your bots.
 //!
 //! Run it on the PC that should host the bots 24/7 (for example a Windows PC). It needs Claude Code
 //! installed and logged in on that PC.
@@ -8,26 +8,26 @@
 //! a 6-digit code.
 //!
 //! Usage:
-//!   openbot-server                    start (listens on 127.0.0.1:7777)
-//!   openbot-server --port 8080        use another port
-//!   openbot-server --host 0.0.0.0 --allow-network
+//!   obot-server                    start (listens on 127.0.0.1:7777)
+//!   obot-server --port 8080        use another port
+//!   obot-server --host 0.0.0.0 --allow-network
 //!                                     listen on the network too (not recommended)
-//!   openbot-server --data-dir <dir>   keep data somewhere else
-//!   openbot-server pair               make a 6-digit code to pair a new device (10 minutes, once)
-//!   openbot-server token              print the owner token (for this PC only)
-//!   openbot-server new-token          make a new owner token
-//!   openbot-server devices            list paired devices
-//!   openbot-server unpair <id>        remove a paired device
+//!   obot-server --data-dir <dir>   keep data somewhere else
+//!   obot-server pair               make a 6-digit code to pair a new device (10 minutes, once)
+//!   obot-server token              print the owner token (for this PC only)
+//!   obot-server new-token          make a new owner token
+//!   obot-server devices            list paired devices
+//!   obot-server unpair <id>        remove a paired device
 
 use std::path::PathBuf;
 
-use openbot_core::config::{default_data_dir, Config};
-use openbot_core::util::{fix_path_env, lan_ip, random_token};
+use obot_core::config::{default_data_dir, Config};
+use obot_core::util::{fix_path_env, lan_ip, random_token};
 
 fn print_pair_code(code: &str) {
     println!();
     println!("       Pairing code:  {} {}", &code[..3], &code[3..]);
-    println!("       It works once, for 10 minutes. Need another? Run: openbot-server pair");
+    println!("       It works once, for 10 minutes. Need another? Run: obot-server pair");
     println!();
 }
 
@@ -36,20 +36,20 @@ fn fmt_ms(ms: i64) -> String {
         .map(|d| d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_default()
 }
-use openbot_core::{start, ServeOptions};
+use obot_core::{start, ServeOptions};
 
 fn help() {
     println!(
-        "openbot-server {}\n\n\
-         Usage:\n  openbot-server [--port 7777] [--data-dir DIR]\n  \
-         openbot-server --host 0.0.0.0 --allow-network   also listen on the network (not recommended)\n  \
-         openbot-server pair         make a 6-digit code to pair a new device\n  \
-         openbot-server devices      list paired devices\n  \
-         openbot-server unpair ID    remove a paired device\n  \
-         openbot-server token        show the owner token (for this PC only)\n  \
-         openbot-server new-token    make a new owner token\n\n\
+        "obot-server {}\n\n\
+         Usage:\n  obot-server [--port 7777] [--data-dir DIR]\n  \
+         obot-server --host 0.0.0.0 --allow-network   also listen on the network (not recommended)\n  \
+         obot-server pair         make a 6-digit code to pair a new device\n  \
+         obot-server devices      list paired devices\n  \
+         obot-server unpair ID    remove a paired device\n  \
+         obot-server token        show the owner token (for this PC only)\n  \
+         obot-server new-token    make a new owner token\n\n\
          Reach it from other devices with Tailscale Serve:  tailscale serve --bg 7777",
-        openbot_core::VERSION
+        obot_core::VERSION
     );
 }
 
@@ -58,11 +58,11 @@ fn main() -> anyhow::Result<()> {
 
     // Claude Code starts us with `mcp-approve` to ask the user for permission.
     if args.get(1).map(String::as_str) == Some("mcp-approve") {
-        return openbot_core::mcp::run_approval_mcp();
+        return obot_core::mcp::run_approval_mcp();
     }
     // ...and with `hook <event>` at certain moments of a run (see hooks.rs).
     if args.get(1).map(String::as_str) == Some("hook") {
-        std::process::exit(openbot_core::hooks::run(&args[2..]));
+        std::process::exit(obot_core::hooks::run(&args[2..]));
     }
 
     let mut port: u16 = 7777;
@@ -124,14 +124,14 @@ fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Some("pair") => {
-            let (code, _) = openbot_core::security::new_pairing_code(&dir)?;
+            let (code, _) = obot_core::security::new_pairing_code(&dir)?;
             print_pair_code(&code);
             return Ok(());
         }
         Some("devices") => {
             let cfg = Config::load_or_create(&dir.join("config.json"))?;
             if cfg.devices.is_empty() {
-                println!("No paired devices. Run `openbot-server pair` to add one.");
+                println!("No paired devices. Run `obot-server pair` to add one.");
             }
             for d in &cfg.devices {
                 println!("{}  {}  (paired {})", d.id, d.name, fmt_ms(d.created_at));
@@ -140,7 +140,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some("unpair") => {
             let Some(id) = rest.first() else {
-                eprintln!("Usage: openbot-server unpair <device id>   (see `openbot-server devices`)");
+                eprintln!("Usage: obot-server unpair <device id>   (see `obot-server devices`)");
                 std::process::exit(2);
             };
             let path = dir.join("config.json");
@@ -151,9 +151,9 @@ fn main() -> anyhow::Result<()> {
                 eprintln!("No device with id {id}");
                 std::process::exit(1);
             }
-            openbot_core::push::forget_device(&mut cfg, id);
+            obot_core::push::forget_device(&mut cfg, id);
             cfg.save(&path)?;
-            println!("Removed. Restart openbot-server if it's running so the change takes effect now.");
+            println!("Removed. Restart obot-server if it's running so the change takes effect now.");
             return Ok(());
         }
         Some(other) => {
@@ -167,7 +167,7 @@ fn main() -> anyhow::Result<()> {
     let loopback = host == "localhost" || host.parse::<std::net::IpAddr>().map_or(false, |i| i.is_loopback());
     if !loopback {
         eprintln!();
-        eprintln!("  !!  WARNING: --host {host} makes openbot reachable from other computers on the network.");
+        eprintln!("  !!  WARNING: --host {host} makes oBot reachable from other computers on the network.");
         eprintln!("  !!  Anyone who can reach this port can try to get in, and the traffic is NOT encrypted.");
         eprintln!("  !!  Safer: keep the default (127.0.0.1) and use Tailscale Serve:  tailscale serve --bg {port}");
         eprintln!();
@@ -188,10 +188,10 @@ fn main() -> anyhow::Result<()> {
     rt.block_on(async move {
         let server = start(ServeOptions { host: host.clone(), port, data_dir }).await?;
         let port = server.addr.port();
-        let claude = openbot_core::computer::claude_info("").await;
+        let claude = obot_core::computer::claude_info("").await;
 
         println!();
-        println!("  openbot computer is running (version {})", openbot_core::VERSION);
+        println!("  oBot computer is running (version {})", obot_core::VERSION);
         println!();
         if !loopback {
             if let Some(ip) = lan_ip() {
@@ -200,27 +200,27 @@ fn main() -> anyhow::Result<()> {
         }
         println!("  Address on this PC:       http://127.0.0.1:{port}");
         // The sign-in link and pairing code are secrets: shown in a terminal, but not written to the
-        // log file when openbot-server runs in the background.
+        // log file when obot-server runs in the background.
         let terminal = std::io::IsTerminal::is_terminal(&std::io::stdout());
         if terminal {
             println!("  Open it on this PC:       http://127.0.0.1:{port}/?token={}", server.token);
         } else {
-            println!("  Open it on this PC:       run `openbot-server token` for the sign-in key (it isn't written here)");
+            println!("  Open it on this PC:       run `obot-server token` for the sign-in key (it isn't written here)");
         }
         println!();
         println!("  To use it from your other devices:");
         println!("    1. Install Tailscale on this PC and the other device, and sign in to both.");
         println!("    2. On this PC run:  tailscale serve --bg {port}");
         println!("       It prints a private https://...ts.net address only your devices can open.");
-        println!("    3. In the openbot app: Settings > Computer > Remote computer, enter that address");
+        println!("    3. In the oBot app: Settings > Computer > Remote computer, enter that address");
         println!("       and this pairing code:");
         if terminal {
-            match openbot_core::security::new_pairing_code(&server.state.data_dir) {
+            match obot_core::security::new_pairing_code(&server.state.data_dir) {
                 Ok((code, _)) => print_pair_code(&code),
                 Err(e) => println!("       (couldn't make a pairing code: {e})"),
             }
         } else {
-            println!("       a pairing code from `openbot-server pair` (or Settings > Computer > Pair a new device).");
+            println!("       a pairing code from `obot-server pair` (or Settings > Computer > Pair a new device).");
         }
         println!();
         if claude["installed"] != true {
@@ -240,7 +240,7 @@ fn main() -> anyhow::Result<()> {
         println!("  Keep this window open (or install it as a background task: see README). Ctrl+C stops it.");
 
         tokio::signal::ctrl_c().await?;
-        println!("\nStopping openbot.");
+        println!("\nStopping oBot.");
         anyhow::Ok(())
     })
 }

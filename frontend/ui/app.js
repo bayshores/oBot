@@ -1,4 +1,4 @@
-/* openbot UI. Plain JS, no build step. Talks to the openbot server API (docs/API.md).
+/* oBot UI. Plain JS, no build step. Talks to the oBot server API (docs/API.md).
    Bot characters come from avatar.js (window.OBAvatar). */
 'use strict';
 (() => {
@@ -223,7 +223,7 @@
     if (bot.color && A && A.isSkin && A.isSkin(bot.color)) return A.normalize({ color: bot.color });
     return defaultsFor(bot.id);
   }
-  // openbot is always dark (there is no light mode), so avatars are always painted for a dark background.
+  // oBot is always dark (there is no light mode), so avatars are always painted for a dark background.
   const themeName = () => 'dark';
   const inkOf = (color) => {
     const A = OB();
@@ -566,7 +566,23 @@
     return abs + (abs.includes('?') ? '&' : '?') + 'fk=' + encodeURIComponent(S.fileKey || '');
   }
 
+  // Saved before the rename to oBot under "openbot.*" names (a phone's pairing key, drafts...):
+  // move them to the "obot.*" names once, so nothing has to be set up again.
+  function moveOldStorage() {
+    for (const store of [localStorage, sessionStorage]) {
+      try {
+        for (const k of Object.keys(store)) {
+          if (!k.startsWith('openbot.')) continue;
+          const nk = 'obot.' + k.slice(8);
+          if (store.getItem(nk) == null) store.setItem(nk, store.getItem(k));
+          store.removeItem(k);
+        }
+      } catch {}
+    }
+  }
+
   function initToken() {
+    moveOldStorage();
     // A phone opened the pairing link (QR code): https://<computer>/#pair=123456. The code stays in
     // this browser (the part after "#" is never sent) and is used once by pairScreen().
     const bm = /(?:^#|&)bot=([\w-]{1,64})(?:&|$)/.exec(location.hash);
@@ -583,7 +599,7 @@
     const t = u.searchParams.get('token');
     if (t) {
       try {
-        sessionStorage.setItem('openbot.token', t);
+        sessionStorage.setItem('obot.token', t);
       } catch {}
       u.searchParams.delete('token');
       history.replaceState(null, '', u.pathname + u.search + u.hash);
@@ -591,7 +607,7 @@
       return;
     }
     try {
-      S.homeToken = sessionStorage.getItem('openbot.token') || localStorage.getItem('openbot.token');
+      S.homeToken = sessionStorage.getItem('obot.token') || localStorage.getItem('obot.token');
     } catch {}
   }
 
@@ -637,7 +653,7 @@
     S.lastNotify.set(bot.id, Date.now());
     let text = String(body || '').replace(/\s+/g, ' ').trim();
     if (text.length > 140) text = text.slice(0, 139) + '…';
-    if (kind === 'done') invoke('notify', { title: bot.name, body: text || 'Open openbot to see what it did' });
+    if (kind === 'done') invoke('notify', { title: bot.name, body: text || 'Open oBot to see what it did' });
     else invoke('notify', { title: `${bot.name} is waiting for you`, body: text || 'Waiting for you' });
   }
 
@@ -832,7 +848,7 @@
   }
   function bootScreen() {
     const remote = S.conn && S.conn.mode === 'remote' && S.conn.url;
-    showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, remote ? `Connecting to ${computerName()}…` : 'Starting openbot…')));
+    showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, remote ? `Connecting to ${computerName()}…` : 'Starting oBot…')));
   }
   const onThisComputer = () => /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
   // What a newly paired browser calls itself in Settings › Paired devices.
@@ -860,8 +876,8 @@
         const r = await req(location.origin, null, '/api/pair', { method: 'POST', body: { code, device_name: browserDeviceName() } });
         S.homeToken = r.token;
         try {
-          localStorage.setItem('openbot.token', r.token);
-          sessionStorage.setItem('openbot.token', r.token);
+          localStorage.setItem('obot.token', r.token);
+          sessionStorage.setItem('obot.token', r.token);
         } catch {}
         S.pairCode = null;
         boot();
@@ -883,9 +899,9 @@
       h(
         'div',
         { class: 'screen-card' },
-        h('div', { class: 'screen-art' }, avatar({ id: 'openbot', shape: 'ball', color: 'violet' }, 72, { live: true })),
-        h('h1', { class: 'screen-title' }, `Pair this ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} with openbot`),
-        h('p', { class: 'screen-sub' }, 'On the computer that runs your Bots, open openbot › Settings › Computer and choose Pair a new device. Scan the QR code with this phone’s camera, or type the 6-digit code here.'),
+        h('div', { class: 'screen-art' }, avatar({ id: 'oBot', shape: 'ball', color: 'violet' }, 72, { live: true })),
+        h('h1', { class: 'screen-title' }, `Pair this ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} with oBot`),
+        h('p', { class: 'screen-sub' }, 'On the computer that runs your Bots, open oBot › Settings › Computer and choose Pair a new device. Scan the QR code with this phone’s camera, or type the 6-digit code here.'),
         h('div', { class: 'screen-form' }, input, pair),
         status,
         h('button', { class: 'btn ghost sm screen-alt', onclick: () => tokenScreen(null, { token: true }) }, 'Use a token instead')
@@ -898,14 +914,14 @@
   }
   function tokenScreen(msg, opts) {
     if (!TAURI && !onThisComputer() && !(opts && opts.token)) return pairScreen(msg && 'This device isn’t paired anymore. Pair it again with a new code.');
-    const input = h('input', { class: 'field', type: 'password', placeholder: 'Paste your openbot token', autocomplete: 'off' });
+    const input = h('input', { class: 'field', type: 'password', placeholder: 'Paste your oBot token', autocomplete: 'off' });
     const go = () => {
       const v = input.value.trim();
       if (!v) return input.focus();
       S.homeToken = v;
       try {
-        sessionStorage.setItem('openbot.token', v);
-        localStorage.setItem('openbot.token', v);
+        sessionStorage.setItem('obot.token', v);
+        localStorage.setItem('obot.token', v);
       } catch {}
       boot();
     };
@@ -914,12 +930,12 @@
       h(
         'div',
         { class: 'screen-card' },
-        h('div', { class: 'screen-art' }, avatar({ id: 'openbot', shape: 'ball', color: 'violet' }, 72, { live: true })),
-        h('h1', { class: 'screen-title' }, 'Welcome to openbot'),
+        h('div', { class: 'screen-art' }, avatar({ id: 'oBot', shape: 'ball', color: 'violet' }, 72, { live: true })),
+        h('h1', { class: 'screen-title' }, 'Welcome to oBot'),
         h(
           'p',
           { class: 'screen-sub' },
-          msg || 'This page needs your openbot token. Open openbot from the app, or paste the token that openbot-server printed when it started.'
+          msg || 'This page needs your oBot token. Open oBot from the app, or paste the token that obot-server printed when it started.'
         ),
         h('div', { class: 'screen-form' }, input, h('button', { class: 'btn primary', onclick: go }, 'Continue'))
       )
@@ -945,8 +961,8 @@
       );
     } else if (remote) {
       title = `Can’t reach ${name}`;
-      sub = 'openbot keeps trying in the background. Check that:';
-      list = h('ul', { class: 'screen-list' }, h('li', null, `${name} is turned on and awake`), h('li', null, `Tailscale is on, on ${thisDevice()} and on ${name}`), h('li', null, `openbot is running on ${name}`));
+      sub = 'oBot keeps trying in the background. Check that:';
+      list = h('ul', { class: 'screen-list' }, h('li', null, `${name} is turned on and awake`), h('li', null, `Tailscale is on, on ${thisDevice()} and on ${name}`), h('li', null, `oBot is running on ${name}`));
       actions.append(
         h('button', { class: 'btn primary', onclick: () => boot() }, icon('refresh', 15), 'Retry'),
         h('button', { class: 'btn', onclick: () => useThisDevice() }, `Use ${thisDevice()} instead`),
@@ -970,8 +986,8 @@
       };
       offlineScreen.t = setTimeout(tick, 0);
     } else {
-      title = 'openbot couldn’t start';
-      sub = `Its local service isn’t answering. Quit openbot and open it again. ${err && err.message ? err.message : ''}`;
+      title = 'oBot couldn’t start';
+      sub = `Its local service isn’t answering. Quit oBot and open it again. ${err && err.message ? err.message : ''}`;
       actions.append(h('button', { class: 'btn primary', onclick: () => boot() }, icon('refresh', 15), 'Try again'));
     }
     showScreen(
@@ -998,7 +1014,7 @@
       const c = await home('/api/connection');
       S.conn = Object.assign({ mode: 'local', url: '', token: '' }, c || {});
     } catch (e) {
-      if (e.status === 401) return tokenScreen('That token didn’t work. Paste the token printed by openbot-server.');
+      if (e.status === 401) return tokenScreen('That token didn’t work. Paste the token printed by obot-server.');
       if (e.network) return offlineScreen(e);
       S.conn = { mode: 'local', url: '', token: '' };
     }
@@ -1102,7 +1118,7 @@
     let ws;
     try {
       // The token rides along as a subprotocol, not in the address.
-      ws = new WebSocket(u.toString(), ['openbot', 'openbot.auth.' + (S.apiToken || '')]);
+      ws = new WebSocket(u.toString(), ['obot', 'obot.auth.' + (S.apiToken || '')]);
     } catch {
       return scheduleReconnect(gen);
     }
@@ -1215,7 +1231,7 @@
     S.bannerTimer = setTimeout(() => {
       if (S.wsOk || el.classList.contains('bad')) return;
       el.textContent = '';
-      el.append(spinner('xs'), h('span', null, `Reconnecting to ${S.conn.mode === 'remote' ? hostOf(S.apiBase) : 'openbot'}…`));
+      el.append(spinner('xs'), h('span', null, `Reconnecting to ${S.conn.mode === 'remote' ? hostOf(S.apiBase) : 'oBot'}…`));
       el.hidden = false;
     }, 1500);
   }
@@ -1923,7 +1939,7 @@
   // ───────────────────────────── chat: selection, loading ─────────────────────────────
   function loadDraftStore() {
     try {
-      const raw = JSON.parse(localStorage.getItem('openbot.drafts') || '{}');
+      const raw = JSON.parse(localStorage.getItem('obot.drafts') || '{}');
       for (const k in raw) if (raw[k]) S.drafts.set(k, { text: raw[k], pending: [] });
     } catch {}
   }
@@ -1931,7 +1947,7 @@
     const o = {};
     for (const [k, v] of S.drafts) if (v.text) o[k] = v.text;
     try {
-      localStorage.setItem('openbot.drafts', JSON.stringify(o));
+      localStorage.setItem('obot.drafts', JSON.stringify(o));
     } catch {}
   }, 500);
   function saveDraft() {
@@ -3063,7 +3079,7 @@
       const u = new URL(S.apiBase);
       u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
       u.pathname = `/api/bots/${encodeURIComponent(botId)}/screen/ws`;
-      const r = new RFB(stage, u.toString(), { credentials: { password: info.password }, wsProtocols: ['binary', 'openbot.auth.' + (S.apiToken || '')] });
+      const r = new RFB(stage, u.toString(), { credentials: { password: info.password }, wsProtocols: ['binary', 'obot.auth.' + (S.apiToken || '')] });
       rfb = r;
       r.scaleViewport = true;
       r.resizeSession = false;
@@ -3115,10 +3131,10 @@
       frame
     );
   }
-  // pages can report their height: parent.postMessage({type:'openbot:height', height}, '*')
+  // pages can report their height: parent.postMessage({type:'obot:height', height}, '*')
   window.addEventListener('message', (e) => {
     const d = e.data;
-    if (!d || typeof d !== 'object' || !(d.type === 'openbot:height' || d.type === 'resize') || typeof d.height !== 'number') return;
+    if (!d || typeof d !== 'object' || !(d.type === 'obot:height' || d.type === 'resize') || typeof d.height !== 'number') return;
     for (const f of $$('.viz-frame')) {
       if (f.contentWindow === e.source) {
         const pin = S.pinned;
@@ -3139,13 +3155,13 @@
     Read: ['file', 'Files', 'read a file'],
     WebFetch: ['globe', 'Web', 'open a web page'],
     WebSearch: ['globe', 'Web', 'search the web'],
-    mcp__openbot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
-    mcp__openbot__email_send: ['mail', 'Email', 'send an email'],
-    mcp__openbot__email_update: ['trash', 'Email', 'move email to the trash'],
-    mcp__openbot__calendar_create: ['calendar', 'Calendar', 'add an event and invite people'],
-    mcp__openbot__calendar_update: ['calendar', 'Calendar', 'change an event'],
-    mcp__openbot__calendar_delete: ['calendar', 'Calendar', 'delete an event'],
-    mcp__openbot__calendar_respond: ['calendar', 'Calendar', 'reply to an invitation'],
+    mcp__obot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
+    mcp__obot__email_send: ['mail', 'Email', 'send an email'],
+    mcp__obot__email_update: ['trash', 'Email', 'move email to the trash'],
+    mcp__obot__calendar_create: ['calendar', 'Calendar', 'add an event and invite people'],
+    mcp__obot__calendar_update: ['calendar', 'Calendar', 'change an event'],
+    mcp__obot__calendar_delete: ['calendar', 'Calendar', 'delete an event'],
+    mcp__obot__calendar_respond: ['calendar', 'Calendar', 'reply to an invitation'],
   };
   // Approval card (settings-and-bots.md 2.3.1)
   const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
@@ -3297,7 +3313,8 @@
     const meta = m.meta || {};
     const b = ownerOf(m);
     const botName = b ? b.name : 'Your Bot';
-    const tool = meta.tool_name || '';
+    // Cards from before the rename to oBot name its tools mcp__openbot__*.
+    const tool = (meta.tool_name || '').replace(/^mcp__openbot__/, 'mcp__obot__');
     const shell = tool === 'Bash' || tool === 'PowerShell';
     const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(tool);
     const [ic, , verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', '', `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', '', `use ${tool || 'a tool'}`]);
@@ -5001,7 +5018,7 @@
       curBot() && { title: 'Bot settings', sub: curBot().name, icon: 'gear', type: 'Action', run: () => setPanel(true) },
       { title: 'Toggle compact sidebar', icon: 'sidebar', type: 'Action', sub: MOD + 'B', run: () => toggleRail() },
       { title: 'Keyboard shortcuts', icon: 'keyboard', type: 'Action', sub: 'Help', run: () => openShortcuts() },
-      { title: 'How openbot works', icon: 'sparkle', type: 'Action', sub: 'Help', run: () => openOnboarding() },
+      { title: 'How oBot works', icon: 'sparkle', type: 'Action', sub: 'Help', run: () => openOnboarding() },
       { title: 'Set up an always-on computer', icon: 'monitor', type: 'Action', sub: 'Help', run: () => openSetupWizard() },
       ...TABS.map(([key, label, ic]) => ({ title: `Settings: ${label}`, icon: ic, type: 'Action', sub: 'Settings', run: () => openSettings(key) })),
     ].filter(Boolean);
@@ -5163,7 +5180,7 @@
         '-',
         { label: 'Bot templates', icon: 'gridPlus', action: () => openTemplates() },
         { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: MOD + '/', action: () => openShortcuts() },
-        { label: 'How openbot works', icon: 'sparkle', action: () => openOnboarding() },
+        { label: 'How oBot works', icon: 'sparkle', action: () => openOnboarding() },
       ],
       'top-start'
     );
@@ -5206,8 +5223,8 @@
   const TAB_ALIAS = { account: 'usage' };
   const SAVE_ERR = 'Couldn’t save. Try again.';
   const USAGE_URL = 'https://claude.ai/settings/usage';
-  // The desktop app's menu bar (openbot › Settings…, Connect to Remote Computer…) calls this.
-  window.openbotOpenSettings = (tab) => openSettings(tab);
+  // The desktop app's menu bar (oBot › Settings…, Connect to Remote Computer…) calls this.
+  window.obotOpenSettings = (tab) => openSettings(tab);
   function openSettings(tab) {
     tab = TAB_ALIAS[tab] || tab;
     if (S.settingsUI) {
@@ -5220,7 +5237,7 @@
     const main = h('div', { class: 'set-main' }, body);
     const box = h(
       'div',
-      { class: 'settings', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'openbot settings' },
+      { class: 'settings', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'oBot settings' },
       nav,
       main,
       h('button', { class: 'icon-btn set-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 20))
@@ -5557,11 +5574,11 @@
           )
         )
       ),
-      section(null, card(row('Import Memory to openbot', pillBtn('Import', () => openImportMemory()), 'Transfer your preferences and context from another AI assistant', '', 'import-memory'))),
+      section(null, card(row('Import Memory to oBot', pillBtn('Import', () => openImportMemory()), 'Transfer your preferences and context from another AI assistant', '', 'import-memory'))),
       section(
         'Help',
         card(
-          row('How openbot works', pillBtn('Show tour', () => (S.settingsUI && S.settingsUI.close(), openOnboarding())), 'Replay the short welcome tour'),
+          row('How oBot works', pillBtn('Show tour', () => (S.settingsUI && S.settingsUI.close(), openOnboarding())), 'Replay the short welcome tour'),
           TAURI || onThisComputer() ? row('Set up an always-on computer', pillBtn('Start setup', () => openSetupWizard()), 'Keep your Bots working 24/7 on a PC that stays on') : null
         )
       )
@@ -5634,12 +5651,12 @@
     });
     const box = h(
       'div',
-      { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Import Memory to openbot' },
+      { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Import Memory to oBot' },
       h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
-      h('h2', { class: 'dialog-title' }, 'Import Memory to openbot'),
+      h('h2', { class: 'dialog-title' }, 'Import Memory to oBot'),
       h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '1'), h('span', null, 'Copy this prompt into a chat with your other AI assistant')),
       h('div', { class: 'im-prompt' }, h('pre', null, IMPORT_PROMPT), h('div', { class: 'im-copy' }, copyBtn)),
-      h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '2'), h('span', null, 'Paste the results below to add them to openbot’s memory')),
+      h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '2'), h('span', null, 'Paste the results below to add them to oBot’s memory')),
       ta,
       err,
       h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', onclick: () => close() }, 'Cancel'), addBtn)
@@ -5671,7 +5688,7 @@
             row(
               conn.mode === 'remote' && c && c.hostname ? `Execution on ${c.hostname}` : 'Execution on this computer',
               selectEl(pm, EXEC_OPTS, (v) => putSettings({ permission_mode: v }, 'local-execution'), 'ghost'),
-              'Let openbot open files and run tasks on your computer. Auto-review still checks everything first.',
+              'Let oBot open files and run tasks on your computer. Auto-review still checks everything first.',
               '',
               'local-execution'
             ),
@@ -5792,7 +5809,7 @@
         h(
           'div',
           { class: 'set-row stack' },
-          h('div', { class: 'set-row-sub' }, 'On the other computer, run the openbot host setup. It shows a private address and a 6-digit pairing code. Enter both here.'),
+          h('div', { class: 'set-row-sub' }, 'On the other computer, run the oBot host setup. It shows a private address and a 6-digit pairing code. Enter both here.'),
           h('label', { class: 'f-label' }, 'Address'),
           urlIn,
           insecure && h('div', { class: 'conn-result bad' }, icon('alert', 15), h('span', null, 'This address isn’t encrypted. Use the https://…ts.net address from Tailscale Serve, or an SSH tunnel to http://127.0.0.1.')),
@@ -5932,7 +5949,7 @@
 
     out.append(
       section(
-        'Run openbot 24/7 on another PC',
+        'Run oBot 24/7 on another PC',
         card(
           h(
             'div',
@@ -5942,7 +5959,7 @@
               { class: 'steps' },
               h('li', null, 'On the other PC (for example your Windows PC), install Claude Code and sign in by running ', h('code', null, 'claude'), ' once.'),
               h('li', null, 'Install Tailscale on that PC and on this computer, and sign in to the same account on both.'),
-              h('li', null, 'On the PC, run the openbot host setup (', h('code', null, 'install-host.ps1'), '). It keeps openbot private and prints a ', h('code', null, 'https://…ts.net'), ' address and a 6-digit pairing code.'),
+              h('li', null, 'On the PC, run the oBot host setup (', h('code', null, 'install-host.ps1'), '). It keeps oBot private and prints a ', h('code', null, 'https://…ts.net'), ' address and a 6-digit pairing code.'),
               h('li', null, 'Choose “Remote computer” above, enter the address and the code, then press Connect.')
             ),
             h('div', { class: 'set-row-sub' }, 'Only your own devices can reach the PC, and everything is encrypted. Never open port 7777 on your router or use Tailscale Funnel. Set the PC to never sleep so your bots stay online.'),
@@ -6000,7 +6017,7 @@
           `Enter this code on the new device. It works once, for ${left} more minute${left === 1 ? '' : 's'}.`
         )
       );
-      // A phone with Tailscale on scans this to open openbot and pair in one step.
+      // A phone with Tailscale on scans this to open oBot and pair in one step.
       if (st.code.qr)
         rows.push(
           h(
@@ -6011,14 +6028,14 @@
               'div',
               { class: 'set-row-text' },
               h('div', { class: 'set-row-title' }, 'Pair your phone'),
-              h('div', { class: 'set-row-sub' }, 'Turn on Tailscale on your phone, then scan this with its camera. On an iPhone, tap Share › Add to Home Screen afterwards to open openbot like an app.'),
+              h('div', { class: 'set-row-sub' }, 'Turn on Tailscale on your phone, then scan this with its camera. On an iPhone, tap Share › Add to Home Screen afterwards to open oBot like an app.'),
               h('div', { class: 'set-row-sub mono ellipsis', title: st.code.link }, st.code.link.split('#')[0])
             )
           )
         );
     }
     if (st.err) rows.push(row('Couldn’t load paired devices', btn('Try again', load), st.err));
-    else if (st.list && !st.list.length) rows.push(row('No paired devices', null, 'Only this computer’s own openbot app can use it right now.'));
+    else if (st.list && !st.list.length) rows.push(row('No paired devices', null, 'Only this computer’s own oBot app can use it right now.'));
     for (const dv of st.list || []) {
       rows.push(
         row(
@@ -6180,7 +6197,7 @@
         out = build();
         const slug = mcpSlug(out.displayName || '');
         if (!slug) throw new Error('Name must contain at least one letter or number');
-        if ((S.settings.mcp_servers || []).some((m) => mcpSlug(m.name) === slug) || slug === 'openbot') throw new Error(`A server named "${out.displayName.trim()}" already exists`);
+        if ((S.settings.mcp_servers || []).some((m) => mcpSlug(m.name) === slug) || slug === 'obot') throw new Error(`A server named "${out.displayName.trim()}" already exists`);
         out.body.name = slug;
       } catch (e) {
         err.textContent = e.message;
@@ -6231,7 +6248,7 @@
     }
     const on = s.auto_review !== false;
     const out = h('div');
-    const reviewCard = card(row('Auto-Review', toggleEl(on, (v) => putSettings({ auto_review: v }, 'auto-review')), 'Review openbot actions based on custom rules', '', 'auto-review'));
+    const reviewCard = card(row('Auto-Review', toggleEl(on, (v) => putSettings({ auto_review: v }, 'auto-review')), 'Review oBot actions based on custom rules', '', 'auto-review'));
     out.append(h('div', { class: 'set-section' }, reviewCard));
     if (!on) {
       out.append(
@@ -6239,7 +6256,7 @@
           'div',
           { class: 'set-alert warn' },
           icon('alert', 16),
-          h('div', { class: 'set-alert-text' }, h('div', { class: 'set-alert-title' }, 'Rules aren’t used while Auto-review is off'), h('div', null, 'openbot runs actions without checking them. Tools set to Needs approval still ask.')),
+          h('div', { class: 'set-alert-text' }, h('div', { class: 'set-alert-title' }, 'Rules aren’t used while Auto-review is off'), h('div', null, 'oBot runs actions without checking them. Tools set to Needs approval still ask.')),
           pillBtn('Turn on', () => putSettings({ auto_review: true }, 'auto-review'))
         )
       );
@@ -6293,7 +6310,7 @@
     }
     out.append(lists);
 
-    // Claude Code's own allow rules (added by "Always allow"), openbot-specific
+    // Claude Code's own allow rules (added by "Always allow"), oBot-specific
     const tr = s.allow_rules || [];
     if (tr.length) {
       out.append(
@@ -6380,7 +6397,7 @@
     if (n.length > 128) return 'Too long. Maximum length is 128.';
     if (!/^[A-Z][A-Z0-9_]*$/.test(n)) return 'Use an uppercase environment variable name (A-Z, 0-9, _) that starts with a letter';
     const rv = (S.settings && S.settings.vault_reserved) || { names: [], prefixes: [] };
-    if (rv.names.includes(n)) return `${n} is reserved: the computer, Claude Code or openbot needs it to run Bots. Pick another name.`;
+    if (rv.names.includes(n)) return `${n} is reserved: the computer, Claude Code or oBot needs it to run Bots. Pick another name.`;
     const p = rv.prefixes.find((x) => n.startsWith(x));
     if (p) return `Names starting with ${p} are reserved: Claude Code or the computer uses them. Pick another name.`;
     return '';
@@ -6547,7 +6564,7 @@
       note(
         v.tab === 'secrets'
           ? 'Secrets are environment variables for your Bots’ shell commands. Bots see the names and what they are for, never the values. '
-          : 'Bots never see saved passwords: openbot types them into the login page on the Bot’s screen, and only on the websites you saved them for. Bots can see usernames and contact info so they can type them in. ',
+          : 'Bots never see saved passwords: oBot types them into the login page on the Bot’s screen, and only on the websites you saved them for. Bots can see usernames and contact info so they can type them in. ',
         h('span', { class: 'secret-protection' }, (s.vault_protection || 'Not encrypted') + '.')
       )
     );
@@ -7030,7 +7047,7 @@
     el.innerHTML = PROVIDER_LOGO[p] || '';
     return el;
   }
-  // Where the browser comes back after signing in: this device's own openbot (the desktop app's
+  // Where the browser comes back after signing in: this device's own oBot (the desktop app's
   // local server), which passes it on to the computer your Bots run on.
   function signInReturn() {
     const local = /^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname);
@@ -7110,7 +7127,7 @@
         { class: 'set-section' },
         h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Email, calendar and files'), h('div', { class: 'set-explain' }, 'Connect Google or Microsoft so your Bots can read, write and organize email, manage your calendar and, with Google, work with your Google Drive files. You sign in once and stay connected.'))),
         h('div', { class: 'acct-connects' }, connectBtn('google'), connectBtn('microsoft')),
-        !ready.google || !ready.microsoft ? h('div', { class: 'f-hint' }, `${[!ready.google && 'Google', !ready.microsoft && 'Microsoft'].filter(Boolean).join(' and ')} sign-in isn’t set up in this version of openbot yet.`) : null
+        !ready.google || !ready.microsoft ? h('div', { class: 'f-hint' }, `${[!ready.google && 'Google', !ready.microsoft && 'Microsoft'].filter(Boolean).join(' and ')} sign-in isn’t set up in this version of oBot yet.`) : null
       )
     );
     if (ui.connect) out.append(connectingCard(ui.connect));
@@ -7131,13 +7148,13 @@
           null,
           h('span', { class: 'secret-desc' }, a.services),
           h('span', { class: 'secret-access' }, scopeText(a.bots, 'Bots')),
-          a.needs_reconnect && h('span', { class: 'secret-problem' }, `${PROVIDER_NAME[a.provider]} stopped accepting openbot’s sign-in (for example after a password change). Click Reconnect and sign in again.`),
+          a.needs_reconnect && h('span', { class: 'secret-problem' }, `${PROVIDER_NAME[a.provider]} stopped accepting oBot’s sign-in (for example after a password change). Click Reconnect and sign in again.`),
           !a.needs_reconnect && a.missing && a.missing.length > 0 && h('span', { class: 'secret-access' }, `Not allowed yet: ${a.missing.join(', ')}. Click Update permissions, sign in and tick every box on the permission screen.`)
         )
       );
     });
     out.append(h('div', { class: 'set-section' }, h('div', { class: 'set-label' }, 'Connected accounts'), rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No accounts connected yet'))));
-    out.append(note('Sending email, inviting people to events and deleting always ask you first with an Allow / Deny card. openbot keeps the sign-in encrypted on the computer your Bots run on.'));
+    out.append(note('Sending email, inviting people to events and deleting always ask you first with an Allow / Deny card. oBot keeps the sign-in encrypted on the computer your Bots run on.'));
     out.append(githubSection(s, busy));
     return out;
   }
@@ -7166,12 +7183,12 @@
               null,
               h('span', { class: 'secret-desc' }, 'Repos, files, issues and pull requests, including private ones'),
               h('span', { class: 'secret-access' }, scopeText(gh.bots, 'Bots')),
-              gh.needs_reconnect && h('span', { class: 'secret-problem' }, 'GitHub stopped accepting openbot’s access (for example after it was removed on github.com). Click Reconnect.')
+              gh.needs_reconnect && h('span', { class: 'secret-problem' }, 'GitHub stopped accepting oBot’s access (for example after it was removed on github.com). Click Reconnect.')
             )
           )
         )
       );
-    else body.push(h('div', { class: 'acct-connects' }, h('button', { class: 'btn pill acct-connect', disabled: busy || !ready, onclick: connectGithub }, providerLogo('github'), h('span', null, 'Connect GitHub'))), !ready ? h('div', { class: 'f-hint' }, 'GitHub sign-in isn’t set up in this version of openbot yet.') : null);
+    else body.push(h('div', { class: 'acct-connects' }, h('button', { class: 'btn pill acct-connect', disabled: busy || !ready, onclick: connectGithub }, providerLogo('github'), h('span', null, 'Connect GitHub'))), !ready ? h('div', { class: 'f-hint' }, 'GitHub sign-in isn’t set up in this version of oBot yet.') : null);
     return h(
       'div',
       { class: 'set-section' },
@@ -7253,7 +7270,7 @@
     const gh = S.settings && S.settings.github;
     const ok = await confirmDialog({
       title: `Remove GitHub (${gh ? gh.login : ''})?`,
-      body: 'Bots can no longer use GitHub, and openbot forgets its access. To also remove openbot from your GitHub account, open github.com › Settings › Applications › Authorized OAuth Apps.',
+      body: 'Bots can no longer use GitHub, and oBot forgets its access. To also remove oBot from your GitHub account, open github.com › Settings › Applications › Authorized OAuth Apps.',
       confirmText: 'Remove',
       danger: true,
     });
@@ -7344,7 +7361,7 @@
     );
   }
   async function removeAccount(a) {
-    const ok = await confirmDialog({ title: `Remove ${a.email}?`, body: 'Bots can no longer use this account. openbot signs out of it and forgets the sign-in.', confirmText: 'Remove', danger: true });
+    const ok = await confirmDialog({ title: `Remove ${a.email}?`, body: 'Bots can no longer use this account. oBot signs out of it and forgets the sign-in.', confirmText: 'Remove', danger: true });
     if (!ok) return;
     try {
       S.settings = await api('/api/accounts/' + encodeURIComponent(a.id), { method: 'DELETE' });
@@ -7463,7 +7480,7 @@
     const key = th ? `${th}:${(info && info.resetsAt) || ''}` : '';
     let dismissed = '';
     try {
-      dismissed = localStorage.getItem('openbot.usageWarning') || '';
+      dismissed = localStorage.getItem('obot.usageWarning') || '';
     } catch {}
     const show = !!th && dismissed !== key;
     const was = !el.hidden;
@@ -7481,7 +7498,7 @@
             'aria-label': 'Dismiss usage warning',
             onclick: () => {
               try {
-                localStorage.setItem('openbot.usageWarning', key);
+                localStorage.setItem('obot.usageWarning', key);
               } catch {}
               renderUsageBanner();
             },
@@ -7524,7 +7541,7 @@
     return h(
       'div',
       null,
-      section('openbot Updates', card(row('Version', h('span', { class: 'ver' }, `Version ${S.version || '—'}`, S.version && copyBtn(S.version)), 'openbot updates when you install a new build.', '', 'update-status'))),
+      section('oBot Updates', card(row('Version', h('span', { class: 'ver' }, `Version ${S.version || '—'}`, S.version && copyBtn(S.version)), 'oBot updates when you install a new build.', '', 'update-status'))),
       section(
         'Claude Code Updates',
         card(
@@ -7546,7 +7563,7 @@
   const ThisDevice = () => cap(thisDevice());
   const CLAUDE_INSTALL = { unix: 'curl -fsSL https://claude.ai/install.sh | bash', win: 'irm https://claude.ai/install.ps1 | iex' };
   const HOST_CMD = 'Set-ExecutionPolicy -Scope Process Bypass; .\\install-host.ps1 -KeepAwake';
-  const GITHUB_URL = 'https://github.com/bayshores/openbot';
+  const GITHUB_URL = 'https://github.com/bayshores/oBot';
   const TAILSCALE_URL = 'https://tailscale.com/download';
   function osLabel(os) {
     const o = String(os || '').toLowerCase();
@@ -7616,7 +7633,7 @@
       if (!c.installed) {
         box.append(
           statusLine('bad', `Claude Code isn’t installed on ${where}`),
-          h('p', { class: 'ob-p' }, `openbot uses Claude Code to do the work. Open ${shellName()} on ${where}, paste this, and press Enter:`),
+          h('p', { class: 'ob-p' }, `oBot uses Claude Code to do the work. Open ${shellName()} on ${where}, paste this, and press Enter:`),
           cmdBlock(botComputerIsWindows() ? CLAUDE_INSTALL.win : CLAUDE_INSTALL.unix),
           h('p', { class: 'ob-p' }, 'When it finishes, type ', h('code', null, 'claude'), ' and sign in with your Claude account.'),
           h('div', { class: 'ob-row' }, again)
@@ -7728,7 +7745,7 @@
         if (opts.onDone) opts.onDone(name);
       } catch (e) {
         st.busy = false;
-        st.err = e && e.network ? 'Couldn’t reach openbot on this computer. Is the openbot app still running?' : e.status === 404 ? 'Couldn’t find openbot at that address. Check it and try again.' : String(e.message || '').replace(/`/g, '');
+        st.err = e && e.network ? 'Couldn’t reach oBot on this computer. Is the oBot app still running?' : e.status === 404 ? 'Couldn’t find oBot at that address. Check it and try again.' : String(e.message || '').replace(/`/g, '');
         paint();
       }
     }
@@ -7787,7 +7804,7 @@
           { class: 'ob-steps big' },
           h('li', null, 'Install Tailscale and sign in with the same account. ', extLink('Get Tailscale', TAILSCALE_URL)),
           h('li', null, 'Install Claude Code: open PowerShell, paste this, press Enter, then type ', h('code', null, 'claude'), ' and sign in.', cmdBlock(CLAUDE_INSTALL.win)),
-          h('li', null, 'Download ', h('code', null, 'openbot-server.exe'), ' and ', h('code', null, 'install-host.ps1'), ' from the openbot GitHub page into one folder. ', extLink('Open GitHub', GITHUB_URL)),
+          h('li', null, 'Download ', h('code', null, 'obot-server.exe'), ' and ', h('code', null, 'install-host.ps1'), ' from the oBot GitHub page into one folder. ', extLink('Open GitHub', GITHUB_URL)),
           h('li', null, 'Open PowerShell as Administrator in that folder and run:', cmdBlock(HOST_CMD)),
           h('li', null, 'It shows an address and a 6-digit code. Keep them for the next step.')
         ),
@@ -7802,7 +7819,7 @@
         out.push(
           h(
             'div',
-            { class: 'radio-list wz-found', role: 'radiogroup', 'aria-label': 'Computers running openbot' },
+            { class: 'radio-list wz-found', role: 'radiogroup', 'aria-label': 'Computers running oBot' },
             st.disc.map((f) =>
               h(
                 'button',
@@ -7816,7 +7833,7 @@
                   },
                 },
                 h('span', { class: 'wz-os' }, icon('monitor', 16)),
-                h('span', { class: 'radio-item-name' }, [f.computer_name || f.name, osLabel(f.os), f.version ? `openbot ${f.version}` : ''].filter(Boolean).join(' · ')),
+                h('span', { class: 'radio-item-name' }, [f.computer_name || f.name, osLabel(f.os), f.version ? `oBot ${f.version}` : ''].filter(Boolean).join(' · ')),
                 h('span', { class: 'radio-dot' })
               )
             )
@@ -7824,7 +7841,7 @@
           h('div', { class: 'ob-row' }, h('button', { class: 'link-btn', onclick: () => ((st.manual = true), paint()) }, 'Enter the address yourself'))
         );
       } else {
-        if (st.disc && !st.disc.length) out.push(statusLine('bad', 'Didn’t find openbot on your devices yet'), h('div', { class: 'ob-row' }, h('button', { class: 'btn', onclick: discover }, 'Search again')));
+        if (st.disc && !st.disc.length) out.push(statusLine('bad', 'Didn’t find oBot on your devices yet'), h('div', { class: 'ob-row' }, h('button', { class: 'btn', onclick: discover }, 'Search again')));
         const urlIn = h('input', { class: 'field mono', value: st.url, placeholder: 'https://my-pc.tailnet.ts.net', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Computer address' });
         urlIn.addEventListener('input', () => (st.url = urlIn.value));
         out.push(h('label', { class: 'f-label' }, 'Address'), urlIn);
@@ -7889,7 +7906,7 @@
     box.append(
       h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
       h('h2', { class: 'dialog-title' }, opts.url ? `Pair ${thisDevice()} again` : 'Set up an always-on computer'),
-      h('p', { class: 'dialog-body' }, opts.url ? 'Get a new 6-digit code on that computer: open openbot there and choose Settings › Computer › Pair a new device, or run openbot-server pair.' : 'Your Bots keep working 24/7 on a computer that stays on, and you use them from here.'),
+      h('p', { class: 'dialog-body' }, opts.url ? 'Get a new 6-digit code on that computer: open oBot there and choose Settings › Computer › Pair a new device, or run obot-server pair.' : 'Your Bots keep working 24/7 on a computer that stays on, and you use them from here.'),
       wz.el
     );
     return close;
@@ -7899,7 +7916,7 @@
   const SUGGESTIONS = ['What can you do for me?', 'Every weekday at 8am, send me a short news summary', 'Help me plan my week'];
   function maybeOnboard() {
     if (S.prefs.onboarded || S.onboardingOpen) return;
-    // People who already use openbot skip it.
+    // People who already use oBot skip it.
     const used = !S.freshPrefs || S.bots.size > 1 || S.conn.mode === 'remote';
     if (used) {
       S.prefs.onboarded = true;
@@ -7923,7 +7940,7 @@
     const foot = h('div', { class: 'ob-foot' });
     const dots = h('div', { class: 'ob-dots', 'aria-hidden': 'true' });
     const skip = h('button', { class: 'link-btn ob-skip', onclick: () => finish() }, 'Skip');
-    const box = h('div', { class: 'dialog onboard', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Welcome to openbot' }, skip, art, body, foot, dots);
+    const box = h('div', { class: 'dialog onboard', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Welcome to oBot' }, skip, art, body, foot, dots);
     const onMove = (e) => {
       if (!av._av || !av._av.lookAt) return;
       const r = av.getBoundingClientRect();
@@ -7978,7 +7995,7 @@
       steps().forEach((_, j) => dots.append(h('span', { class: j === st.i ? 'on' : '' })));
       if (id === 'welcome') {
         mood('idle');
-        body.append(h('h1', { class: 'ob-title' }, 'openbot'), h('p', { class: 'ob-lead' }, 'Your always-on Bots that do real work on a computer, powered by your Claude subscription.'));
+        body.append(h('h1', { class: 'ob-title' }, 'oBot'), h('p', { class: 'ob-lead' }, 'Your always-on Bots that do real work on a computer, powered by your Claude subscription.'));
         foot.append(h('button', { class: 'btn primary ob-wide', onclick: () => go(1) }, 'Get started'));
       } else if (id === 'name') {
         mood('waking');
@@ -8145,8 +8162,8 @@
     if (S.link === 'unreachable' || S.link === 'retrying')
       return {
         kind: 'bad',
-        title: remote ? `Can’t reach ${name}` : 'Can’t reach openbot',
-        list: remote ? [`Is ${name} turned on and awake?`, `Is Tailscale on, on ${thisDevice()} and on ${name}?`] : ['Is the openbot app still running?'],
+        title: remote ? `Can’t reach ${name}` : 'Can’t reach oBot',
+        list: remote ? [`Is ${name} turned on and awake?`, `Is Tailscale on, on ${thisDevice()} and on ${name}?`] : ['Is the oBot app still running?'],
         note: 'Trying again automatically…',
         actions: [
           [S.link === 'retrying' ? 'Retrying…' : 'Retry', retryNow, 'primary', S.link === 'retrying'],
@@ -8347,7 +8364,7 @@
   }, 60000);
 
   // ───────────────────────────── phone notifications (sw.js, push.rs) ─────────────────────────────
-  // Web Push needs the service worker. On an iPhone it only works once openbot is on the Home Screen.
+  // Web Push needs the service worker. On an iPhone it only works once oBot is on the Home Screen.
   const pushPossible = () => !TAURI && window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
   const isIOS = () => /iPhone|iPad/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
   const standalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
@@ -8362,7 +8379,7 @@
     return swReg;
   }
   if (!TAURI && 'serviceWorker' in navigator) {
-    // A notification was tapped while openbot was open: show that chat.
+    // A notification was tapped while oBot was open: show that chat.
     navigator.serviceWorker.addEventListener('message', (e) => {
       const bot = e.data && e.data.type === 'open-bot' && e.data.bot;
       if (bot && S.bots.has(bot)) selectBot(bot, { focus: true });
@@ -8379,9 +8396,9 @@
   // Must run straight from a tap: iPhones only ask for permission then.
   async function enablePush() {
     const perm = await Notification.requestPermission();
-    if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Notifications are blocked for openbot. Allow them in this phone’s Settings › Notifications › openbot.' : 'Notifications weren’t allowed.');
+    if (perm !== 'granted') throw new Error(perm === 'denied' ? 'Notifications are blocked for oBot. Allow them in this phone’s Settings › Notifications › oBot.' : 'Notifications weren’t allowed.');
     const reg = swReg || (await registerSW());
-    if (!reg) throw new Error('This browser can’t show notifications from openbot.');
+    if (!reg) throw new Error('This browser can’t show notifications from oBot.');
     const { key } = await api('/api/push/key');
     let sub = await reg.pushManager.getSubscription();
     if (sub) {
@@ -8416,9 +8433,9 @@
     }
     let body;
     if (isIOS() && !standalone()) {
-      body = row('Notifications on this phone', null, 'Add openbot to your Home Screen first: tap Share, then Add to Home Screen. Open openbot from there and turn this on.');
+      body = row('Notifications on this phone', null, 'Add oBot to your Home Screen first: tap Share, then Add to Home Screen. Open oBot from there and turn this on.');
     } else if (!pushPossible()) {
-      body = row('Notifications on this device', null, window.isSecureContext ? 'This browser can’t show notifications from openbot.' : 'Open openbot at its https:// Tailscale address to get notifications.');
+      body = row('Notifications on this device', null, window.isSecureContext ? 'This browser can’t show notifications from oBot.' : 'Open oBot at its https:// Tailscale address to get notifications.');
     } else {
       const on = !!st.sub;
       const toggle = toggleEl(on, async (v) => {
@@ -8451,7 +8468,7 @@
         rerenderSettings(true);
       };
       body = [
-        row('Notifications on this device', toggle, st.msg || 'When a Bot finishes or needs you while openbot isn’t open anywhere. Bots you’ve muted stay quiet.'),
+        row('Notifications on this device', toggle, st.msg || 'When a Bot finishes or needs you while oBot isn’t open anywhere. Bots you’ve muted stay quiet.'),
         on ? row('Test', pillBtn('Send a Test', test), 'Check that notifications reach this device') : null,
       ];
     }

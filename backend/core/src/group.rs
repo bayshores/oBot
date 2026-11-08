@@ -296,10 +296,10 @@ pub fn turn_prompt(st: &Shared, group: &str, bot: &str, winding_down: bool) -> O
     st.db.kv_set(&format!("{}:prev", seen_key(group, bot)), &seen.to_string());
     st.db.kv_set(&seen_key(group, bot), &last.to_string());
     let mut p = crate::reactions::take_notes(st, group, bot);
-    p.push_str(&format!("<openbot_group name=\"{}\">\n{}\n</openbot_group>", g.name.replace('"', "'"), lines.join("\n\n")));
+    p.push_str(&format!("<obot_group name=\"{}\">\n{}\n</obot_group>", g.name.replace('"', "'"), lines.join("\n\n")));
     if winding_down {
         p.push_str(
-            "\n[openbot: Another Bot in the group named you. Answer if it asked you something; otherwise reply PASS. \
+            "\n[oBot: Another Bot in the group named you. Answer if it asked you something; otherwise reply PASS. \
              Keep it short and don't start a new back-and-forth.]",
         );
     }
@@ -357,7 +357,7 @@ pub fn persona(st: &Shared, group: &str, me: &Bot) -> String {
         }
     }
     s.push_str(
-        "Each message you get here holds what was said in the group since your last turn, inside <openbot_group> tags. \
+        "Each message you get here holds what was said in the group since your last turn, inside <obot_group> tags. \
          Everyone in the group sees what you write, with your name on it.\n\
          - Answer when the message is for you, when it's in your area, or when you can add something the others can't. \
          Otherwise reply with only the word PASS, and nothing is posted.\n\

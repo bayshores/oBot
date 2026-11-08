@@ -1,7 +1,7 @@
 //! Vault logins and contact info (Settings › Vault), and the Bot tools that use them.
 //!
 //! - A **login** is up to 10 websites, a username, a password and hints. Bots see the websites,
-//!   usernames and hints (`list_logins`) but never the password: `fill_login` has openbot type it
+//!   usernames and hints (`list_logins`) but never the password: `fill_login` has oBot type it
 //!   straight into the login page on the Bot's screen, and only when that page is `https://` on one
 //!   of the login's websites or a subdomain (so a look-alike page on another website gets nothing).
 //!   Passwords are saved encrypted (see vault.rs) and can't be read back, not even in the app.
@@ -335,7 +335,7 @@ pub fn tool_definitions() -> Vec<Value> {
                "description": "List the website logins the user saved for you in the Vault: id, websites, username and hints (never the password). Give \"site\" (like ucsd.edu) to see only logins for that website.",
                "inputSchema": {"type": "object", "properties": {"site": {"type": "string"}}}}),
         json!({"name": "fill_login",
-               "description": "Sign in with a saved login: openbot types its username and password into the login page in front on your screen. You never see the password. Works only on https pages of that login's websites (or their subdomains). Open the login page first; on a two-step login (username first, password on the next page) call it again on each page. Then click the sign-in button yourself. Leave out \"id\" when only one saved login is for this website: openbot picks it.",
+               "description": "Sign in with a saved login: oBot types its username and password into the login page in front on your screen. You never see the password. Works only on https pages of that login's websites (or their subdomains). Open the login page first; on a two-step login (username first, password on the next page) call it again on each page. Then click the sign-in button yourself. Leave out \"id\" when only one saved login is for this website: oBot picks it.",
                "inputSchema": {"type": "object", "properties": {"id": {"type": "string", "description": "The login's id from list_logins (needed only when several logins are for this website)"}}}}),
         json!({"name": "list_contact_info",
                "description": "The user's saved contact info from the Vault (name, address, phone numbers, emails), for filling in forms. Type it in yourself with computer_type.",

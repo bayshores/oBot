@@ -1,4 +1,4 @@
-# openbot repo rules
+# oBot repo rules
 
 These rules keep the repo clean. They apply to people and to AI coding assistants (Claude Code reads this file automatically).
 
@@ -10,8 +10,8 @@ These rules keep the repo clean. They apply to people and to AI coding assistant
 | `frontend/desktop/` | The Tauri desktop app (window, menus, OS notifications). | Server logic; it belongs in `backend/core`. |
 | `frontend/assets/` | Source art (the app icon SVG/PNG). | Generated icon sizes; those live in `frontend/desktop/icons/`. |
 | `backend/core/` | All server logic: API, Claude Code runner, storage, security. | UI code. |
-| `backend/server/` | Only the `openbot-server` command-line entry point. | Logic that the desktop app also needs (put it in `core`). |
-| `backend/install/<os>/` | Scripts that set up a computer to host openbot. | One-off debugging scripts. |
+| `backend/server/` | Only the `obot-server` command-line entry point. | Logic that the desktop app also needs (put it in `core`). |
+| `backend/install/<os>/` | Scripts that set up a computer to host oBot. | One-off debugging scripts. |
 | `docs/` | Documentation. Add every new doc to `docs/README.md`. | Notes copied from other companies' apps (see below). |
 | `docs/research/` | Research write-ups (how other apps do something, options we compared). One topic per file, with sources. | Raw dumps, unsourced claims. |
 

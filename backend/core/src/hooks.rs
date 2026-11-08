@@ -1,7 +1,7 @@
 //! Claude Code hooks for Bots.
 //!
 //! Each run gets a settings file (see `runner::build_command`) telling Claude Code to start this
-//! same program as `<openbot> hook <event> --config <bot's mcp.json>` at two moments:
+//! same program as `<obot> hook <event> --config <bot's mcp.json>` at two moments:
 //!
 //! - **Stop** (the Bot is about to end its turn): if its last reply promises to follow up later
 //!   ("I'll check back tomorrow") but it never scheduled anything, it's sent back once to call
@@ -147,7 +147,7 @@ fn stop_check(t: &Turn) -> Option<String> {
     let promised = PROMISES.iter().any(|p| text.contains(p));
     let scheduled = t.tools.iter().any(|n| SCHEDULERS.iter().any(|s| n.ends_with(s)));
     (promised && !scheduled).then(|| {
-        "[openbot] Your reply promises to follow up later, but nothing is scheduled, so you'd never be woken up. \
+        "[oBot] Your reply promises to follow up later, but nothing is scheduled, so you'd never be woken up. \
          Call check_back_later now with a note of what to do (or create_routine for something recurring). \
          If you didn't mean to follow up, end with one short line correcting your promise instead."
             .to_string()
@@ -161,12 +161,13 @@ fn precompact_fact(transcript: &str) -> Option<String> {
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .filter_map(|e| user_text(&e))
         .map(|t| {
-            // openbot's own wake-ups and routines are tagged; keep only a short label for them.
-            // "[openbot: ...]" is a note openbot put above the user's own words: keep the words.
+            // oBot's own wake-ups and routines are tagged; keep only a short label for them.
+            // "[oBot: ...]" is a note oBot put above the user's own words: keep the words.
+            // (Chats from before the rename use "<openbot" and "[openbot".)
             let t = t.trim();
-            if t.starts_with("<openbot") {
+            if t.starts_with("<obot") || t.starts_with("<openbot") {
                 crate::util::truncate_chars(t.lines().next().unwrap_or(""), 80)
-            } else if t.starts_with("[openbot") {
+            } else if t.starts_with("[oBot") || t.starts_with("[openbot") {
                 let rest = t.split_once('\n').map(|x| x.1).unwrap_or("");
                 crate::util::truncate_chars(&rest.replace('\n', " "), 160)
             } else {
@@ -186,15 +187,15 @@ fn precompact_fact(transcript: &str) -> Option<String> {
     ))
 }
 
-/// Save a memory through the openbot server (same route the Bot's own tools use).
+/// Save a memory through the oBot server (same route the Bot's own tools use).
 fn save_memory(mcp_config: &PathBuf, fact: &str) {
     let Ok(text) = std::fs::read_to_string(mcp_config) else { return };
     let Ok(cfg) = serde_json::from_str::<Value>(&text) else { return };
-    let env = &cfg["mcpServers"]["openbot"]["env"];
+    let env = &cfg["mcpServers"]["obot"]["env"];
     let (Some(url), Some(token), Some(bot)) = (
-        env.get("OPENBOT_URL").and_then(Value::as_str),
-        env.get("OPENBOT_TOKEN").and_then(Value::as_str),
-        env.get("OPENBOT_BOT_ID").and_then(Value::as_str),
+        env.get("OBOT_URL").and_then(Value::as_str),
+        env.get("OBOT_TOKEN").and_then(Value::as_str),
+        env.get("OBOT_BOT_ID").and_then(Value::as_str),
     ) else {
         return;
     };
@@ -236,7 +237,7 @@ mod tests {
 
     #[test]
     fn scheduled_promise_passes() {
-        let t = last_turn(&transcript("I'll check back tomorrow.", &["mcp__openbot__check_back_later"]));
+        let t = last_turn(&transcript("I'll check back tomorrow.", &["mcp__obot__check_back_later"]));
         assert!(stop_check(&t).is_none());
     }
 

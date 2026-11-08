@@ -68,7 +68,7 @@ fn key() -> Option<&'static [u8; 32]> {
 }
 
 fn self_test(key: &[u8; 32]) -> anyhow::Result<()> {
-    let probe = "openbot vault self-test";
+    let probe = "oBot vault self-test";
     let sealed = encrypt(key, probe)?;
     anyhow::ensure!(decrypt(key, &sealed).as_deref() == Some(probe), "round trip mismatch");
     Ok(())
@@ -82,7 +82,7 @@ fn load_or_create_key(dir: &Path) -> anyhow::Result<([u8; 32], String)> {
     if !path.exists() {
         let key: [u8; 32] = rand::random();
         let line = store_key(&key)?;
-        // create_new: if another openbot process made a key at the same moment, use that one.
+        // create_new: if another oBot process made a key at the same moment, use that one.
         match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut f) => {
                 use std::io::Write;
@@ -150,6 +150,7 @@ mod dpapi {
         CryptProtectData, CryptUnprotectData, CRYPTPROTECT_LOCAL_MACHINE, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
+    // Keeps the app's old name (openbot): changing it would make the saved key unreadable.
     const ENTROPY: &[u8] = b"openbot vault key v1";
 
     fn blob(data: &[u8]) -> CRYPT_INTEGER_BLOB {
@@ -204,15 +205,16 @@ mod dpapi {
 #[cfg(target_os = "macos")]
 mod keychain {
     //! Uses Apple's `security` tool, so the Keychain item belongs to that tool and stays readable
-    //! after openbot is rebuilt or updated (no "allow access" pop-ups).
+    //! after oBot is rebuilt or updated (no "allow access" pop-ups).
     use std::process::Command;
 
+    // The Keychain item keeps the app's old name (openbot), so the saved key is still found.
     const SERVICE: &str = "openbot";
 
     pub fn store(item: &str, key: &[u8; 32]) -> anyhow::Result<()> {
         let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
         let out = Command::new("/usr/bin/security")
-            .args(["add-generic-password", "-s", SERVICE, "-a", item, "-l", "openbot Vault key", "-w", &hex])
+            .args(["add-generic-password", "-s", SERVICE, "-a", item, "-l", "oBot Vault key", "-w", &hex])
             .output()?;
         anyhow::ensure!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr).trim());
         Ok(())
@@ -291,7 +293,7 @@ pub mod sealed {
 
 // ------------------------------------------------------------------ names
 
-/// Names openbot, Claude Code or the system rely on. A secret with one of these names would
+/// Names oBot, Claude Code or the system rely on. A secret with one of these names would
 /// break Bots or change how Claude Code runs. Compared ignoring case (Windows ignores case).
 pub const RESERVED_NAMES: [&str; 44] = [
     "PATH", "HOME", "USER", "USERNAME", "USERPROFILE", "LOGNAME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
@@ -299,11 +301,11 @@ pub const RESERVED_NAMES: [&str; 44] = [
     "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "PSMODULEPATH", "DISPLAY", "WSLENV",
     "NODE_OPTIONS", "NODE_PATH", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE", "SSL_CERT_DIR", "PYTHONPATH",
     "PYTHONHOME", "GIT_SSH_COMMAND", "GIT_ASKPASS", "SSH_AUTH_SOCK", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "ALL_PROXY", "FTP_PROXY", "OPENBOT",
+    "ALL_PROXY", "FTP_PROXY", "OBOT",
 ];
 /// Name beginnings that are reserved the same way.
 pub const RESERVED_PREFIXES: [&str; 9] =
-    ["LD_", "DYLD_", "ANTHROPIC_", "CLAUDE", "OPENBOT_", "MCP_", "NPM_CONFIG_", "GIT_CONFIG_", "XDG_"];
+    ["LD_", "DYLD_", "ANTHROPIC_", "CLAUDE", "OBOT_", "MCP_", "NPM_CONFIG_", "GIT_CONFIG_", "XDG_"];
 
 /// Why a secret can't have this name (None = fine).
 pub fn name_problem(name: &str) -> Option<String> {
@@ -318,7 +320,7 @@ pub fn name_problem(name: &str) -> Option<String> {
     }
     let up = name.to_ascii_uppercase();
     if RESERVED_NAMES.contains(&up.as_str()) {
-        return Some(format!("{name} is reserved: the computer, Claude Code or openbot needs it to run Bots. Pick another name."));
+        return Some(format!("{name} is reserved: the computer, Claude Code or oBot needs it to run Bots. Pick another name."));
     }
     if let Some(p) = RESERVED_PREFIXES.iter().find(|p| up.starts_with(*p)) {
         return Some(format!("Names starting with {p} are reserved: Claude Code or the computer uses them. Pick another name."));
@@ -438,7 +440,7 @@ mod tests {
 
     #[test]
     fn reserved_names() {
-        for n in ["PATH", "path", "Home", "ANTHROPIC_API_KEY", "anthropic_base_url", "CLAUDE_CODE_X", "CLAUDECODE", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "WSLENV", "OPENBOT", "OPENBOT_X", "MCP_TIMEOUT"] {
+        for n in ["PATH", "path", "Home", "ANTHROPIC_API_KEY", "anthropic_base_url", "CLAUDE_CODE_X", "CLAUDECODE", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "WSLENV", "OBOT", "OBOT_X", "MCP_TIMEOUT"] {
             assert!(name_problem(n).is_some(), "{n} should be refused");
         }
         for n in ["GITHUB_TOKEN", "OPENAI_API_KEY", "STRIPE_KEY", "_X", "PATHFINDER_KEY", "HOMEASSISTANT_TOKEN"] {

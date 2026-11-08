@@ -3232,23 +3232,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "once_cell"
-version = "1.21.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "opaque-debug"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
-name = "openbot"
+name = "obot"
 version = "0.1.0"
 dependencies = [
  "dirs 6.0.0",
- "openbot-core",
+ "obot-core",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
@@ -3256,7 +3244,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "openbot-core"
+name = "obot-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm 0.10.3",
@@ -3289,16 +3277,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "openbot-server"
+name = "obot-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "openbot-core",
+ "obot-core",
  "sysinfo",
  "tokio",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "opaque-debug"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "option-ext"

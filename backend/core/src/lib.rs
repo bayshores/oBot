@@ -1,4 +1,4 @@
-//! openbot-core: everything that runs on the bot's "computer".
+//! obot-core: everything that runs on the bot's "computer".
 //!
 //! - `api`      HTTP + WebSocket server the UI talks to
 //! - `runner`   runs Claude Code (`claude -p ...`) for each bot and turns its output into chat messages
@@ -23,6 +23,7 @@ pub mod logins;
 pub mod markdown;
 pub mod memory_tidy;
 pub mod mcp;
+pub mod migrate;
 pub mod github;
 pub mod push;
 pub mod reactions;

@@ -4,7 +4,7 @@
 // screen.rs runs this inside Linux with `node -e`. The browser writes its port to
 // DevToolsActivePort in its profile (it's started with --remote-debugging-port=0, local only).
 // Input (environment):
-//   OB_BOT  the Bot's id (its browser profile is ~/.openbot/screens/<id>/profile)
+//   OB_BOT  the Bot's id (its browser profile is ~/.obot/screens/<id>/profile)
 //   OB_REQ  JSON, one of:
 //     {mode: "inspect"}                          -> {url, title}
 //     {mode: "fill", host, fields: [{target, value}]} -> {url, filled: [targets], missing: [targets]}
@@ -129,7 +129,7 @@ const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
 (async () => {
   if (typeof WebSocket !== 'function') done({ error: 'Controlling the browser needs Node.js 22 or newer inside Linux.' });
   const req = JSON.parse(process.env.OB_REQ || '{}');
-  const portFile = `${os.homedir()}/.openbot/screens/${process.env.OB_BOT}/profile/DevToolsActivePort`;
+  const portFile = `${os.homedir()}/.obot/screens/${process.env.OB_BOT}/profile/DevToolsActivePort`;
   const http = (port, path, method = 'GET') => fetch(`http://127.0.0.1:${port}${path}`, { method });
   // A browser that just started may still be writing its port or restoring tabs: wait a little.
   let port = '';
@@ -213,7 +213,7 @@ const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
   const url = await evaluate(c, 'location.href');
   if (req.mode === 'inspect') done({ url, title: p.title });
 
-  // Only fill the page openbot checked: same https website as when it decided.
+  // Only fill the page oBot checked: same https website as when it decided.
   let host = '';
   try {
     const u = new URL(url);

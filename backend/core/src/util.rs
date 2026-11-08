@@ -77,14 +77,14 @@ pub fn fix_path_env() {
     {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
         if let Ok(out) = std::process::Command::new(shell)
-            .args(["-ilc", "printf '__OPENBOT_PATH__%s' \"$PATH\""])
+            .args(["-ilc", "printf '__OBOT_PATH__%s' \"$PATH\""])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output()
         {
             let s = String::from_utf8_lossy(&out.stdout);
-            if let Some(idx) = s.rfind("__OPENBOT_PATH__") {
-                let p = s[idx + "__OPENBOT_PATH__".len()..].trim().to_string();
+            if let Some(idx) = s.rfind("__OBOT_PATH__") {
+                let p = s[idx + "__OBOT_PATH__".len()..].trim().to_string();
                 if !p.is_empty() {
                     std::env::set_var("PATH", p);
                 }
@@ -192,7 +192,7 @@ mod wsl_path_tests {
     use super::*;
     #[test]
     fn to_wsl() {
-        assert_eq!(to_wsl_path(std::path::Path::new(r"C:\Users\me\OpenBot\x")), "/mnt/c/Users/me/OpenBot/x");
+        assert_eq!(to_wsl_path(std::path::Path::new(r"C:\Users\me\oBot\x")), "/mnt/c/Users/me/oBot/x");
         assert_eq!(to_wsl_path(std::path::Path::new(r"\\?\D:\a b")), "/mnt/d/a b");
         assert_eq!(to_wsl_path(std::path::Path::new("/home/me")), "/home/me");
     }

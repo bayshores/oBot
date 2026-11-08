@@ -595,7 +595,7 @@ async fn calendars(st: &Shared, acct: &Account) -> Result<Vec<Cal>, String> {
     if acct.provider == "google" {
         if !acct.scopes.split_whitespace().any(|x| x == LIST_SCOPE) {
             return Err(format!(
-                "{} hasn't allowed openbot to see its list of calendars yet. Only the main calendar works until the user clicks Update permissions for it in Settings › Connections.",
+                "{} hasn't allowed oBot to see its list of calendars yet. Only the main calendar works until the user clicks Update permissions for it in Settings › Connections.",
                 acct.email
             ));
         }
@@ -1188,7 +1188,7 @@ mod gcal {
     /// Busy blocks per person.
     pub async fn busy(st: &Shared, a: &Account, who: &[String], from: i64, to: i64) -> Result<Vec<(String, Result<Vec<(i64, i64)>, String>)>, String> {
         if !a.scopes.split_whitespace().any(|x| x == FREEBUSY_SCOPE) && who.len() > 1 {
-            return Err(format!("{} hasn't allowed openbot to see free time yet. The user can click Update permissions for it in Settings › Connections.", a.email));
+            return Err(format!("{} hasn't allowed oBot to see free time yet. The user can click Update permissions for it in Settings › Connections.", a.email));
         }
         if !a.scopes.split_whitespace().any(|x| x == FREEBUSY_SCOPE) {
             // Only the user: their own events work with the old permission.

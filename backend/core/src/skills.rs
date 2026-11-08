@@ -1,8 +1,8 @@
 //! Bot skills: Claude Code skills saved in a Bot's folder (.claude/skills/<name>/SKILL.md).
 //!
 //! Bot runs load no settings files from the Bot's folder (a Bot could write one there to give
-//! itself permissions, hooks or helper agents). So before each run openbot copies the skills into a
-//! small plugin in openbot's own data folder and loads that with --plugin-dir. Each SKILL.md keeps
+//! itself permissions, hooks or helper agents). So before each run oBot copies the skills into a
+//! small plugin in oBot's own data folder and loads that with --plugin-dir. Each SKILL.md keeps
 //! only its name, description and instructions: fields that change permissions or run commands
 //! (allowed-tools, hooks, ...) are dropped.
 
@@ -97,7 +97,7 @@ pub fn build_plugin(workdir: &str, bot_dir: &Path) -> std::io::Result<Option<Pat
     std::fs::create_dir_all(out.join(".claude-plugin"))?;
     std::fs::write(
         out.join(".claude-plugin").join("plugin.json"),
-        serde_json::to_vec_pretty(&serde_json::json!({"name": PLUGIN, "description": "This Bot's saved skills (made by openbot)"}))?,
+        serde_json::to_vec_pretty(&serde_json::json!({"name": PLUGIN, "description": "This Bot's saved skills (made by oBot)"}))?,
     )?;
     Ok(Some(out))
 }

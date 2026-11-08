@@ -1,7 +1,7 @@
 /*
- * openbot avatar engine (avatar.js)
+ * oBot avatar engine (avatar.js)
  *
- * Draws openbot's bot characters: one round ball with two eyes, in many skins.
+ * Draws oBot's bot characters: one round ball with two eyes, in many skins.
  *   - Solid skins: one colour (violet, coral, ...).
  *   - Pattern skins: zebra, tiger, galaxy, ... The pattern stays still and the ball
  *     is a window that moves over it, so when the ball hops or rolls it reveals a
@@ -192,7 +192,7 @@
   // Saved values -> skin ids
   // ===========================================================================
 
-  // Colour names saved by older builds of openbot.
+  // Colour names saved by older builds of oBot.
   const LEGACY = {
     black: 'ink', white: 'snow', brown: 'sand', red: 'coral', orange: 'amber', yellow: 'amber', green: 'lime', cyan: 'mint',
     teal: 'mint', blue: 'cobalt', purple: 'violet', magenta: 'rose', pink: 'rose', gray: 'slate', grey: 'slate',

@@ -1,12 +1,12 @@
 //! Connected accounts (Settings › Connections): Google (Gmail, Google Calendar, Google Drive) and Microsoft
-//! (Outlook mail + Outlook calendar). You sign in once; openbot keeps the account's refresh token
+//! (Outlook mail + Outlook calendar). You sign in once; oBot keeps the account's refresh token
 //! (encrypted, see vault.rs) and gets fresh access tokens by itself, so you don't sign in again.
 //!
 //! Sign-in uses OAuth with PKCE and a loopback address (http://127.0.0.1:<port>/oauth/callback) on
 //! the device whose browser you sign in with. When the app is connected to another computer, the
 //! app's own local server receives the sign-in and passes it to that computer (`callback`).
 //!
-//! Bots use the accounts through openbot tools (email_* here, calendar_* in calendar.rs, drive_* in drive.rs). Sending
+//! Bots use the accounts through oBot tools (email_* here, calendar_* in calendar.rs, drive_* in drive.rs). Sending
 //! email, inviting people and deleting always ask the user first with a card.
 
 use std::collections::HashMap;
@@ -43,16 +43,16 @@ pub struct Account {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bots: Option<Vec<String>>,
     pub added_at: i64,
-    /// Last time openbot got a fresh token for it (used to keep it connected).
+    /// Last time oBot got a fresh token for it (used to keep it connected).
     pub last_refresh: i64,
     /// Google or Microsoft stopped accepting the saved sign-in (password change, access removed…).
     pub needs_reconnect: bool,
     /// What the account allowed, as Google / Microsoft reported it (space-separated). Filled in at
-    /// sign-in and on every token refresh; empty for accounts saved before openbot kept it.
+    /// sign-in and on every token refresh; empty for accounts saved before oBot kept it.
     pub scopes: String,
 }
 
-/// The OAuth apps openbot signs in with. Built in at compile time (CI secrets); config.json can
+/// The OAuth apps oBot signs in with. Built in at compile time (CI secrets); config.json can
 /// override them (`oauth` section), which is handy for development.
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 #[serde(default)]
@@ -68,16 +68,16 @@ pub struct OAuthApps {
 
 impl OAuthApps {
     fn google(&self) -> Option<(String, String)> {
-        let id = pick(&self.google_client_id, option_env!("OPENBOT_GOOGLE_CLIENT_ID"));
-        let secret = pick(&self.google_client_secret, option_env!("OPENBOT_GOOGLE_CLIENT_SECRET"));
+        let id = pick(&self.google_client_id, option_env!("OBOT_GOOGLE_CLIENT_ID"));
+        let secret = pick(&self.google_client_secret, option_env!("OBOT_GOOGLE_CLIENT_SECRET"));
         (!id.is_empty() && !secret.is_empty()).then_some((id, secret))
     }
     fn microsoft(&self) -> Option<String> {
-        let id = pick(&self.microsoft_client_id, option_env!("OPENBOT_MICROSOFT_CLIENT_ID"));
+        let id = pick(&self.microsoft_client_id, option_env!("OBOT_MICROSOFT_CLIENT_ID"));
         (!id.is_empty()).then_some(id)
     }
     pub fn github(&self) -> Option<String> {
-        let id = pick(&self.github_client_id, option_env!("OPENBOT_GITHUB_CLIENT_ID"));
+        let id = pick(&self.github_client_id, option_env!("OBOT_GITHUB_CLIENT_ID"));
         (!id.is_empty()).then_some(id)
     }
     /// Which providers can be connected with this build.
@@ -239,7 +239,7 @@ pub fn start_login(cfg: &Config, provider: &str, redirect: &str, reconnect: Opti
         .unwrap_or_default();
     let (url, redirect) = match provider {
         "google" => {
-            let (id, _) = cfg.oauth.google().ok_or("Google sign-in isn't set up in this version of openbot yet")?;
+            let (id, _) = cfg.oauth.google().ok_or("Google sign-in isn't set up in this version of oBot yet")?;
             let mut u = format!(
                 "{GOOGLE_AUTH}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={state}&code_challenge={challenge}\
                  &code_challenge_method=S256&access_type=offline&prompt=consent",
@@ -251,7 +251,7 @@ pub fn start_login(cfg: &Config, provider: &str, redirect: &str, reconnect: Opti
             (u, redirect)
         }
         "microsoft" => {
-            let id = cfg.oauth.microsoft().ok_or("Microsoft sign-in isn't set up in this version of openbot yet")?;
+            let id = cfg.oauth.microsoft().ok_or("Microsoft sign-in isn't set up in this version of oBot yet")?;
             // Microsoft lets desktop apps use any port on http://localhost.
             let redirect = redirect.replacen("http://127.0.0.1:", "http://localhost:", 1).replacen("http://[::1]:", "http://localhost:", 1);
             let mut u = format!(
@@ -390,7 +390,7 @@ pub async fn finish_login(st: &Shared, state: &str, code: &str) -> Result<String
         let refresh = v.get("refresh_token").and_then(Value::as_str).unwrap_or("").to_string();
         let access = v.get("access_token").and_then(Value::as_str).unwrap_or("").to_string();
         if refresh.is_empty() || access.is_empty() {
-            return Err("Sign-in didn't give openbot lasting access. Try again and allow everything on the permission screen.".into());
+            return Err("Sign-in didn't give oBot lasting access. Try again and allow everything on the permission screen.".into());
         }
         Ok((refresh, access, v.get("expires_in").and_then(Value::as_i64).unwrap_or(3600), s(&v, "scope")))
     })
@@ -462,7 +462,7 @@ pub async fn finish_login(st: &Shared, state: &str, code: &str) -> Result<String
     Ok(email)
 }
 
-/// Sign out: tell Google to forget openbot's access (Microsoft has no such call for apps like this),
+/// Sign out: tell Google to forget oBot's access (Microsoft has no such call for apps like this),
 /// then remove the account.
 pub async fn remove(st: &Shared, id: &str) -> Result<(), String> {
     let acct = {
@@ -584,7 +584,7 @@ async fn access_token(st: &Shared, id: &str, force: bool) -> Result<String, Stri
 }
 
 /// Keep every account's sign-in fresh: Microsoft drops sign-ins unused for 90 days and Google for
-/// 6 months, so openbot renews any that haven't been used for a week. Runs every 6 hours.
+/// 6 months, so oBot renews any that haven't been used for a week. Runs every 6 hours.
 pub fn spawn_keep_alive(st: Shared) {
     tokio::spawn(async move {
         loop {
@@ -692,7 +692,7 @@ async fn with_token<T: Send + 'static>(
             }
             Err(HttpErr::Status(403, body)) if body.contains("insufficient") || body.contains("ACCESS_TOKEN_SCOPE_INSUFFICIENT") => {
                 return Err(format!(
-                    "{} didn't give openbot permission for this. Ask the user to reconnect the account in Settings › Connections and allow everything on the permission screen.",
+                    "{} didn't give oBot permission for this. Ask the user to reconnect the account in Settings › Connections and allow everything on the permission screen.",
                     acct.email
                 ));
             }
@@ -704,7 +704,7 @@ async fn with_token<T: Send + 'static>(
                     .map(|l| format!(" Turn it on here: {l}"))
                     .unwrap_or_default();
                 return Err(format!(
-                    "This Google API isn't turned on in openbot's Google Cloud project yet. The person who set up openbot needs to enable it (Gmail, Google Calendar and Google Drive APIs).{link}"
+                    "This Google API isn't turned on in oBot's Google Cloud project yet. The person who set up oBot needs to enable it (Gmail, Google Calendar and Google Drive APIs).{link}"
                 ));
             }
             Err(e) => return Err(e.message()),
@@ -833,7 +833,7 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
 
 /// Ask the user with an Allow / Deny card. Never offers "Always allow".
 pub(crate) async fn confirm(st: &Shared, bot: &Bot, tool: &str, summary: &str, input: Value, reason: &str) -> Result<bool, String> {
-    crate::api::ask_approval(st, &bot.id, &format!("mcp__openbot__{tool}"), summary, &input, "", reason)
+    crate::api::ask_approval(st, &bot.id, &format!("mcp__obot__{tool}"), summary, &input, "", reason)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1069,7 +1069,7 @@ mod gmail {
 
     /// Walk the MIME parts: (plain text, html, attachments [(name, id, size)]).
     /// One attachment of an email. Gmail gives an attachment a new `attachmentId` every time the
-    /// email is fetched, so the id openbot shows the Bot is the stable MIME part number (`partId`).
+    /// email is fetched, so the id oBot shows the Bot is the stable MIME part number (`partId`).
     struct File {
         name: String,
         part_id: String,
@@ -1457,7 +1457,7 @@ fn mime(from_addr: &str, from_name: &str, o: &Outgoing, orig: Option<&ReplyInfo>
         h.push_str(&text);
         return h;
     }
-    let boundary = format!("openbot-{}", random_token(24));
+    let boundary = format!("oBot-{}", random_token(24));
     h.push_str(&format!("Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n\r\n"));
     h.push_str(&format!("--{boundary}\r\nContent-Type: text/plain; charset=\"UTF-8\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{text}\r\n"));
     for (name, mime, bytes) in &o.files {
@@ -1479,7 +1479,7 @@ pub fn landing_page(ok: bool, text: &str) -> String {
     let (title, color) = if ok { ("Connected", "#3ecf8e") } else { ("Couldn't connect", "#ff6463") };
     format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-         <title>openbot · {title}</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0b0c;color:#f5f5f5;\
+         <title>oBot · {title}</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0b0c;color:#f5f5f5;\
          font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}}main{{max-width:420px;padding:32px;text-align:center}}\
          h1{{font-size:20px;font-weight:600;margin:0 0 8px;color:{color}}}p{{margin:0;color:#f5f5f5b0}}</style></head>\
          <body><main><h1>{title}</h1><p>{esc}</p></main></body></html>"
