@@ -152,7 +152,11 @@ fn updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, Stri
 #[tauri::command]
 async fn app_update_check(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let current = app.package_info().version.to_string();
-    let found = updater(&app)?.check().await.map_err(|e| format!("Couldn't check for updates: {e}"))?;
+    // A failed check still reports this app's version, so Settings › Updates can show it.
+    let found = match updater(&app)?.check().await {
+        Ok(f) => f,
+        Err(e) => return Ok(serde_json::json!({"current": current, "error": format!("Couldn't check for updates: {e}")})),
+    };
     Ok(match found {
         Some(u) => serde_json::json!({"current": current, "latest": u.version, "available": true, "notes": u.body.unwrap_or_default()}),
         None => serde_json::json!({"current": current, "available": false}),
