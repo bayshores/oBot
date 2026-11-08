@@ -1371,7 +1371,8 @@ async fn decide_approval(State(st): State<Shared>, UrlPath(id): UrlPath<String>,
             .unwrap_or_default();
         {
             let mut cfg = st.config.write().await;
-            if !cfg.allow_rules.contains(&rule) {
+            // A command of several lines is allowed this once; it can't be saved as a rule.
+            if crate::config::usable_rule(&rule) && !cfg.allow_rules.contains(&rule) {
                 cfg.allow_rules.push(rule);
             }
             let proposed = proposed.trim().to_string();
@@ -1920,7 +1921,7 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
             cfg.permission_mode = v;
         }
         if let Some(v) = b.allow_rules {
-            cfg.allow_rules = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            cfg.allow_rules = v.into_iter().map(|s| s.trim().to_string()).filter(|s| crate::config::usable_rule(s)).collect();
         }
         if let Some(v) = b.default_model {
             let v = v.trim().to_string();

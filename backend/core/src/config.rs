@@ -137,6 +137,13 @@ impl Default for Config {
     }
 }
 
+/// Can this Settings › Permissions rule be passed to Claude Code? A line break in one (an "Always
+/// allow" on a command of several lines) would stop every Bot from starting on Windows, where
+/// Claude Code is started through a batch file that can't take one.
+pub fn usable_rule(rule: &str) -> bool {
+    !rule.trim().is_empty() && !rule.contains(['\n', '\r', '\0'])
+}
+
 impl Config {
     pub fn load_or_create(path: &Path) -> anyhow::Result<Config> {
         // The Vault key must be ready before secret values are read (they are saved encrypted).
@@ -156,6 +163,7 @@ impl Config {
         if !cfg.prefs.is_object() {
             cfg.prefs = json!({});
         }
+        cfg.allow_rules.retain(|r| usable_rule(r));
         // Saving right away also encrypts values that older versions saved as plain text.
         cfg.save(path)?;
         Ok(cfg)
@@ -240,4 +248,23 @@ pub fn default_data_dir() -> PathBuf {
         }
     }
     crate::migrate::data_dir(&dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rules_with_line_breaks_are_dropped() {
+        assert!(usable_rule("Bash(npm test)"));
+        assert!(!usable_rule("Bash(cat > a <<'EOF'\nhi\nEOF)"));
+        assert!(!usable_rule("  "));
+        let dir = std::env::temp_dir().join(format!("obot-rules-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"allow_rules": ["Bash(ls)", "Bash(cat <<EOF\nx\nEOF)"]}"#).unwrap();
+        let cfg = Config::load_or_create(&path).unwrap();
+        assert_eq!(cfg.allow_rules, vec!["Bash(ls)".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

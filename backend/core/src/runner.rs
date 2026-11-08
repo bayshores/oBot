@@ -1071,7 +1071,7 @@ fn build_command(
     // oBot's own tools never need approval.
     args.push("--allowedTools".into());
     args.push("mcp__obot".into());
-    args.extend(cfg.allow_rules.iter().cloned());
+    args.extend(cfg.allow_rules.iter().filter(|r| crate::config::usable_rule(r)).cloned());
 
     let mut cmd = if wsl {
         // wsl.exe -d <distro> --cd <workdir> --exec sh -c 'exec "$HOME/.local/bin/claude" "$@"' claude <args>
