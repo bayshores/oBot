@@ -2649,12 +2649,38 @@
     const m = /\.([a-z0-9]{1,5})$/i.exec(name || '');
     return m ? m[1].toUpperCase() : 'FILE';
   }
+  // Save a file a Bot sent. The desktop app saves it to Downloads itself, then opens it (open) or
+  // shows it in Finder; a browser downloads it the usual way.
+  async function saveFile(url, name, open) {
+    const T = window.__TAURI_INTERNALS__;
+    if (!T || !/^https?:/.test(url)) {
+      const link = h('a', { href: url, download: name || '' });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      return;
+    }
+    toast(`Downloading ${name || 'the file'}…`);
+    try {
+      const [saved, opened] = await T.invoke('save_file', { url, name: name || '', open });
+      toast(opened ? `Saved ${saved} to Downloads and opened it` : `Saved ${saved} to Downloads`);
+    } catch (e) {
+      toast('Couldn’t save the file. Check the connection to your computer and try again.', 'error');
+    }
+  }
   function fileCard(a) {
     const url = a.localUrl || fileUrl(a.url);
+    const name = a.name || (a.path || '').split(/[\\/]/).pop();
     const meta = [extOf(a.name || a.path), a.size ? fmtBytes(a.size) : ''].filter(Boolean).join(' · ');
+    // The desktop app can't show a file in a new window, so clicking one saves and opens it.
+    const desktop = window.__TAURI_INTERNALS__ && !a.localUrl;
+    const openInApp = (e) => {
+      e.preventDefault();
+      saveFile(url, name, true);
+    };
     return h(
       'a',
-      { class: 'file-card', href: url, target: '_blank', rel: 'noopener', title: `Open ${a.name || a.path}` },
+      { class: 'file-card', href: url, target: '_blank', rel: 'noopener', title: `Open ${a.name || a.path}`, onclick: desktop ? openInApp : null },
       h('span', { class: 'fc-icon' }, extOf(a.name || a.path).slice(0, 4)),
       h('span', { class: 'fc-text' }, h('span', { class: 'fc-name' }, a.name || a.path), h('span', { class: 'fc-meta' }, meta)),
       h(
@@ -2667,10 +2693,7 @@
           onclick: (e) => {
             e.preventDefault();
             e.stopPropagation();
-            const link = h('a', { href: url, download: a.name || '' });
-            document.body.append(link);
-            link.click();
-            link.remove();
+            saveFile(url, name, false);
           },
         },
         icon('download', 16)

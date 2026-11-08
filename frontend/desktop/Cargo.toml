@@ -12,3 +12,5 @@ tauri-build = { version = "2", features = [] }
 openbot-core = { path = "../../backend/core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
+ureq = "2"
+dirs = "6"

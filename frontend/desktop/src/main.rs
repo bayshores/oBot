@@ -7,6 +7,8 @@
 // No extra console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::path::{Path, PathBuf};
+use tauri::webview::NewWindowResponse;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
 
@@ -36,13 +38,100 @@ fn open_url(url: String) -> Result<(), String> {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return Err("Only web links can be opened".into());
     }
+    os_open(&url, false).map_err(|e| e.to_string())
+}
+
+/// Hand a link or file to the system: open it with its default app, or (`reveal`) show the file in
+/// Finder / Explorer.
+fn os_open(target: &str, reveal: bool) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
-    let r = std::process::Command::new("open").arg(&url).spawn();
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        if reveal {
+            c.arg("-R");
+        }
+        c.arg(target);
+        c
+    };
     #[cfg(windows)]
-    let r = std::process::Command::new("rundll32").args(["url.dll,FileProtocolHandler", &url]).spawn();
+    let mut cmd = {
+        let mut c = std::process::Command::new(if reveal { "explorer" } else { "rundll32" });
+        if reveal {
+            c.arg(format!("/select,{target}"));
+        } else {
+            c.args(["url.dll,FileProtocolHandler", target]);
+        }
+        c
+    };
     #[cfg(all(unix, not(target_os = "macos")))]
-    let r = std::process::Command::new("xdg-open").arg(&url).spawn();
-    r.map(|_| ()).map_err(|e| e.to_string())
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        let dir = if reveal { Path::new(target).parent().map(|d| d.to_string_lossy().into_owned()) } else { None };
+        c.arg(dir.unwrap_or_else(|| target.to_string()));
+        c
+    };
+    cmd.spawn().map(|_| ())
+}
+
+/// Files a Bot sent are opened right after saving only if they're documents, pictures or media.
+/// Anything else (scripts, apps, installers) is shown in Finder instead, so one click never runs a
+/// program.
+fn safe_to_open(path: &Path) -> bool {
+    const KINDS: &[&str] = &[
+        "pdf", "txt", "md", "csv", "tsv", "json", "rtf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages",
+        "numbers", "key", "odt", "ods", "odp", "ipynb", "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp",
+        "tiff", "mp3", "m4a", "wav", "mp4", "mov", "m4v",
+    ];
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    KINDS.contains(&ext.as_str())
+}
+
+/// A free path in `dir` for `name`: "notes.txt", then "notes (1).txt", "notes (2).txt"...
+fn free_path(dir: &Path, name: &str) -> PathBuf {
+    let base = Path::new(name).file_name().map(|n| n.to_string_lossy().into_owned());
+    let base = base.filter(|n| !n.trim().is_empty() && !n.starts_with('.')).unwrap_or_else(|| "file".into());
+    let (stem, ext) = match base.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
+        _ => (base.clone(), String::new()),
+    };
+    let mut path = dir.join(&base);
+    let mut n = 1;
+    while path.exists() {
+        path = dir.join(format!("{stem} ({n}){ext}"));
+        n += 1;
+    }
+    path
+}
+
+/// Save a file a Bot sent into Downloads, then open it (`open`) or show it in Finder. The app
+/// downloads it itself: the window can't show a file in a new window or reliably save one from the
+/// remote computer. Returns the saved file's name and whether it was opened.
+#[tauri::command]
+async fn save_file(url: String, name: String, open: bool) -> Result<(String, bool), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) || !url.contains("/files/") {
+        return Err("Only files from openbot can be saved".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = dirs::download_dir().ok_or("Couldn't find the Downloads folder")?;
+        let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(300)).call().map_err(|e| e.to_string())?;
+        let path = free_path(&dir, &name);
+        let part = path.with_file_name(format!(".{}.part", path.file_name().unwrap_or_default().to_string_lossy()));
+        let saved = std::fs::File::create(&part)
+            .and_then(|mut f| std::io::copy(&mut resp.into_reader(), &mut f))
+            .and_then(|_| std::fs::rename(&part, &path));
+        if let Err(e) = saved {
+            let _ = std::fs::remove_file(&part);
+            return Err(e.to_string());
+        }
+        let file = path.to_string_lossy().into_owned();
+        let opened = open && safe_to_open(&path) && os_open(&file, false).is_ok();
+        if !opened {
+            let _ = os_open(&file, true);
+        }
+        Ok((path.file_name().unwrap_or_default().to_string_lossy().into_owned(), opened))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn main() {
@@ -72,7 +161,7 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url])
+        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file])
         // Menu bar: openbot › Settings… (⌘,) and Connect to Remote Computer…
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;
@@ -105,7 +194,15 @@ fn main() {
                 .min_inner_size(720.0, 520.0)
                 // openbot is always dark (no light mode), so the window frame and loading background match.
                 .theme(Some(tauri::Theme::Dark))
-                .background_color(tauri::window::Color(11, 11, 12, 255));
+                .background_color(tauri::window::Color(11, 11, 12, 255))
+                // A link that asks for a new window opens in the normal web browser, never in a bare
+                // openbot window.
+                .on_new_window(|url, _| {
+                    if matches!(url.scheme(), "http" | "https") {
+                        let _ = os_open(url.as_str(), false);
+                    }
+                    NewWindowResponse::Deny
+                });
             #[cfg(target_os = "macos")]
             let builder = builder
                 .title_bar_style(tauri::TitleBarStyle::Overlay)
@@ -115,4 +212,33 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running openbot");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_names_never_overwrite() {
+        let dir = std::env::temp_dir().join(format!("openbot-save-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(free_path(&dir, "notes.txt"), dir.join("notes.txt"));
+        std::fs::write(dir.join("notes.txt"), "a").unwrap();
+        assert_eq!(free_path(&dir, "notes.txt"), dir.join("notes (1).txt"));
+        // Only the file name is used, never a folder from the name.
+        assert_eq!(free_path(&dir, "../../evil.sh"), dir.join("evil.sh"));
+        assert_eq!(free_path(&dir, ""), dir.join("file"));
+        assert_eq!(free_path(&dir, ".zshrc"), dir.join("file"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn only_documents_open_by_themselves() {
+        assert!(safe_to_open(Path::new("/x/notes.TXT")));
+        assert!(safe_to_open(Path::new("/x/report.pdf")));
+        assert!(!safe_to_open(Path::new("/x/run.command")));
+        assert!(!safe_to_open(Path::new("/x/setup.sh")));
+        assert!(!safe_to_open(Path::new("/x/App.app")));
+        assert!(!safe_to_open(Path::new("/x/noext")));
+    }
 }
