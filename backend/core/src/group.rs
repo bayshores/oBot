@@ -367,6 +367,15 @@ pub fn persona(st: &Shared, group: &str, me: &Bot) -> String {
          Don't use message_bot for Bots in this group.\n\
          - Tools, files and cards work as usual and show in the group.\n",
     );
+    // Everyone answers at once, so "can one of you…" got an "I'll take it" from several Bots. The
+    // first member always takes those, and the rest know to stay out.
+    let lead = g.members.first().map(|m| if *m == me.id { "you".to_string() } else { name_of(st, m) });
+    if let Some(lead) = lead {
+        s.push_str(&format!(
+            "- When the user asks for just one of you (\"can one of you…\", \"just 1 bot\") without naming which, \
+             {lead} answers and everyone else replies PASS.\n"
+        ));
+    }
     s
 }
 
