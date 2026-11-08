@@ -655,6 +655,16 @@ fn add_error(state: &Shared, bot_id: &str, speaker: Option<&str>, f: &Failure, r
     state.emit_message(true, &m);
 }
 
+/// Where the user's own Claude Code skills live, as the Bot sees the path (a Bot in WSL sees /mnt/c/...).
+fn user_skills_dir(cfg: &Config) -> String {
+    let dir = dirs::home_dir().unwrap_or_default().join(".claude").join("skills");
+    if cfg!(windows) && cfg.runner == "wsl" {
+        crate::util::to_wsl_path(&dir)
+    } else {
+        dir.to_string_lossy().into_owned()
+    }
+}
+
 fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     let host = sysinfo::System::host_name().unwrap_or_else(|| "this computer".into());
     let os = sysinfo::System::long_os_version().unwrap_or_else(|| std::env::consts::OS.into());
@@ -672,10 +682,12 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          them with send_file, or put them in their Google Drive when it's connected (it syncs to their computer).\n\
          Your skills are the folders in .claude/skills inside your working folder (each has a SKILL.md); they show \
          up as \"skills:<name>\". The user's own Claude Code skills and plugins aren't loaded for you. If they ask \
-         you to use one you don't have, find its SKILL.md on this computer, follow it now, and copy its folder into \
-         .claude/skills so it loads from your next message.\n",
+         you to use one you don't have, look for its SKILL.md in their skills folder ({skills}, sometimes a few \
+         folders down) or in another Bot's .claude/skills, follow it now, and copy its folder into .claude/skills \
+         so it loads from your next message.\n",
         name = bot.name,
         workdir = bot.workdir,
+        skills = user_skills_dir(cfg),
     );
     s.push_str(
         "\noBot gives you extra tools (mcp__obot__*): ask_user (tap-to-answer buttons), send_file \
