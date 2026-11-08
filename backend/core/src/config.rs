@@ -96,6 +96,9 @@ pub struct Config {
     pub oauth: crate::accounts::OAuthApps,
     /// Phone notifications: this computer's push key and the phones that subscribed (see push.rs).
     pub push: crate::push::PushConfig,
+    /// The connected GitHub account (see github.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<crate::github::Connection>,
 }
 
 impl Default for Config {
@@ -129,6 +132,7 @@ impl Default for Config {
             accounts: vec![],
             oauth: Default::default(),
             push: Default::default(),
+            github: None,
         }
     }
 }
@@ -207,6 +211,7 @@ impl Config {
             "wsl_available": cfg!(windows),
             "accounts": self.accounts.iter().map(crate::accounts::view).collect::<Vec<_>>(),
             "accounts_ready": self.oauth.ready(),
+            "github": self.github.as_ref().map(crate::github::view),
         })
     }
 }

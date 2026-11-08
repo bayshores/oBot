@@ -62,6 +62,8 @@ pub struct OAuthApps {
     #[serde(with = "crate::vault::sealed")]
     pub google_client_secret: String,
     pub microsoft_client_id: String,
+    /// GitHub OAuth app with Device Flow turned on (see github.rs). Not a secret.
+    pub github_client_id: String,
 }
 
 impl OAuthApps {
@@ -74,9 +76,13 @@ impl OAuthApps {
         let id = pick(&self.microsoft_client_id, option_env!("OPENBOT_MICROSOFT_CLIENT_ID"));
         (!id.is_empty()).then_some(id)
     }
+    pub fn github(&self) -> Option<String> {
+        let id = pick(&self.github_client_id, option_env!("OPENBOT_GITHUB_CLIENT_ID"));
+        (!id.is_empty()).then_some(id)
+    }
     /// Which providers can be connected with this build.
     pub fn ready(&self) -> Value {
-        json!({ "google": self.google().is_some(), "microsoft": self.microsoft().is_some() })
+        json!({ "google": self.google().is_some(), "microsoft": self.microsoft().is_some(), "github": self.github().is_some() })
     }
 }
 

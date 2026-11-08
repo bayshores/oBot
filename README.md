@@ -33,6 +33,9 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   Bots use all your calendars, add repeating events with reminders and video links, find free time and
   answer invitations; invites show as an event card you send yourself. With Google Drive for desktop on
   your Mac, files a Bot puts in your Drive show up there.
+* **GitHub.** Connect GitHub in Settings › Connections (you type a short code on github.com once). Bots read
+  your repos, files, issues and pull requests, including private ones, and can work on a copy of the code.
+  Comments, new issues and pushes always ask you first.
 * **Recover from errors.** Temporary errors are retried by themselves. Otherwise you get **Try again**,
   **Edit and resend** or **Start a new conversation**. Messages sent while a Bot is busy wait as
   **Queued** (tap **Send now** to interrupt it).
@@ -97,6 +100,8 @@ Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPR
 * Phone notifications are encrypted for the phone, so Apple's or Google's push service can't read them.
 * Requests from other websites and unknown host names are refused, and repeated wrong
   tries (20 in a minute) lock that address out for 5 minutes.
+* GitHub access is saved encrypted on the PC like the other connections, and only the Bots you pick can
+  use it. Bots run `git` with the key passed in memory, so it's never written into a repository's settings.
 * **Permissions:** Settings › Computer › **Execution on this computer** is *Ask every time* (default), *Always allow* or
   *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions
   using your rules and asks you about the rest with an **Allow / Always allow / Deny** card. Sending

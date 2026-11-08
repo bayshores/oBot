@@ -191,6 +191,7 @@ pub fn definitions() -> Value {
         a.extend(crate::accounts::tool_definitions());
         a.extend(crate::calendar::tool_definitions());
         a.extend(crate::drive::tool_definitions());
+        a.extend(crate::github::tool_definitions());
         a.extend(crate::jobs::tool_definitions());
         a.push(crate::relay::tool_definition());
         a.push(crate::reactions::tool_definition());
@@ -403,7 +404,7 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
     }
-    if crate::accounts::is_tool(name) || crate::calendar::is_tool(name) || crate::drive::is_tool(name) || crate::jobs::is_tool(name) || crate::relay::is_tool(name) || crate::reactions::is_tool(name) {
+    if crate::accounts::is_tool(name) || crate::calendar::is_tool(name) || crate::drive::is_tool(name) || crate::github::is_tool(name) || crate::jobs::is_tool(name) || crate::relay::is_tool(name) || crate::reactions::is_tool(name) {
         let bot = match state.db.get_bot(bot_id) {
             Ok(Some(b)) => b,
             _ => return ToolResult { text: "this bot no longer exists".into(), is_error: true, image: None },
@@ -416,6 +417,8 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
             crate::reactions::tool(state, &bot, args).await
         } else if crate::drive::is_tool(name) {
             crate::drive::tool(state, &bot, name, args).await
+        } else if crate::github::is_tool(name) {
+            crate::github::tool(state, &bot, name, args).await
         } else if crate::calendar::is_tool(name) {
             crate::calendar::tool(state, &bot, name, args).await
         } else {

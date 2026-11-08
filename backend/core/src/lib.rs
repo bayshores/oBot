@@ -23,6 +23,7 @@ pub mod logins;
 pub mod markdown;
 pub mod memory_tidy;
 pub mod mcp;
+pub mod github;
 pub mod push;
 pub mod reactions;
 pub mod relay;

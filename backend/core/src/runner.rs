@@ -389,6 +389,9 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__openbot__drive_search" | "mcp__openbot__drive_list" | "mcp__openbot__drive_download" => ("reading_file", "Looking in Google Drive".into()),
         "mcp__openbot__drive_trash" | "mcp__openbot__drive_share" => ("waiting_for_you", "Waiting for your OK".into()),
         n if n.starts_with("mcp__openbot__drive_") => ("working", "Organizing Google Drive".into()),
+        "mcp__openbot__github_comment" | "mcp__openbot__github_create_issue" | "mcp__openbot__github_push" => ("waiting_for_you", "Waiting for your OK".into()),
+        "mcp__openbot__github_clone" => ("working", "Getting the code from GitHub".into()),
+        n if n.starts_with("mcp__openbot__github_") => ("reading_file", "Looking at GitHub".into()),
         n if n.starts_with("mcp__openbot__calendar_") => ("working", "Updating the calendar".into()),
         n if n.starts_with("mcp__openbot__") => ("working", "Working".into()),
         n if n.starts_with("mcp__playwright") || n.contains("browser") => ("browsing", "Browsing the web".into()),
@@ -766,6 +769,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
         }
     }
     s.push_str(&crate::accounts::persona(cfg, &bot.id));
+    s.push_str(&crate::github::persona(cfg, &bot.id));
     if crate::screen::platform_ok().is_ok() {
         s.push_str(&crate::logins::persona(cfg, &bot.id));
     }
@@ -1331,6 +1335,15 @@ pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
         "mcp__openbot__drive_copy" => verb("Copied a file in Google Drive", "Copy a file in Google Drive"),
         "mcp__openbot__drive_trash" => verb("Moved a file in Google Drive to the trash", "Move a file in Google Drive to the trash"),
         "mcp__openbot__drive_share" => verb("Shared a file in Google Drive", "Share a file in Google Drive"),
+        "mcp__openbot__github_repos" => verb("Looked at your GitHub repos", "Look at your GitHub repos"),
+        "mcp__openbot__github_read" => format!("{} {} on GitHub", verb("Read", "Read"), truncate_chars(&[s("repo"), s("path")].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join("/"), 60)),
+        "mcp__openbot__github_issues" => format!("{} issues in {}", verb("Looked at", "Look at"), truncate_chars(&s("repo"), 60)),
+        "mcp__openbot__github_issue" => format!("{} {} #{}", verb("Read", "Read"), truncate_chars(&s("repo"), 60), input.get("number").and_then(|v| v.as_u64()).unwrap_or(0)),
+        "mcp__openbot__github_comment" => format!("{} on {} #{}", verb("Commented", "Comment"), truncate_chars(&s("repo"), 60), input.get("number").and_then(|v| v.as_u64()).unwrap_or(0)),
+        "mcp__openbot__github_create_issue" => format!("{} an issue in {}", verb("Opened", "Open"), truncate_chars(&s("repo"), 60)),
+        "mcp__openbot__github_clone" => format!("{} {} from GitHub", verb("Got", "Get"), truncate_chars(&s("repo"), 60)),
+        "mcp__openbot__github_push" => verb("Pushed commits to GitHub", "Push commits to GitHub"),
+        "mcp__openbot__github_api" => format!("{} GitHub ({} {})", verb("Used", "Use"), s("method"), truncate_chars(&s("path"), 60)),
         n if n.starts_with("mcp__") => {
             let mut p = n.splitn(3, "__").skip(1);
             let server = p.next().unwrap_or("");

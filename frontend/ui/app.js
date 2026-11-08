@@ -1315,6 +1315,19 @@
         S.settings = e.settings;
         if (S.settingsUI) rerenderSettings();
         break;
+      case 'github.connected':
+        if (S.settingsUI) {
+          S.settingsUI.github = null;
+          rerenderSettings(true);
+        }
+        toast(`GitHub is connected as ${e.login}`);
+        break;
+      case 'github.failed':
+        if (S.settingsUI && S.settingsUI.github) {
+          S.settingsUI.github.err = e.error;
+          rerenderSettings(true);
+        }
+        break;
       case 'account.connected':
         if (S.settingsUI && S.settingsUI.connect) {
           S.settingsUI.connect = null;
@@ -6983,10 +6996,12 @@
   const PROVIDER_LOGO = {
     google:
       '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#4285F4" d="M22.6 12.3c0-.8-.1-1.5-.2-2.3H12v4.3h5.9a5 5 0 01-2.2 3.3v2.8h3.6c2.1-1.9 3.3-4.8 3.3-8.1z"/><path fill="#34A853" d="M12 23c3 0 5.5-1 7.3-2.7l-3.6-2.8c-1 .7-2.2 1.1-3.7 1.1-2.9 0-5.3-1.9-6.2-4.5H2.1v2.9A11 11 0 0012 23z"/><path fill="#FBBC05" d="M5.8 14.1a6.6 6.6 0 010-4.2V7H2.1a11 11 0 000 10z"/><path fill="#EA4335" d="M12 5.4c1.6 0 3.1.6 4.2 1.7l3.2-3.2A11 11 0 002.1 7l3.7 2.9C6.7 7.3 9.1 5.4 12 5.4z"/></svg>',
+    github:
+      '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 1.5a10.5 10.5 0 00-3.3 20.5c.5.1.7-.2.7-.5v-1.8c-2.9.6-3.5-1.4-3.5-1.4-.5-1.2-1.2-1.5-1.2-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1.1 1.6 1.1.9 1.6 2.5 1.1 3.1.9.1-.7.4-1.1.7-1.4-2.3-.3-4.8-1.2-4.8-5.2 0-1.1.4-2.1 1.1-2.8-.1-.3-.5-1.3.1-2.8 0 0 .9-.3 2.9 1.1a10 10 0 015.2 0c2-1.4 2.9-1.1 2.9-1.1.6 1.5.2 2.5.1 2.8.7.8 1.1 1.7 1.1 2.8 0 4-2.5 4.9-4.8 5.2.4.3.7 1 .7 1.9v2.9c0 .3.2.6.7.5A10.5 10.5 0 0012 1.5z"/></svg>',
     microsoft:
       '<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="#F25022" d="M2 2h9.5v9.5H2z"/><path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z"/><path fill="#00A4EF" d="M2 12.5h9.5V22H2z"/><path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z"/></svg>',
   };
-  const PROVIDER_NAME = { google: 'Google', microsoft: 'Microsoft' };
+  const PROVIDER_NAME = { google: 'Google', microsoft: 'Microsoft', github: 'GitHub' };
   function providerLogo(p) {
     const el = h('span', { class: 'acct-logo' });
     el.innerHTML = PROVIDER_LOGO[p] || '';
@@ -7063,7 +7078,7 @@
     const ready = s.accounts_ready || {};
     const accounts = s.accounts || [];
     const out = h('div');
-    const busy = !!ui.connect || !!ui.acctEdit;
+    const busy = !!ui.connect || !!ui.acctEdit || !!ui.github || !!ui.ghEdit;
     const connectBtn = (p) =>
       h('button', { class: 'btn pill acct-connect', disabled: busy || !ready[p], onclick: () => connectAccount(p) }, providerLogo(p), h('span', null, p === 'google' ? 'Connect Google' : 'Connect Microsoft'));
     out.append(
@@ -7100,7 +7115,132 @@
     });
     out.append(h('div', { class: 'set-section' }, h('div', { class: 'set-label' }, 'Connected accounts'), rows.length ? card(rows) : card(h('div', { class: 'set-empty' }, 'No accounts connected yet'))));
     out.append(note('Sending email, inviting people to events and deleting always ask you first with an Allow / Deny card. openbot keeps the sign-in encrypted on the computer your Bots run on.'));
+    out.append(githubSection(s, busy));
     return out;
+  }
+  // ── Connections: GitHub (github.rs). Sign-in shows a code to enter on github.com. ──
+  function githubSection(s, busy) {
+    const ui = S.settingsUI;
+    const gh = s.github;
+    const ready = (s.accounts_ready || {}).github;
+    const body = [];
+    if (ui.github) body.push(githubCodeCard(ui.github));
+    else if (gh && ui.ghEdit) body.push(card(githubScopeForm(gh)));
+    else if (gh)
+      body.push(
+        card(
+          row(
+            h('span', { class: 'acct-name' }, providerLogo('github'), h('span', null, gh.login), gh.needs_reconnect && h('span', { class: 'chip warn' }, 'Signed out')),
+            h(
+              'div',
+              { class: 'secret-ctl' },
+              gh.needs_reconnect && pillBtn('Reconnect', connectGithub, { disabled: busy || !ready }),
+              pillBtn('Bots', () => ((ui.ghEdit = { bots: gh.bots ? gh.bots.slice() : null }), rerenderSettings(true)), { disabled: busy, 'aria-label': 'Which Bots can use GitHub' }),
+              pillBtn('Remove', removeGithub, { disabled: busy, 'aria-label': 'Remove GitHub' })
+            ),
+            h(
+              'span',
+              null,
+              h('span', { class: 'secret-desc' }, 'Repos, files, issues and pull requests, including private ones'),
+              h('span', { class: 'secret-access' }, scopeText(gh.bots, 'Bots')),
+              gh.needs_reconnect && h('span', { class: 'secret-problem' }, 'GitHub stopped accepting openbot’s access (for example after it was removed on github.com). Click Reconnect.')
+            )
+          )
+        )
+      );
+    else body.push(h('div', { class: 'acct-connects' }, h('button', { class: 'btn pill acct-connect', disabled: busy || !ready, onclick: connectGithub }, providerLogo('github'), h('span', null, 'Connect GitHub'))), !ready ? h('div', { class: 'f-hint' }, 'GitHub sign-in isn’t set up in this version of openbot yet.') : null);
+    return h(
+      'div',
+      { class: 'set-section' },
+      h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'GitHub'), h('div', { class: 'set-explain' }, 'Lets your Bots read your repos, issues and pull requests, and work on code. Comments, new issues and pushes always ask you first.'))),
+      ...body
+    );
+  }
+  async function connectGithub() {
+    const ui = S.settingsUI;
+    try {
+      const r = await api('/api/github/connect', { method: 'POST' });
+      ui.github = { code: r.user_code, url: r.verification_uri || 'https://github.com/login/device', err: '' };
+    } catch (e) {
+      fail(e);
+      return;
+    }
+    rerenderSettings(true);
+  }
+  function githubCodeCard(c) {
+    const ui = S.settingsUI;
+    const copyOpen = async () => {
+      try {
+        await navigator.clipboard.writeText(c.code);
+        toast('Code copied');
+      } catch (_) {}
+      openExternal(c.url);
+    };
+    const cancel = () => {
+      api('/api/github/connect', { method: 'DELETE' }).catch(() => {});
+      ui.github = null;
+      rerenderSettings(true);
+    };
+    return card(
+      h(
+        'div',
+        { class: 'set-row stack acct-wait' },
+        c.err
+          ? h('div', { class: 'f-err', role: 'alert' }, c.err)
+          : h('div', { class: 'acct-wait-head' }, spinner('xs'), h('span', null, 'Enter this code on GitHub')),
+        !c.err && h('div', { class: 'gh-code mono', 'aria-label': 'Code: ' + c.code.split('').join(' ') }, c.code),
+        !c.err && h('div', { class: 'f-hint' }, `Open ${c.url.replace(/^https:\/\//, '')}, type the code, then click Authorize. This page updates by itself when you’re done.`),
+        h('div', { class: 'row-actions' }, btn('Cancel', cancel), c.err ? btn('Try again', () => ((ui.github = null), connectGithub()), 'primary') : btn('Copy code and open GitHub', copyOpen, 'primary'))
+      )
+    );
+  }
+  function githubScopeForm(gh) {
+    const ui = S.settingsUI;
+    const ed = ui.ghEdit;
+    const err = h('div', { class: 'f-err', role: 'alert', hidden: true });
+    const save = async (e) => {
+      if (ed.bots !== null && !ed.bots.length) {
+        err.textContent = 'Pick at least one Bot, or choose All Bots';
+        err.hidden = false;
+        return;
+      }
+      e.currentTarget.disabled = true;
+      try {
+        S.settings = await api('/api/github', { method: 'PATCH', body: { bots: ed.bots } });
+        ui.ghEdit = null;
+      } catch (x) {
+        e.currentTarget.disabled = false;
+        err.textContent = x.message;
+        err.hidden = false;
+        return;
+      }
+      rerenderSettings(true);
+    };
+    return h(
+      'div',
+      { class: 'set-row stack secret-form' },
+      h('div', { class: 'acct-name' }, providerLogo('github'), h('span', null, gh.login)),
+      h('label', { class: 'f-label' }, 'Which Bots can use it'),
+      botScopePicker(ed, () => (err.hidden = true)),
+      err,
+      h('div', { class: 'row-actions' }, btn('Cancel', () => ((ui.ghEdit = null), rerenderSettings(true))), btn('Save', save, 'primary'))
+    );
+  }
+  async function removeGithub() {
+    const gh = S.settings && S.settings.github;
+    const ok = await confirmDialog({
+      title: `Remove GitHub (${gh ? gh.login : ''})?`,
+      body: 'Bots can no longer use GitHub, and openbot forgets its access. To also remove openbot from your GitHub account, open github.com › Settings › Applications › Authorized OAuth Apps.',
+      confirmText: 'Remove',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      S.settings = await api('/api/github', { method: 'DELETE' });
+    } catch (e) {
+      fail(e);
+    }
+    rerenderSettings(true);
   }
   function connectingCard(c) {
     const ui = S.settingsUI;

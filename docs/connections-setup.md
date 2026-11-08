@@ -1,4 +1,4 @@
-# Setting up Google and Microsoft sign-in (Settings › Connections)
+# Setting up Google, Microsoft and GitHub sign-in (Settings › Connections)
 
 openbot connects Gmail / Google Calendar and Outlook mail / calendar through its own sign-in apps:
 one Google Cloud project and one Microsoft app registration. These are made once by whoever builds
@@ -11,9 +11,10 @@ The IDs go into the build as GitHub repository secrets (never into the code):
 | `OPENBOT_GOOGLE_CLIENT_ID` | Google Cloud › Google Auth Platform › Clients › your Desktop client |
 | `OPENBOT_GOOGLE_CLIENT_SECRET` | same client (Google requires it even for desktop apps; it can't be kept secret inside an app and Google knows that) |
 | `OPENBOT_MICROSOFT_CLIENT_ID` | Microsoft Entra › App registrations › your app › Application (client) ID |
+| `OPENBOT_GITHUB_CLIENT_ID` | GitHub › Settings › Developer settings › OAuth Apps › your app › Client ID (see [GitHub](#github) below) |
 
 For development you can instead put them in `config.json` on the computer your Bots run on:
-`"oauth": {"google_client_id": "…", "google_client_secret": "…", "microsoft_client_id": "…"}`
+`"oauth": {"google_client_id": "…", "google_client_secret": "…", "microsoft_client_id": "…", "github_client_id": "…"}`
 (the secret is encrypted when openbot saves the file).
 
 ## Why people don't have to sign in again
@@ -81,3 +82,20 @@ Work or school accounts may need their IT admin to approve openbot the first tim
    trades it for the account's tokens and saves the refresh token encrypted in its `config.json`.
 4. If you use openbot in a plain web browser (no desktop app), step 2 ends on an error page;
    copy that page's address into the box in Settings › Connections instead.
+
+## GitHub
+
+GitHub uses its device flow: openbot shows a short code, you type it at github.com/login/device and
+click Authorize. No address to come back to, so it works the same from the Mac app, a browser or a
+phone, and no client secret is needed
+([GitHub: device flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow)).
+
+1. github.com › **Settings › Developer settings › OAuth Apps › New OAuth App**.
+2. Application name `openbot`; Homepage URL your repository's address; Authorization callback URL
+   the same address (GitHub requires one, but the device flow never uses it).
+3. Click **Register application**, then tick **Enable Device Flow** and save.
+4. Copy the **Client ID** into the `OPENBOT_GITHUB_CLIENT_ID` repository secret.
+
+openbot asks for the `repo` and `read:org` scopes (private repositories and your organizations'
+repositories). GitHub OAuth tokens don't expire; if you remove openbot under github.com › Settings ›
+Applications, Settings › Connections shows **Signed out** with a **Reconnect** button.

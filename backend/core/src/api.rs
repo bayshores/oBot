@@ -182,6 +182,8 @@ fn router(state: Shared) -> Router {
         .route("/api/accounts/connect", post(account_connect))
         .route("/api/accounts/finish", post(account_finish))
         .route("/api/accounts/{id}", axum::routing::patch(account_patch).delete(account_remove))
+        .route("/api/github/connect", post(github_connect).delete(github_cancel))
+        .route("/api/github", axum::routing::patch(github_patch).delete(github_remove))
         .route("/api/computer", get(get_computer))
         .route("/api/usage", get(get_usage))
         .route("/api/search", get(search))
@@ -2251,6 +2253,40 @@ async fn account_patch(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
 
 async fn account_remove(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     crate::accounts::remove(&st, &id).await.map_err(|e| bad(&e))?;
+    let settings = st.config.read().await.settings_json();
+    st.emit("settings.updated", json!({ "settings": settings }));
+    Ok(Json(settings))
+}
+
+/// Connect GitHub: returns the code the user enters on github.com; the result arrives as a
+/// `github.connected` or `github.failed` event (see github.rs).
+async fn github_connect(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    Ok(Json(crate::github::connect(&st).await.map_err(|e| bad(&e))?))
+}
+
+async fn github_cancel() -> Json<Value> {
+    crate::github::cancel();
+    Json(json!({ "ok": true }))
+}
+
+async fn github_patch(State(st): State<Shared>, Json(p): Json<AccountPatch>) -> ApiResult<Json<Value>> {
+    let bots = match p.bots {
+        None => None,
+        Some(ids) => {
+            let known: Vec<String> = st.db.list_bots()?.into_iter().map(|b| b.id).collect();
+            let mut ids: Vec<String> = ids.into_iter().filter(|i| known.contains(i)).collect();
+            ids.dedup();
+            Some(ids)
+        }
+    };
+    crate::github::set_bots(&st, bots).await.map_err(|e| bad(&e))?;
+    let settings = st.config.read().await.settings_json();
+    st.emit("settings.updated", json!({ "settings": settings }));
+    Ok(Json(settings))
+}
+
+async fn github_remove(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    crate::github::remove(&st).await.map_err(|e| bad(&e))?;
     let settings = st.config.read().await.settings_json();
     st.emit("settings.updated", json!({ "settings": settings }));
     Ok(Json(settings))

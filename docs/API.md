@@ -244,6 +244,10 @@ Usage = {
 | POST | /api/accounts/finish | `{state, code}` or `{url}` (the address the browser landed on) | `{ok, email}`; also emits `account.connected` and `settings.updated` |
 | PATCH | /api/accounts/:id | `{bots}` (null = every Bot, else a non-empty list of Bot ids) | `Settings` |
 | DELETE | /api/accounts/:id | – (Google access is also revoked) | `Settings` |
+| POST | /api/github/connect | – | `{user_code, verification_uri, expires_in}`: the code to enter on github.com. The result arrives as `github.connected {login}` or `github.failed {error}` (and `settings.updated`) |
+| DELETE | /api/github/connect | – | `{ok}`: stops waiting for the code |
+| PATCH | /api/github | `{bots}` (null = every Bot, else Bot ids) | `Settings` |
+| DELETE | /api/github | – (openbot forgets the token; the user can also remove openbot on github.com) | `Settings` |
 | GET | /oauth/callback | `?state&code` (no token; a browser page load) | HTML page. Finishes the sign-in here, or passes it to the remote computer from `/api/connection` |
 | DELETE | /api/vault/:name | – | `Settings` |
 | POST | /api/vault/logins | `{sites, username, password, hints, bots}` | `Settings`. `sites`: 1 to 10 addresses, tidied to hosts like `ucsd.edu` (`www.` dropped); a login also fills on subdomains. 400 if the Vault is full (2000) |
@@ -311,7 +315,7 @@ push service removes the subscription. The VAPID private key is in `config.json`
 * `hello {version}`
 * `bot.created {bot}` · `bot.updated {bot}` · `bot.deleted {bot_id}`
 * `message.created {message}` (a Bot reply arrives once, when it's finished; while it's being written, `bot.activity.label` is "Writing") · `message.updated {message}` (tool finished, approval decided, queued mark changed) · `messages.cleared {bot_id}` · `messages.deleted {bot_id, ids[]}`
-* `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished)
+* `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished) · `github.connected {login}` · `github.failed {error}`
 * `devices.updated` (a device was paired or removed; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
 * `screen.updated {bot_id, running}` (a bot's screen started or stopped)
@@ -360,6 +364,11 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `drive_create_folder {account?, path, parent?}` · `drive_move {account?, id, folder?, name?}` · `drive_copy {account?, id, folder?, name?}` | make folders (all levels of a path; returns an existing one) · move and/or rename · copy a file (not folders) |
 | `drive_share {account?, id, with, role?, message?}` | share a file or folder with `"anyone"` (anyone with the link, not searchable) or an email address (Google emails them, with `message`). `role`: `reader` (default), `commenter`, `writer`. Always shows an Allow / Deny card and waits; returns the link |
 | `drive_trash {account?, id}` | move a file or folder to Drive's trash. Always shows an Allow / Deny card and waits |
+| `github_repos {query?, max?}` · `github_read {repo, path?, ref?}` | the user's repos (own, collaborator, organizations) · a file's text or a folder's list. Only Bots picked under Settings › Connections › GitHub (`backend/core/src/github.rs`) |
+| `github_issues {repo, state?, kind?, query?, max?}` · `github_issue {repo, number}` | list or search issues and pull requests · one with its comments (pull requests also reviews, line comments and changed files) |
+| `github_comment {repo, number, body}` · `github_create_issue {repo, title, body?, labels?}` | comment or open an issue as the user. Always shows an Allow / Deny card and waits |
+| `github_clone {repo, to?, ref?}` · `github_push {path, branch?}` | a working copy in the bot's folder (default `github/<name>`; updates an existing one with a fast-forward pull), with commits credited to the user's GitHub noreply address · push it: the card lists the commits; never force-pushes, refuses when GitHub has commits the copy lacks |
+| `github_api {method, path, body?}` | any other REST call; methods other than GET show an Allow / Deny card first |
 
 ### How a turn runs
 
