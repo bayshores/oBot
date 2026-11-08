@@ -15,7 +15,7 @@ use std::time::Duration;
 pub const REPO: &str = "bayshores/oBot";
 /// Public half of the key every release file is signed with (minisign, base64, as Tauri's signer
 /// writes it). The private half is the TAURI_SIGNING_PRIVATE_KEY secret of the GitHub repository.
-pub const PUBLIC_KEY: &str = "";
+pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM3M0IxQTA5RDAzRjk5MTgKUldRWW1UL1FDUm83eDZDMEV3S3VMMlcwYXBQY01ZU3czL0lhMFh1T2hyblFyZmlGZnFHVDQ3SUoK";
 /// Exit code that asks the supervisor (`obot-server --supervise`) to start the program again now.
 pub const RESTART_CODE: i32 = 75;
 /// Set by the supervisor for the program it starts.
