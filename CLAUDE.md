@@ -15,7 +15,7 @@ These rules keep the repo clean. They apply to people and to AI coding assistant
 | `docs/` | Documentation. Add every new doc to `docs/README.md`. | Notes copied from other companies' apps (see below). |
 | `docs/research/` | Research write-ups (how other apps do something, options we compared). One topic per file, with sources. | Raw dumps, unsourced claims. |
 
-The repo root holds only: `README.md`, `CLAUDE.md`, `Cargo.toml`, `Cargo.lock`, `.gitignore`, `.github/`, `frontend/`, `backend/`, `docs/`. Don't add new top-level files or folders without updating this table.
+The repo root holds only: `README.md`, `CLAUDE.md`, `LICENSE`, `Cargo.toml`, `Cargo.lock`, `.gitignore`, `.github/`, `frontend/`, `backend/`, `docs/`. Don't add new top-level files or folders without updating this table.
 
 ## Keep it tidy
 

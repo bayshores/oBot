@@ -137,6 +137,13 @@ cargo run -p openbot                                                         # t
 `.github/workflows/build.yml` builds the Windows server and the Mac `.dmg` on every push. Repo rules
 are in [`CLAUDE.md`](CLAUDE.md).
 
+## License
+
+openbot is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only). You can use,
+change and share it, but if you share a changed version, or run one as a service for other people, you must
+publish its full source code under the same license. Third-party code in `frontend/ui/vendor/` keeps its own
+license (see the license file in each folder).
+
 ---
 
 openbot is an independent project, not affiliated with or endorsed by Anthropic.
