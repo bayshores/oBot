@@ -7606,7 +7606,8 @@
   function obotUpdateRows(copyBtn) {
     const ui = S.settingsUI;
     const U = S.updates || {};
-    const checkBtn = pillBtn(ui.updChecking ? 'Checking…' : 'Check for Updates', async () => {
+    // One button per row: an element can only be shown in one place.
+    const checkBtn = () => pillBtn(ui.updChecking ? 'Checking…' : 'Check for Updates', async () => {
       ui.updChecking = true;
       rerenderSettings(true);
       await checkForUpdates();
@@ -7615,7 +7616,7 @@
     }, { disabled: !!ui.updChecking || !!S.updating });
     const one = (label, info, current, which) => {
       let sub = 'Checks for a new version every few hours.';
-      let btn = checkBtn;
+      let btn = checkBtn();
       if (info && info.error) sub = info.error;
       else if (info && info.available && info.can_install === false) sub = `Version ${info.latest} is available. ${info.why_not || ''}`;
       else if (info && info.available) {
