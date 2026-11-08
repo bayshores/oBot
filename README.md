@@ -36,6 +36,9 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
 * **GitHub.** Connect GitHub in Settings › Connections (you type a short code on github.com once). Bots read
   your repos, files, issues and pull requests, including private ones, and can work on a copy of the code.
   Comments, new issues and pushes always ask you first.
+* **Updates itself.** The Mac app and the always-on PC check GitHub for a new version every few hours
+  and show **oBot X is available · Update**; one click installs it (Settings › Updates). Updates are
+  signed, and anything that doesn't match oBot's key is refused. See [docs/releasing.md](docs/releasing.md).
 * **Recover from errors.** Temporary errors are retried by themselves. Otherwise you get **Try again**,
   **Edit and resend** or **Start a new conversation**. Messages sent while a Bot is busy wait as
   **Queued** (tap **Send now** to interrupt it).
@@ -76,7 +79,8 @@ account. This is how the app reaches the PC privately, from anywhere.
    .\backend\install\windows\install-host.ps1 -ServerExe <path to obot-server.exe> -KeepAwake
    ```
    It starts the server at every boot, keeps the PC awake while plugged in, turns on Tailscale Serve,
-   and prints an **address** and a **6-digit pairing code**.
+   and prints an **address** and a **6-digit pairing code**. Later versions install from the app
+   (Settings › Updates), so you only run this once.
 4. For Bot screens, install WSL with Ubuntu (`wsl --install -d Ubuntu`), then in the app choose
    Settings › Computer › Bot screens › **Set up**.
 

@@ -1,0 +1,103 @@
+# Publishes an oBot release when a version tag is pushed (for example v0.2.0, matching `version` in
+# Cargo.toml). The release has the Windows server (signed with oBot's update key, so a computer can
+# update itself from the app), the Mac app (signed with the Developer ID certificate and notarized by
+# Apple) and latest.json, which the Mac app's updater reads. Steps: docs/releasing.md.
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # Sign-in apps for Settings › Connections (the secrets keep their names from before the rename).
+  OBOT_GOOGLE_CLIENT_ID: ${{ secrets.OPENBOT_GOOGLE_CLIENT_ID }}
+  OBOT_GOOGLE_CLIENT_SECRET: ${{ secrets.OPENBOT_GOOGLE_CLIENT_SECRET }}
+  OBOT_MICROSOFT_CLIENT_ID: ${{ secrets.OPENBOT_MICROSOFT_CLIENT_ID }}
+  OBOT_GITHUB_CLIENT_ID: ${{ secrets.OPENBOT_GITHUB_CLIENT_ID }}
+  # oBot's update key: signs every file the app or a computer installs as an update.
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the version in Cargo.toml
+        shell: bash
+        run: |
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::Tag $GITHUB_REF_NAME doesn't match version $v in Cargo.toml"; exit 1; }
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || { echo "::error::The TAURI_SIGNING_PRIVATE_KEY secret is missing (see docs/releasing.md)"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build obot-server
+        run: cargo build --release -p obot-server
+      - name: Sign it with the update key
+        shell: bash
+        run: |
+          mkdir out
+          cp target/release/obot-server.exe backend/install/windows/install-host.ps1 out/
+          npx --yes @tauri-apps/cli@2 signer sign out/obot-server.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  macos:
+    runs-on: macos-latest
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: "Developer ID Application: Sean Esla (TM8Y622C8X)"
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the signing secrets are there
+        run: |
+          for s in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY; do
+            [ -n "${!s}" ] || { echo "::error::The $s secret is missing (see docs/releasing.md)"; exit 1; }
+          done
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Tauri imports the certificate, signs the app, has Apple notarize it and makes the update files.
+      - name: Build, sign and notarize the app
+        working-directory: frontend/desktop
+        run: npx --yes @tauri-apps/cli@2 build --bundles app,dmg --config '{"bundle":{"createUpdaterArtifacts":true}}'
+      - name: Notarize the disk image and write latest.json
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          B=target/release/bundle
+          mkdir out
+          cp "$B/dmg/oBot_${v}_aarch64.dmg" out/oBot-mac-apple-silicon.dmg
+          cp "$B/macos/oBot.app.tar.gz" out/oBot-mac-apple-silicon.app.tar.gz
+          xcrun notarytool submit out/oBot-mac-apple-silicon.dmg --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple out/oBot-mac-apple-silicon.dmg
+          python3 - "$v" "$(cat "$B/macos/oBot.app.tar.gz.sig")" <<'PY'
+          import json, sys, datetime
+          v, sig = sys.argv[1], sys.argv[2]
+          url = f"https://github.com/bayshores/oBot/releases/download/v{v}/oBot-mac-apple-silicon.app.tar.gz"
+          json.dump({"version": v, "notes": f"oBot {v}", "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                     "platforms": {"darwin-aarch64": {"signature": sig, "url": url}}}, open("out/latest.json", "w"), indent=2)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --title "oBot ${GITHUB_REF_NAME#v}" --generate-notes files/*

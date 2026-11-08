@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser and save files a Bot sent.",
+  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser, save files a Bot sent and update the app.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
@@ -12,6 +12,8 @@
     "allow-set-badge",
     "allow-is-focused",
     "allow-open-url",
-    "allow-save-file"
+    "allow-save-file",
+    "allow-app-update-check",
+    "allow-app-update-install"
   ]
 }

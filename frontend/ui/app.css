@@ -1016,6 +1016,7 @@ b, strong { font-weight: var(--w-semibold); }
 }
 .usage-banner[hidden] { display: none; }
 .usage-banner > .ico { color: var(--warn-text); flex: none; }
+.update-banner > .ico { color: var(--text); }
 .usage-banner .ub-text { flex: 1; min-width: 0; }
 .usage-banner .btn { flex: none; }
 .composer {

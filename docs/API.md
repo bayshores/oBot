@@ -285,6 +285,8 @@ Usage = {
 | POST | /api/mcp-servers | `{name, type:"http", url, headers}` or `{name, type:"stdio", command, args[], env}` | `Settings` |
 | DELETE | /api/mcp-servers/:name | – | `Settings` |
 | POST | /api/claude/update | – | `{ok, output}` runs `claude update` |
+| GET | /api/update | – | Newest oBot release for this computer: `{current, latest, available, notes, page, can_install, why_not}` or `{current, error}` (see docs/releasing.md) |
+| POST | /api/update | – | `{ok, version}`: downloads that release's server program, checks its signature, puts it in place, stops working Bots and starts again (Windows, under `obot-server --supervise`) |
 | POST | /api/claude/logout | – | `{ok, output}` runs `claude auth logout` (Settings › Sign Out) |
 | POST | /api/open-folder | `{path}` | `{ok}` opens Finder/Explorer on the computer (local only) |
 | GET | /api/screens/status | – | `{supported, ready, missing:[program], browser, where, setup_running, running:[bot_id]}` (Bot screens; see below) |

@@ -134,6 +134,43 @@ async fn save_file(url: String, name: String, open: bool) -> Result<(String, boo
     .map_err(|e| e.to_string())?
 }
 
+/// oBot's updater: the newest GitHub release's `latest.json`, checked with oBot's release key.
+fn updater(app: &tauri::AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    if obot_core::update::PUBLIC_KEY.is_empty() {
+        return Err("This build of oBot can't check for updates.".into());
+    }
+    let feed = format!("https://github.com/{}/releases/latest/download/latest.json", obot_core::update::REPO);
+    app.updater_builder()
+        .pubkey(obot_core::update::PUBLIC_KEY)
+        .endpoints(vec![feed.parse().map_err(|e: url::ParseError| e.to_string())?])
+        .and_then(|b| b.build())
+        .map_err(|e| e.to_string())
+}
+
+/// Settings › Updates: is there a newer version of this app?
+#[tauri::command]
+async fn app_update_check(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let current = app.package_info().version.to_string();
+    let found = updater(&app)?.check().await.map_err(|e| format!("Couldn't check for updates: {e}"))?;
+    Ok(match found {
+        Some(u) => serde_json::json!({"current": current, "latest": u.version, "available": true, "notes": u.body.unwrap_or_default()}),
+        None => serde_json::json!({"current": current, "available": false}),
+    })
+}
+
+/// Download the newer version (its signature is checked), put it in place of this app and restart.
+#[tauri::command]
+async fn app_update_install(app: tauri::AppHandle) -> Result<(), String> {
+    let update = updater(&app)?
+        .check()
+        .await
+        .map_err(|e| format!("Couldn't check for updates: {e}"))?
+        .ok_or("This app is already the newest version.")?;
+    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("Couldn't install the update: {e}"))?;
+    app.restart();
+}
+
 fn main() {
     // Claude Code starts this same program with `mcp-approve` to ask the user for permission.
     if std::env::args().nth(1).as_deref() == Some("mcp-approve") {
@@ -161,7 +198,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file])
+        .plugin(tauri_plugin_updater::Builder::new().pubkey(obot_core::update::PUBLIC_KEY).build())
+        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file, app_update_check, app_update_install])
         // Menu bar: oBot › Settings… (⌘,) and Connect to Remote Computer…
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;
@@ -217,6 +255,12 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_uses_the_release_key() {
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["plugins"]["updater"]["pubkey"].as_str(), Some(obot_core::update::PUBLIC_KEY));
+    }
 
     #[test]
     fn saved_names_never_overwrite() {

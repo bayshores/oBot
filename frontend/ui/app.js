@@ -1084,6 +1084,10 @@
     migratePins();
     renderUsageBanner();
     renderSysBanner();
+    if (!S.updateTimer) {
+      S.updateTimer = setInterval(checkForUpdates, UPDATE_EVERY);
+      setTimeout(checkForUpdates, 5000);
+    }
   }
   function trackRun(bot, prev) {
     if (bot.running && !(prev && prev.running)) {
@@ -3666,8 +3670,8 @@
     composerEl.style.height = H + 'px';
     const dock = $('#dock');
     dock.style.setProperty('--composer-h', H + 'px');
-    const ub = $('#usageBanner');
-    $('#chat').style.setProperty('--dock-h', H + 16 + (ub && !ub.hidden ? ub.offsetHeight + 8 : 0) + 'px');
+    const banners = ['#updateBanner', '#usageBanner'].map((id) => $(id)).filter((b) => b && !b.hidden);
+    $('#chat').style.setProperty('--dock-h', H + 16 + banners.reduce((n, b) => n + b.offsetHeight + 8, 0) + 'px');
   }
   function placeholderFor(b) {
     if (!b) return 'Ask anything, or drop a file';
@@ -7510,6 +7514,133 @@
     if (was !== show) layoutComposer();
   }
 
+  // ── oBot updates (GitHub Releases): this app (desktop) and the computer the Bots run on.
+  // The server answers for itself (/api/update); the desktop app asks its own updater.
+  const UPDATE_EVERY = 6 * 3600e3;
+  const serverUpdates = () => !window.__TAURI_INTERNALS__ || S.conn.mode === 'remote';
+  async function checkForUpdates() {
+    const T = window.__TAURI_INTERNALS__;
+    const out = { app: null, server: null };
+    const jobs = [];
+    if (T) jobs.push(T.invoke('app_update_check').then((r) => (out.app = r), (e) => (out.app = { error: String(e) })));
+    if (serverUpdates()) jobs.push(api('/api/update').then((r) => (out.server = r), (e) => (out.server = { error: (e && e.message) || 'Couldn’t check for updates.' })));
+    await Promise.all(jobs);
+    if (out.server && out.server.current) S.version = out.server.current;
+    S.updates = out;
+    renderUpdateBanner();
+    rerenderSettings();
+  }
+  function pendingUpdate() {
+    const u = S.updates || {};
+    const server = u.server && u.server.available ? u.server : null;
+    const app = u.app && u.app.available ? u.app : null;
+    return server || app ? { version: (server || app).latest, server, app } : null;
+  }
+  // Wait until the computer answers with the new version (it restarts after updating).
+  async function waitForServer(version) {
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const r = await api('/api/hello');
+        if (r && r.version === version) return true;
+      } catch {}
+    }
+    return false;
+  }
+  // Update the computer's oBot and/or this app (which: 'server', 'app' or both).
+  async function installUpdates(which) {
+    const p = pendingUpdate();
+    if (!p || S.updating) return;
+    const doServer = p.server && which !== 'app';
+    const doApp = p.app && which !== 'server';
+    if (doServer && !p.server.can_install) {
+      openSettings('updates');
+      return;
+    }
+    S.updating = true;
+    renderUpdateBanner();
+    rerenderSettings(true);
+    try {
+      if (doServer) {
+        const where = window.__TAURI_INTERNALS__ ? computerName() : 'this computer';
+        toast(`Updating oBot on ${where}… It’s back in a moment.`);
+        await api('/api/update', { method: 'POST' });
+        if (await waitForServer(p.server.latest)) toast(`oBot on ${where} is now version ${p.server.latest}`);
+        else toast(`oBot on ${where} hasn’t come back yet. Check that it’s on.`, 'error');
+      }
+      if (doApp) {
+        toast('Updating this app… It restarts by itself.');
+        await window.__TAURI_INTERNALS__.invoke('app_update_install');
+      }
+    } catch (e) {
+      toast((e && e.message) || String(e), 'error');
+    }
+    S.updating = false;
+    checkForUpdates();
+  }
+  function renderUpdateBanner() {
+    const el = $('#updateBanner');
+    if (!el) return;
+    const p = pendingUpdate();
+    let dismissed = '';
+    try {
+      dismissed = localStorage.getItem('obot.updateDismissed') || '';
+    } catch {}
+    const show = !!p && dismissed !== p.version && !S.updating;
+    const was = !el.hidden;
+    el.hidden = !show;
+    if (show) {
+      el.textContent = '';
+      el.append(
+        icon('download', 15),
+        h('span', { class: 'ub-text' }, `oBot ${p.version} is available.`),
+        h('button', { class: 'btn small primary', onclick: () => installUpdates() }, 'Update'),
+        h(
+          'button',
+          {
+            class: 'ghost-btn sm',
+            'aria-label': 'Dismiss update notice',
+            onclick: () => {
+              try {
+                localStorage.setItem('obot.updateDismissed', p.version);
+              } catch {}
+              renderUpdateBanner();
+            },
+          },
+          icon('x', 14)
+        )
+      );
+    }
+    if (was !== show) layoutComposer();
+  }
+
+  function obotUpdateRows(copyBtn) {
+    const ui = S.settingsUI;
+    const U = S.updates || {};
+    const checkBtn = pillBtn(ui.updChecking ? 'Checking…' : 'Check for Updates', async () => {
+      ui.updChecking = true;
+      rerenderSettings(true);
+      await checkForUpdates();
+      ui.updChecking = false;
+      rerenderSettings(true);
+    }, { disabled: !!ui.updChecking || !!S.updating });
+    const one = (label, info, current, which) => {
+      let sub = 'Checks for a new version every few hours.';
+      let btn = checkBtn;
+      if (info && info.error) sub = info.error;
+      else if (info && info.available && info.can_install === false) sub = `Version ${info.latest} is available. ${info.why_not || ''}`;
+      else if (info && info.available) {
+        sub = `Version ${info.latest} is available.`;
+        btn = pillBtn(S.updating ? 'Updating…' : `Update to ${info.latest}`, () => installUpdates(which), { disabled: !!S.updating });
+      } else if (info) sub = 'You’re up to date.';
+      return row(label, h('span', { class: 'ver' }, `Version ${current || '—'}`, current && copyBtn(current), btn), sub, '', 'update-' + which);
+    };
+    const rows = [];
+    if (window.__TAURI_INTERNALS__) rows.push(one('This app', U.app, (U.app && U.app.current) || '', 'app'));
+    if (serverUpdates()) rows.push(one(window.__TAURI_INTERNALS__ ? `oBot on ${computerName()}` : 'oBot', U.server, S.version, 'server'));
+    return rows;
+  }
+
   // ── Updates (1.5) ──
   function tabUpdates() {
     const claude = (S.computer && S.computer.claude) || {};
@@ -7541,7 +7672,7 @@
     return h(
       'div',
       null,
-      section('oBot Updates', card(row('Version', h('span', { class: 'ver' }, `Version ${S.version || '—'}`, S.version && copyBtn(S.version)), 'oBot updates when you install a new build.', '', 'update-status'))),
+      section('oBot Updates', card(obotUpdateRows(copyBtn))),
       section(
         'Claude Code Updates',
         card(

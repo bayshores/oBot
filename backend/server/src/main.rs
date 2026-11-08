@@ -13,6 +13,8 @@
 //!   obot-server --host 0.0.0.0 --allow-network
 //!                                     listen on the network too (not recommended)
 //!   obot-server --data-dir <dir>   keep data somewhere else
+//!   obot-server --supervise ...    keep it running, and start the new version after an update
+//!                                     from the app (the Windows installer uses this)
 //!   obot-server pair               make a 6-digit code to pair a new device (10 minutes, once)
 //!   obot-server token              print the owner token (for this PC only)
 //!   obot-server new-token          make a new owner token
@@ -43,6 +45,7 @@ fn help() {
         "obot-server {}\n\n\
          Usage:\n  obot-server [--port 7777] [--data-dir DIR]\n  \
          obot-server --host 0.0.0.0 --allow-network   also listen on the network (not recommended)\n  \
+         obot-server --supervise [options]          keep running; start the new version after an update\n  \
          obot-server pair         make a 6-digit code to pair a new device\n  \
          obot-server devices      list paired devices\n  \
          obot-server unpair ID    remove a paired device\n  \
@@ -64,6 +67,15 @@ fn main() -> anyhow::Result<()> {
     if args.get(1).map(String::as_str) == Some("hook") {
         std::process::exit(obot_core::hooks::run(&args[2..]));
     }
+
+    // The startup task runs `obot-server --supervise ...`: keep the server running and start the
+    // new version after an update from the app (see update.rs).
+    if let Some(pos) = args.iter().position(|a| a == "--supervise") {
+        let mut rest = args[1..].to_vec();
+        rest.remove(pos - 1);
+        obot_core::update::supervise(rest);
+    }
+    obot_core::update::clean_old();
 
     let mut port: u16 = 7777;
     let mut host = "127.0.0.1".to_string();

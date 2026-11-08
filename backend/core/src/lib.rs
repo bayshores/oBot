@@ -37,6 +37,7 @@ pub mod security;
 pub mod skills;
 pub mod state;
 pub mod tools;
+pub mod update;
 pub mod util;
 pub mod vault;
 

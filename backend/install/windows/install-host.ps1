@@ -188,7 +188,8 @@ if (-not $ts) {
 # 4. Start at boot, as you (so it can use your Claude login), restart on crash
 # The real account name (env vars like USERDOMAIN can be wrong in SSH sessions).
 $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$cmd = "& '$Target' --port $Port *>> '$LogFile'"
+# --supervise: starts the new version right after an update from the app (Settings › Updates).
+$cmd = "& '$Target' --supervise --port $Port *>> '$LogFile'"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
   -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"$cmd`""
 $trigger = New-ScheduledTaskTrigger -AtStartup

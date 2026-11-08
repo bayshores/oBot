@@ -169,6 +169,7 @@ fn router(state: Shared) -> Router {
         .route("/api/mcp-servers", post(add_mcp_server))
         .route("/api/mcp-servers/{name}", delete(remove_mcp_server))
         .route("/api/claude/update", post(update_claude))
+        .route("/api/update", get(update_status).post(install_update))
         .route("/api/claude/logout", post(logout_claude))
         .route("/api/memories/{id}", delete(delete_memory))
         .route("/api/settings", get(get_settings).put(put_settings))
@@ -1802,6 +1803,30 @@ async fn update_claude(State(st): State<Shared>) -> ApiResult<Json<Value>> {
         .map_err(|_| bad("The update took too long"))??;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     Ok(Json(json!({ "ok": out.status.success(), "output": crate::util::truncate_chars(text.trim(), 2000) })))
+}
+
+/// Settings › Updates: is there a newer oBot for this computer (GitHub Releases)?
+async fn update_status() -> ApiResult<Json<Value>> {
+    Ok(Json(tokio::task::spawn_blocking(|| crate::update::status(crate::VERSION)).await.map_err(|e| bad(&e.to_string()))?))
+}
+
+/// Install the newer oBot on this computer and start again (Windows, see update.rs). Working Bots
+/// are stopped first; the app reconnects by itself once the new version is running.
+async fn install_update(State(st): State<Shared>) -> ApiResult<Json<Value>> {
+    let version = tokio::task::spawn_blocking(|| crate::update::install(crate::VERSION))
+        .await
+        .map_err(|e| bad(&e.to_string()))?
+        .map_err(|e| bad(&e))?;
+    let running: Vec<String> = st.runs.lock().await.keys().cloned().collect();
+    for id in &running {
+        crate::runner::stop(&st, id).await;
+    }
+    tracing::info!("updated to oBot {version}; starting again");
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        std::process::exit(crate::update::RESTART_CODE);
+    });
+    Ok(Json(json!({ "ok": true, "version": version })))
 }
 
 /// Settings › General › Sign Out: signs Claude Code out on this computer.
