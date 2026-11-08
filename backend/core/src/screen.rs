@@ -58,16 +58,22 @@ ob_killgroup() {
 }
 # Turn on "Continue where you left off". Without it Chrome deletes session cookies (which most
 # school/work sign-ins use) every time it starts, so the bot was logged out after each restart.
+# Also turn off Chrome's own password saving: logins live in the Vault, and the "Save password?"
+# bubble after every sign-in cost the bot a step to close.
 ob_keep_logins() {
   local pf="$OBPROF/Default/Preferences"; mkdir -p "$OBPROF/Default"
-  [ -s "$pf" ] || { echo '{"session":{"restore_on_startup":1}}' >"$pf"; return 0; }
+  [ -s "$pf" ] || { echo '{"session":{"restore_on_startup":1},"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}' >"$pf"; return 0; }
   command -v python3 >/dev/null || return 0
   python3 - "$pf" <<'PY' 2>/dev/null || true
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p))
-if d.get("session", {}).get("restore_on_startup") != 1:
+want = (d.get("session", {}).get("restore_on_startup") == 1 and d.get("credentials_enable_service") is False
+        and d.get("profile", {}).get("password_manager_enabled") is False)
+if not want:
     d.setdefault("session", {})["restore_on_startup"] = 1
+    d["credentials_enable_service"] = False
+    d.setdefault("profile", {})["password_manager_enabled"] = False
     json.dump(d, open(p, "w"), separators=(",", ":"))
 PY
 }
