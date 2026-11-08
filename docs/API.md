@@ -358,6 +358,7 @@ Every bot gets these tools from openbot (`backend/core/src/tools.rs`); they neve
 | `drive_download {account?, id, to?, format?}` | save a file into the bot's folder (default `drive/<name>`, max 100 MB). Docs, Sheets, Slides and Drawings are converted (default PDF; `docx`, `xlsx`, `pptx`, `csv`, `txt`, `md`, `png`) |
 | `drive_upload {account?, path, folder?, name?, replace?}` | upload a file from the bot's folder (max 100 MB). Stops if the folder has a file with that name, unless `replace` (Drive keeps the old version) |
 | `drive_create_folder {account?, path, parent?}` · `drive_move {account?, id, folder?, name?}` · `drive_copy {account?, id, folder?, name?}` | make folders (all levels of a path; returns an existing one) · move and/or rename · copy a file (not folders) |
+| `drive_share {account?, id, with, role?, message?}` | share a file or folder with `"anyone"` (anyone with the link, not searchable) or an email address (Google emails them, with `message`). `role`: `reader` (default), `commenter`, `writer`. Always shows an Allow / Deny card and waits; returns the link |
 | `drive_trash {account?, id}` | move a file or folder to Drive's trash. Always shows an Allow / Deny card and waits |
 
 ### How a turn runs

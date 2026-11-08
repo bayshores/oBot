@@ -387,7 +387,7 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__openbot__calendar_events" | "mcp__openbot__calendar_get" | "mcp__openbot__calendar_list" => ("reading_file", "Checking the calendar".into()),
         "mcp__openbot__calendar_free_time" => ("reading_file", "Looking for free time".into()),
         "mcp__openbot__drive_search" | "mcp__openbot__drive_list" | "mcp__openbot__drive_download" => ("reading_file", "Looking in Google Drive".into()),
-        "mcp__openbot__drive_trash" => ("waiting_for_you", "Waiting for your OK".into()),
+        "mcp__openbot__drive_trash" | "mcp__openbot__drive_share" => ("waiting_for_you", "Waiting for your OK".into()),
         n if n.starts_with("mcp__openbot__drive_") => ("working", "Organizing Google Drive".into()),
         n if n.starts_with("mcp__openbot__calendar_") => ("working", "Updating the calendar".into()),
         n if n.starts_with("mcp__openbot__") => ("working", "Working".into()),
@@ -1330,6 +1330,7 @@ pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
         "mcp__openbot__drive_move" => verb("Moved a file in Google Drive", "Move a file in Google Drive"),
         "mcp__openbot__drive_copy" => verb("Copied a file in Google Drive", "Copy a file in Google Drive"),
         "mcp__openbot__drive_trash" => verb("Moved a file in Google Drive to the trash", "Move a file in Google Drive to the trash"),
+        "mcp__openbot__drive_share" => verb("Shared a file in Google Drive", "Share a file in Google Drive"),
         n if n.starts_with("mcp__") => {
             let mut p = n.splitn(3, "__").skip(1);
             let server = p.next().unwrap_or("");

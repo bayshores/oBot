@@ -100,7 +100,7 @@ Data lives in `%APPDATA%\openbot` (settings, chats), and Bot folders in `%USERPR
 * **Permissions:** Settings › Computer › **Execution on this computer** is *Ask every time* (default), *Always allow* or
   *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions
   using your rules and asks you about the rest with an **Allow / Always allow / Deny** card. Sending
-  email, inviting people and deleting always ask.
+  email, inviting people, sharing Drive files and deleting always ask.
 * **Vault** passwords, secrets and the API key are encrypted with a key the system keeps (Windows DPAPI,
   the macOS Keychain, or a private file on Linux). Saved values are shown as `••••` if they ever appear
   in a chat or memory. Each Vault item and connected account can be limited to the Bots you pick.

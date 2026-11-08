@@ -2,7 +2,8 @@
 //! account's Drive (Settings › Connections). The account must have allowed Google Drive (accounts
 //! connected before Drive was added show "Add Google Drive"). If the user runs Google Drive for
 //! desktop, files in their My Drive also appear on their own computer, so this is how a Bot puts
-//! files there. Moving to the trash asks the user first; everything else is undoable in Drive.
+//! files there. Moving to the trash and sharing ask the user first; everything else is undoable in
+//! Drive.
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -62,6 +63,13 @@ pub fn tool_definitions() -> Vec<Value> {
             "description": "Copy a Drive file (for example one someone shared) into a folder of the user's own Drive. Folders can't be copied; copy their files one by one.",
             "inputSchema": {"type": "object", "properties": {
                 "account": account, "id": {"type": "string"}, "folder": folder, "name": {"type": "string"}}, "required": ["id"]}}),
+        json!({"name": "drive_share",
+            "description": "Share a Drive file or folder: with anyone who has the link (\"anyone\"), or with one person's email address (Google emails them). The user sees an Allow / Deny card first. Returns the link to send.",
+            "inputSchema": {"type": "object", "properties": {
+                "account": account, "id": {"type": "string"},
+                "with": {"type": "string", "description": "\"anyone\" (anyone with the link) or an email address"},
+                "role": {"type": "string", "enum": ["reader", "commenter", "writer"], "description": "reader (view only, default), commenter or writer (can edit)"},
+                "message": {"type": "string", "description": "A note in Google's email to that person"}}, "required": ["id", "with"]}}),
         json!({"name": "drive_trash",
             "description": "Move a Drive file or folder to the trash (the user sees an Allow / Deny card first; it can be restored from the trash for 30 days).",
             "inputSchema": {"type": "object", "properties": {"account": account, "id": {"type": "string"}}, "required": ["id"]}}),
@@ -72,9 +80,30 @@ pub fn is_tool(name: &str) -> bool {
     name.starts_with("drive_")
 }
 
-/// drive_trash waits for the user's Allow / Deny.
+/// drive_trash and drive_share wait for the user's Allow / Deny.
 pub fn waits_for_user(name: &str) -> bool {
-    name == "drive_trash"
+    name == "drive_trash" || name == "drive_share"
+}
+
+/// What drive_share gives: (Drive permission, words for the card). `with` is "anyone" or an email.
+fn share_permission(with: &str, role: &str) -> Result<(Value, String), String> {
+    let role = if role.is_empty() { "reader" } else { role };
+    let can = match role {
+        "reader" => "view",
+        "commenter" => "view and comment",
+        "writer" => "edit",
+        _ => return Err("role must be reader, commenter or writer".into()),
+    };
+    let with = with.trim();
+    if with.eq_ignore_ascii_case("anyone") {
+        // allowFileDiscovery false: only people with the link, it doesn't show up in searches.
+        return Ok((json!({"type": "anyone", "role": role, "allowFileDiscovery": false}), format!("anyone with the link can {can}")));
+    }
+    let ok = with.split_once('@').map_or(false, |(u, d)| !u.is_empty() && d.contains('.') && !with.contains(char::is_whitespace));
+    if !ok {
+        return Err("\"with\" must be \"anyone\" or an email address".into());
+    }
+    Ok((json!({"type": "user", "role": role, "emailAddress": with}), format!("{with} can {can}")))
 }
 
 fn s(v: &Value, k: &str) -> String {
@@ -451,6 +480,26 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
             let v = api(st, &a, "POST", &format!("{API}/{}/copy?fields={FIELDS}&supportsAllDrives=true", enc(&s(&f, "id"))), &[], Some(json!({"name": name, "parents": [fid]}))).await?;
             Ok(format!("Copied {} to {fname} as {} (id {}).", s(&f, "name"), s(&v, "name"), s(&v, "id")))
         }
+        "drive_share" => {
+            let f = get_file(st, &a, &s(args, "id")).await?;
+            let (perm, who) = share_permission(&s(args, "with"), &s(args, "role"))?;
+            let what = if s(&f, "mimeType") == FOLDER { "folder" } else { "file" };
+            let summary = format!("Share the {what} “{}” in {}'s Google Drive: {who}", s(&f, "name"), a.email);
+            let note = s(args, "message");
+            let input = json!({"kind": "drive", "action": "share", "account": a.email, "name": s(&f, "name"), "id": s(&f, "id"), "with": s(args, "with"), "message": note});
+            let ok = crate::api::ask_approval(st, &bot.id, "mcp__openbot__drive_share", &summary, &input, "", "")
+                .await
+                .map_err(|e| e.to_string())?;
+            if !ok {
+                return Ok(format!("The user said no, so {} was not shared.", s(&f, "name")));
+            }
+            let mut url = format!("{API}/{}/permissions?supportsAllDrives=true", enc(&s(&f, "id")));
+            if perm["type"] == "user" && !note.is_empty() {
+                url.push_str(&format!("&emailMessage={}", enc(&truncate_chars(&note, 1000))));
+            }
+            api(st, &a, "POST", &url, &[], Some(perm)).await?;
+            Ok(format!("Shared {} ({who}). Link: {}", s(&f, "name"), s(&f, "webViewLink")))
+        }
         "drive_trash" => {
             let f = get_file(st, &a, &s(args, "id")).await?;
             let what = if s(&f, "mimeType") == FOLDER { "folder" } else { "file" };
@@ -485,5 +534,17 @@ mod tests {
         assert!(export_type("application/vnd.google-apps.document", "xlsx").is_err());
         assert!(in_workdir("/bots/a", "../x").is_err());
         assert_eq!(in_workdir("/bots/a", "drive/x.pdf").unwrap(), PathBuf::from("/bots/a/drive/x.pdf"));
+    }
+
+    #[test]
+    fn share_permissions() {
+        let (p, who) = share_permission("Anyone", "").unwrap();
+        assert_eq!(p, json!({"type": "anyone", "role": "reader", "allowFileDiscovery": false}));
+        assert_eq!(who, "anyone with the link can view");
+        let (p, who) = share_permission("pat@example.com", "writer").unwrap();
+        assert_eq!(p, json!({"type": "user", "role": "writer", "emailAddress": "pat@example.com"}));
+        assert_eq!(who, "pat@example.com can edit");
+        assert!(share_permission("pat", "reader").is_err());
+        assert!(share_permission("anyone", "owner").is_err());
     }
 }
