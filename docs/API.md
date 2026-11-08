@@ -172,8 +172,8 @@ Settings = {
                                                      // (Settings › Connections; tokens are never sent)
   accounts_ready: { google: boolean, microsoft: boolean }  // can this build connect accounts?
   auto_review: boolean,                              // Settings › Permissions › Auto-Review (default true)
-  review_ask: string[],   // "Always Ask" plain-language rules (max 20, 1000 chars each; wins over allow)
-  review_allow: string[], // "Allow without Asking" rules
+  review_ask: string[],   // "Ask first" plain-language rules (max 20, 1000 chars each; wins over allow)
+  review_allow: string[], // "Auto-approve" rules
   mcp_servers: [{ name, type: "http"|"stdio", url?, headers?, command?, args?, env? }]  // header/env values masked
   timezone: string,      // IANA name like "America/Los_Angeles"; "" = the computer's timezone. Routine times use it. PUT accepts it.
   runner: "native"|"wsl", // where bots run Claude Code. "wsl" (Windows hosts only) runs it inside WSL with its sandbox on. PUT accepts it.
@@ -437,7 +437,7 @@ names like `ctrl+l`), `computer_open {url, new_tab?}` (opens in the tab in front
 A Bot's browser keeps at most 6 tabs (blank, then least recently used ones close first), and when a
 screen starts only the 3 newest of the reopened tabs are kept. While it uses them,
 `bot.activity.kind` is `on_its_computer`. `request_control {reason}` posts a widget message with
-`meta.screen:true` and the option "I'm done": the user opens the screen, chooses Take control,
+`meta.screen:true` and the option "I'm done": the user opens the screen, chooses Use screen,
 does the step (a login, a code, a payment), and answers.
 
 Signing in (logins.rs, secure_form.rs, browser.js): `list_logins {site?}` shows the Bot its Vault
@@ -452,7 +452,7 @@ Vault's contact info. oBot finds the page in front through the browser's local d
 or with several windows the one whose title matches the active window. Filling needs Node.js 22+
 inside Linux (installed with the screen setup).
 
-The app's viewer (noVNC) is view-only until the user chooses Take control.
+The app's viewer (noVNC) is view-only until the user chooses Use screen.
 
 ## Desktop bridge (only inside the oBot desktop app)
 

@@ -1642,7 +1642,7 @@ textarea.field { height: auto; padding: 8px 12px; resize: vertical; line-height:
 .usage-big .unit { color: var(--text-2); font-size: 15px; }
 .usage-sub { font-size: 13px; color: var(--text-2); }
 
-/* ───────────── 10b. settings & bot management (settings-and-bots.md) ───────────── */
+/* ───────────── settings & bot management ───────────── */
 .err, .set-row-sub.err, .p-row-sub.err { color: var(--danger-text); }
 .btn.pill { height: 32px; padding: 0 14px; border-radius: 9999px; font-size: 14px; }
 .btn-ext { display: inline-flex; align-items: center; gap: 6px; }
@@ -1701,7 +1701,7 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .ver { display: inline-flex; align-items: center; gap: 4px; font-size: 14px; color: var(--text-2); }
 .ver .btn.pill { margin-left: 8px; }
 
-/* approval card (2.3.1) */
+/* approval card */
 .card-caution { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; font-size: 13px; line-height: 18px; color: var(--warn-text); }
 .card-caution .ico { margin-top: 2px; flex: none; }
 .card-full summary { color: var(--text-2); }
@@ -1723,7 +1723,7 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .radio-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .radio-item.on .radio-dot { border-color: var(--accent); box-shadow: inset 0 0 0 4px var(--modal), inset 0 0 0 10px var(--accent); }
 
-/* bot info pane (4.6) */
+/* bot info pane */
 .panel-head-start { display: flex; align-items: center; gap: 4px; }
 .panel-head-title.strong { color: var(--text); font-weight: var(--w-medium); font-size: 14px; }
 .p-tabs { display: flex; gap: 4px; margin: 2px 0 14px; box-shadow: inset 0 -.5px 0 var(--b2); }
@@ -1754,7 +1754,7 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .lib-thumb { width: 36px; height: 36px; border-radius: 8px; object-fit: cover; flex: none; background: var(--secondary); }
 .lib-icon { width: 36px; height: 36px; border-radius: 8px; flex: none; display: inline-flex; align-items: center; justify-content: center; background: var(--secondary); box-shadow: inset 0 0 0 .5px var(--b3); font-size: 9px; font-weight: 600; letter-spacing: .3px; color: var(--text-3); }
 
-/* routine detail (5.3) */
+/* routine detail */
 .routine-dialog { width: min(520px, 100%); }
 .rt-label { font-size: 12px; line-height: 16px; color: var(--text-2); margin: 18px 2px 6px; }
 .rt-text { font-size: 14px; line-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto; }
@@ -1791,7 +1791,7 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .comp-name { display: inline-flex; align-items: center; gap: 8px; }
 .comp-name .ico { color: var(--icon-2); }
 
-/* onboarding (settings-and-bots.md 4.4) */
+/* onboarding */
 .overlay.onboard-overlay { background: var(--chrome); }
 .dialog.onboard { width: min(500px, 100%); padding: 40px 36px 28px; text-align: center; display: flex; flex-direction: column; align-items: center; background: var(--dialog); transition: width .2s var(--ease); }
 .dialog.onboard.wide { width: min(640px, 100%); text-align: left; align-items: stretch; padding-top: 32px; }

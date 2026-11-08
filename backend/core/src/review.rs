@@ -29,7 +29,7 @@ ASK for anything risky or hard to undo: deleting or overwriting data outside the
 messages/emails/posts to other people, purchases or payments, logging in or handling passwords and secrets, \
 changing system settings, installing system-wide software, sudo/admin rights, force-pushing or publishing, \
 anything that touches other people's accounts, or anything that doesn't match what the user asked for.\n\
-The user's own rules override your judgment. \"Always Ask\" rules win over \"Allow without Asking\" rules.\n\
+The user's own rules override your judgment. \"Ask first\" rules win over \"Auto-approve\" rules.\n\
 Reply with ONLY a JSON object: {\"decision\":\"allow\"|\"ask\",\"reason\":\"<max 12 words>\",\
 \"proposed_rule\":\"<short plain-language rule that would allow this kind of action, max 8 words>\"}";
 
@@ -64,7 +64,7 @@ pub async fn review(
         }
     };
     let prompt = format!(
-        "{GUIDE}\n\nUser's \"Always Ask\" rules:\n{}\n\nUser's \"Allow without Asking\" rules:\n{}\n\n\
+        "{GUIDE}\n\nUser's \"Ask first\" rules:\n{}\n\nUser's \"Auto-approve\" rules:\n{}\n\n\
          Bot: {bot_name}\nBot's working folder: {workdir}\nUser's latest request to the bot: {}\n\n\
          Action the bot wants to take:\nTool: {tool}\nInput: {}\n",
         rules(&cfg.review_ask),

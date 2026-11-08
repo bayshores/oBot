@@ -89,7 +89,7 @@ You pick one "terminal backend" in the config: `local`, `docker`, `ssh`, `modal`
    - This is the same split as OpenClaw: the controller on the PC, the work inside the sandbox [5].
 4. **Give each bot a screen.** Run a virtual Linux desktop per bot inside the WSL computer (Xvfb, a small window manager and Chromium).
    - Stream it over VNC, reachable only through Tailscale.
-   - The Mac app can then show a live "bot screen" with a **Take control** button.
+   - The Mac app can then show a live "bot screen" with a **Use screen** button.
 5. **Keep it running 24/7** [4][7][24]:
    - In `.wslconfig`, stop WSL from shutting down when idle and cap its RAM and CPU.
    - Add a keep-alive task that starts at boot.

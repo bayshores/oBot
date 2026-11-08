@@ -359,7 +359,7 @@
     }
   }, 500);
 
-  // ───────────────────────────── bot colour tint (shell.md 1.1c) ─────────────────────────────
+  // ───────────────────────────── bot colour tint ─────────────────────────────
   // light: fill / user-bubble (hover shade) / text · dark: fill (= user bubble) / bright / text
   const HUES = {
     red: ['#e72e3b', '#c82532', '#cd2834', '#cf2b35', '#fc2c3e', '#ff6463'],
@@ -461,7 +461,7 @@
         'You help plan days and weeks. Turn messy notes into prioritized task lists and short schedules. Be encouraging and concise.',
     },
   ];
-  const WORK_PHRASES = ['Getting it done', 'Making progress', 'Working on it', 'Handling it', 'Chipping away'];
+  const WORK_PHRASES = ['Busy', 'On it', 'Thinking', 'Still going', 'Hard at work'];
   const SB_MIN = 240;
   const SB_MAX = 400;
   const SB_DEFAULT = 280;
@@ -1628,7 +1628,7 @@
         return botRowEl(S.bots.get(id), 'tile');
       });
       reconcile(tilesEl, tiles);
-      // cap the tile row so few tiles stay centred (shell.md 3.3.1)
+      // cap the tile row so few tiles stay centred
       tilesEl.style.maxWidth = pins.length < 3 ? pins.length * 99 - 4 + 'px' : '';
       want.push(tilesEl);
       if (!pinDivider) pinDivider = h('div', { class: 'pinned-divider' });
@@ -1657,7 +1657,7 @@
       hiddenHead.textContent = '';
       hiddenHead.classList.toggle('open', S.hiddenOpen);
       hiddenHead.setAttribute('aria-expanded', S.hiddenOpen ? 'true' : 'false');
-      hiddenHead.append(h('span', null, 'Hidden Bots'), h('span', { class: 'sec-count' }, h('span', { class: 'num' }, String(hid.length)), icon('chevronRight', 12, '', 2.2)));
+      hiddenHead.append(h('span', null, 'Hidden'), h('span', { class: 'sec-count' }, h('span', { class: 'num' }, String(hid.length)), icon('chevronRight', 12, '', 2.2)));
       want.push(hiddenHead);
       if (S.hiddenOpen) {
         for (const b of hid) {
@@ -1716,7 +1716,7 @@
       toast('Couldn’t copy', 'error');
     }
   }
-  // Sidebar "Bot actions" menu (settings-and-bots.md 4.9)
+  // Sidebar "Bot actions" menu
   function botMenu(b, x, y) {
     if (!b) return;
     const pinned = !!b.pinned && !b.hidden;
@@ -1757,18 +1757,18 @@
         '-',
         { label: 'Rename Bot', icon: 'pencil', action: rename },
         '-',
-        b.conversation_id && { label: 'Copy conversation ID', icon: 'copy', action: () => copyText(b.conversation_id, 'Copied conversation ID') },
+        b.conversation_id && { label: 'Copy chat ID', icon: 'copy', action: () => copyText(b.conversation_id, 'Chat ID copied') },
         b.conversation_id && '-',
-        { label: b.hidden ? 'Show in sidebar' : 'Hide from sidebar', icon: b.hidden ? 'eye' : 'eyeOff', action: () => setHidden(b, !b.hidden) },
+        { label: b.hidden ? 'Show in sidebar' : 'Hide in sidebar', icon: b.hidden ? 'eye' : 'eyeOff', action: () => setHidden(b, !b.hidden) },
         b.main
-          ? { label: 'Replace with different Bot', icon: 'refresh', action: () => choosePrimaryBot(b) }
+          ? { label: 'Pick another main Bot', icon: 'refresh', action: () => choosePrimaryBot(b) }
           : { label: 'Delete', icon: 'trash', danger: true, action: () => deleteBot(b) },
       ],
       x,
       y
     );
   }
-  // "Choose a primary Bot" (4.3): search + radio list
+  // "Pick your main Bot": search + radio list
   function choosePrimaryBot(current) {
     let pick = current ? current.id : null;
     let q = '';
@@ -1823,10 +1823,10 @@
     }
     const box = h(
       'div',
-      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Choose a primary Bot' },
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Pick your main Bot' },
       h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
-      h('h2', { class: 'dialog-title' }, 'Choose a primary Bot'),
-      h('p', { class: 'dialog-body' }, 'Your main point of contact. It checks in proactively and coordinates work with your other Bots.'),
+      h('h2', { class: 'dialog-title' }, 'Pick your main Bot'),
+      h('p', { class: 'dialog-body' }, 'The Bot you talk to first. It works on its own schedule and passes tasks to your other Bots.'),
       h('div', { style: 'margin-top:14px' }, search),
       list,
       err,
@@ -1903,7 +1903,7 @@
   }
   async function resetBot(b) {
     const ok = await confirmDialog({
-      title: 'Reset this conversation?',
+      title: 'Clear this chat and start over?',
       body: 'The conversation history starts over. The Bot\'s memory, files, routines, and settings are kept.',
       confirmText: 'Reset',
       danger: true,
@@ -2076,7 +2076,7 @@
           'button',
           {
             class: 'x',
-            'aria-label': 'Dismiss new messages',
+            'aria-label': 'Hide the new messages notice',
             onclick: (e) => {
               e.stopPropagation();
               S.newCount = 0;
@@ -2274,7 +2274,7 @@
     }
   }
 
-  // working indicator: animated 28px mark + shimmering activity phrase + elapsed time (shell.md 4.7)
+  // working indicator: animated 28px mark + shimmering activity phrase + elapsed time
   let actEl = null;
   function activityFor(b, list) {
     if (!b.running) return null;
@@ -2378,7 +2378,7 @@
     switch (m.role) {
       case 'user': {
         const rt = m.meta && m.meta.reply_to;
-        if (rt && rt.id) stack.append(h('button', { class: 'quote-pill', 'data-tip': 'Jump to replied message', onclick: () => jumpTo(rt.id) }, icon('reply', 12, '', 2), h('span', { class: 'qp-who' }, rt.who), h('span', { class: 'qp-text' }, rt.quote)));
+        if (rt && rt.id) stack.append(h('button', { class: 'quote-pill', 'data-tip': 'Go to the original message', onclick: () => jumpTo(rt.id) }, icon('reply', 12, '', 2), h('span', { class: 'qp-who' }, rt.who), h('span', { class: 'qp-text' }, rt.quote)));
         const atts = (m.meta && m.meta.attachments) || [];
         const imgs = atts.filter(isImage);
         const files = atts.filter((a) => !isImage(a));
@@ -2487,7 +2487,7 @@
     return w;
   }
 
-  // ── reactions and replies (shell.md 4.6, 6.12)
+  // ── reactions and replies
   const QUICK_EMOJI = ['👍', '👎', '❤️', '😂', '🎉'];
   const MORE_EMOJI = ['😊', '😮', '😢', '🙏', '🔥', '👏', '💯', '✅', '👀', '🤔', '😅', '🥳', '😍', '🙌', '💪', '👌', '🤝', '⭐', '😎', '🤯', '😭', '😬', '🫡', '💡', '🚀', '☕', '🍕', '📌', '❓', '❗'];
   const reactionsOf = (m) => (m && m.meta && Array.isArray(m.meta.reactions) ? m.meta.reactions : []);
@@ -2637,7 +2637,7 @@
   function isImage(a) {
     return (a.mime && a.mime.startsWith('image/')) || /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif)$/i.test(a.name || a.path || '');
   }
-  // up to 3 tiles per row; extras collapse into "+N" on the last tile (shell.md 4.4.3)
+  // up to 3 tiles per row; extras collapse into "+N" on the last tile
   function imageRow(imgs) {
     const urls = imgs.map((a) => ({ url: a.localUrl || fileUrl(a.url), name: a.name || 'image' }));
     const showN = Math.min(3, urls.length);
@@ -2966,7 +2966,7 @@
     );
   }
 
-  // The live viewer. control:true starts with "Take control" on (used by the hand-over card).
+  // The live viewer. control:true starts with "Use screen" on (used by the hand-over card).
   function openScreen(botId, { control = false } = {}) {
     if (S.screenUI) S.screenUI.close();
     const bot = S.bots.get(botId);
@@ -3036,7 +3036,7 @@
     function setControl(on) {
       ctl = on;
       ctlBtn.textContent = '';
-      ctlBtn.append(icon(on ? 'check' : 'pointer', 15, '', 2.2), on ? 'Hand back' : 'Take control');
+      ctlBtn.append(icon(on ? 'check' : 'pointer', 15, '', 2.2), on ? 'Give back' : 'Use screen');
       ctlBtn.classList.toggle('primary', !on);
       stage.classList.toggle('controlling', on);
       if (rfb) {
@@ -3044,10 +3044,10 @@
         if (on) rfb.focus();
       }
       if (!rfb || !msg.hidden) return; // not connected yet: connect() shows the status
-      setStatus(on ? 'You’re in control' : 'Watching', on ? 'ctl' : 'live');
+      setStatus(on ? 'You’re using it' : 'Live', on ? 'ctl' : 'live');
       hint.textContent = on
         ? 'Your mouse and keyboard now go to the Bot’s screen. Choose Hand back when you’re done.'
-        : 'You’re watching. The Bot keeps working; choose Take control to use the screen yourself.';
+        : 'You’re watching. The Bot keeps working; choose Use screen to use it yourself.';
     }
     async function connect() {
       reBtn.hidden = true;
@@ -3167,7 +3167,7 @@
     mcp__obot__calendar_delete: ['calendar', 'Calendar', 'delete an event'],
     mcp__obot__calendar_respond: ['calendar', 'Calendar', 'reply to an invitation'],
   };
-  // Approval card (settings-and-bots.md 2.3.1)
+  // Approval card
   const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
   function cutMiddle(text, max = 340) {
     if (text.length <= max) return text;
@@ -3351,11 +3351,11 @@
       cal && h('div', { class: 'card-desc' }, `${botName} wants to ${verb}`),
       reason && h('div', { class: 'card-caution' }, icon('alert', 14), h('span', null, reason)),
       well,
-      full && full !== (well && well.textContent) ? h('details', { class: 'card-full' }, h('summary', null, 'View the full request'), h('pre', null, full)) : null
+      full && full !== (well && well.textContent) ? h('details', { class: 'card-full' }, h('summary', null, 'Show everything it asked for'), h('pre', null, full)) : null
     );
     if (status === 'pending') {
       const buttons = [];
-      const errLine = h('div', { class: 'card-error', role: 'alert', hidden: true }, 'Your answer didn’t go through. Check your connection and try again.');
+      const errLine = h('div', { class: 'card-error', role: 'alert', hidden: true }, 'Your answer didn’t go through. Make sure you’re online, then retry.');
       const decide = async (decision) => {
         buttons.forEach((x) => (x.disabled = true));
         errLine.hidden = true;
@@ -3373,7 +3373,7 @@
           errLine.hidden = false;
         }
       };
-      if (rule) card.append(h('div', { class: 'rule-notice' }, h('div', { class: 'rule-notice-title' }, 'Adding to your Allow rules'), h('div', { class: 'rule-notice-text' }, rule)));
+      if (rule) card.append(h('div', { class: 'rule-notice' }, h('div', { class: 'rule-notice-title' }, 'This will be added to your auto-approve rules'), h('div', { class: 'rule-notice-text' }, rule)));
       const calAct = cal && CAL_ACTION[cal.action];
       buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, calAct ? calAct.allow : rule ? 'Allow once' : 'Allow'));
       if (rule) buttons.push(h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'));
@@ -3381,7 +3381,7 @@
       card.append(h('div', { class: 'card-actions' }, buttons), errLine);
     } else {
       const calAct = cal && CAL_ACTION[cal.action];
-      const label = status === 'skipped' ? 'Skipped' : status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? (calAct ? 'Not sent' : 'Denied') : status === 'allowed' ? (calAct ? calAct.done : 'Allowed once') : 'Status unavailable';
+      const label = status === 'skipped' ? 'Skipped' : status === 'expired' ? 'Expired' : decided === 'always' ? 'Always allowed' : decided === 'deny' ? (calAct ? 'Not sent' : 'Denied') : status === 'allowed' ? (calAct ? calAct.done : 'Allowed once') : 'No status';
       const ok = status === 'allowed';
       card.append(
         h(
@@ -3441,7 +3441,7 @@
       if (a === 'retry') row.append(act('Try again', () => api(`/api/bots/${m.bot_id}/retry`, { method: 'POST' })));
       if (a === 'new_conversation')
         row.append(
-          act('Start a new conversation', async () => {
+          act('Start a fresh chat', async () => {
             await api(`/api/bots/${m.bot_id}/new-conversation`, { method: 'POST' });
             toast('New conversation started. Memory, files and routines are kept');
           })
@@ -3650,7 +3650,7 @@
       setNotice.t = setTimeout(() => setNotice(null), 6000);
     }
   }
-  // 44px pill ↔ expanded box (shell.md 6.2/6.3)
+  // 44px pill ↔ expanded box
   function layoutComposer() {
     const hasText = input.value.length > 0;
     const replying = !!(S.reply && S.reply.botId === S.current);
@@ -3674,11 +3674,11 @@
     $('#chat').style.setProperty('--dock-h', H + 16 + banners.reduce((n, b) => n + b.offsetHeight + 8, 0) + 'px');
   }
   function placeholderFor(b) {
-    if (!b) return 'Ask anything, or drop a file';
+    if (!b) return 'Message your Bot or attach a file';
     if (S.reply && S.reply.botId === b.id) return 'Reply…';
-    if (S.pending.length && !input.value) return 'Add a message, or hit send';
+    if (S.pending.length && !input.value) return 'Add a note, or press send';
     const list = S.msgs.get(b.id) || [];
-    if (openWidget(list)) return 'Type your answer, or talk about something else';
+    if (openWidget(list)) return 'Answer above, or write something else';
     return `Message ${b.name}`;
   }
   function updateComposer() {
@@ -3824,7 +3824,7 @@
     }
   }
 
-  // attachments (max 6 per message, 25 MB each; shell.md 6.6)
+  // attachments (max 6 per message, 25 MB each)
   const MAX_FILES = 6;
   const MAX_BYTES = 25 * 1024 * 1024;
   $('#attachBtn').addEventListener('click', () => $('#fileInput').click());
@@ -3978,7 +3978,7 @@
       sweepAvatars();
     }
   }
-  // Bot info pane (settings-and-bots.md 4.6): Details / Library tabs, plus a "Bot settings" sub-page.
+  // Bot info pane : Details / Library tabs, plus a "Bot settings" sub-page.
   function panelView(b) {
     if (!S.panelView || S.panelView.botId !== b.id) S.panelView = { botId: b.id, page: 'main', tab: 'details' };
     return S.panelView;
@@ -4132,7 +4132,7 @@
         { class: 'p-hero' },
         h('div', { class: 'p-avatar' }, av),
         name,
-        h('div', { class: 'p-sub' }, b.running ? (b.activity && b.activity.label) || 'Working' : 'Only you can see it'),
+        h('div', { class: 'p-sub' }, b.running ? (b.activity && b.activity.label) || 'Working' : 'Private to you'),
         label
       ),
       h('div', { class: 'p-sec' }, h('div', { class: 'p-label' }, 'Instructions'), h('div', { class: 'panel-card' }, about), more),
@@ -4152,16 +4152,16 @@
       h('span', { class: 'p-avatar-edit' }, icon('pencil', 12, '', 2))
     );
     const name = inlineInput('field', b.name, { maxlength: '255', placeholder: 'Bob', 'aria-label': 'Name' }, (v) => patchBot(b.id, { name: v }), { required: true });
-    const label = inlineInput('field', b.label, { maxlength: '80', placeholder: 'Research, marketing, admin', 'aria-label': 'Label (optional)' }, (v) => patchBot(b.id, { label: v }));
-    const notifSub = h('div', { class: 'p-row-sub' }, 'Get notified when this Bot finishes or is waiting for you');
+    const label = inlineInput('field', b.label, { maxlength: '80', placeholder: 'e.g. Errands, Coding, Travel', 'aria-label': 'Label (optional)' }, (v) => patchBot(b.id, { label: v }));
+    const notifSub = h('div', { class: 'p-row-sub' }, 'Alert me when this Bot is done or needs me');
     const notif = toggleEl(b.notifications !== false, async (v) => {
       const nb = await patchBotQuiet(b.id, { notifications: v });
       if (!nb) {
         notif.checked = !v;
-        notifSub.textContent = 'Couldn’t save. Try again.';
+        notifSub.textContent = 'Didn’t save. Please retry.';
         notifSub.classList.add('err');
       } else {
-        notifSub.textContent = 'Get notified when this Bot finishes or is waiting for you';
+        notifSub.textContent = 'Alert me when this Bot is done or needs me';
         notifSub.classList.remove('err');
       }
     });
@@ -4170,7 +4170,7 @@
     const model = selectEl(b.model || '', modelOptions('Same as Settings', b.model), (v) => patchBot(b.id, { model: v }));
     model.classList.add('p-select');
     const local = S.conn.mode !== 'remote';
-    const hideBtn = h('button', { class: 'p-action', onclick: () => setHidden(S.bots.get(b.id), !S.bots.get(b.id).hidden) }, icon(b.hidden ? 'eye' : 'eyeOff', 16), b.hidden ? 'Show in sidebar' : 'Hide from sidebar');
+    const hideBtn = h('button', { class: 'p-action', onclick: () => setHidden(S.bots.get(b.id), !S.bots.get(b.id).hidden) }, icon(b.hidden ? 'eye' : 'eyeOff', 16), b.hidden ? 'Show in sidebar' : 'Hide in sidebar');
     body.append(
       h('div', { class: 'p-hero left' }, avBtn),
       h('label', { class: 'p-flabel' }, 'Name'),
@@ -4202,7 +4202,7 @@
         hideBtn,
         h('button', { class: 'p-action', onclick: () => resetBot(S.bots.get(b.id)) }, icon('reset', 16), 'Reset conversation'),
         b.main
-          ? h('button', { class: 'p-action', onclick: () => choosePrimaryBot(S.bots.get(b.id)) }, icon('refresh', 16), 'Replace with different Bot')
+          ? h('button', { class: 'p-action', onclick: () => choosePrimaryBot(S.bots.get(b.id)) }, icon('refresh', 16), 'Pick another main Bot')
           : h('button', { class: 'p-action danger', onclick: () => deleteBot(S.bots.get(b.id)) }, icon('trash', 16), 'Delete Bot')
       )
     );
@@ -4283,7 +4283,7 @@
     }
   }
 
-  // ── routines (settings-and-bots.md 5.2 / 5.3) ──
+  // ── routines ──
   const routineRuns = new Map(); // routine id → started ms
   const routineRunning = (r) => {
     const t = routineRuns.get(r.id);
@@ -4311,7 +4311,7 @@
       await api(`/api/routines/${encodeURIComponent(r.id)}/run`, { method: 'POST' });
     } catch (e) {
       routineRuns.delete(r.id);
-      toast('Couldn’t start a test run. ' + (e && e.network ? 'Check your connection and try again' : 'This Bot is unavailable'), 'error');
+      toast('Couldn’t start a test run. ' + (e && e.network ? 'Make sure you’re online, then retry' : 'This Bot can’t run right now'), 'error');
     }
   }
   async function deleteRoutine(r) {
@@ -4372,7 +4372,7 @@
       box.append(rowEl);
     }
   }
-  // Routine detail (5.3): Instruction, When to run, footer Pause/Resume · Test · Edit · Delete
+  // Routine detail : Instruction, When to run, footer Pause/Resume · Test · Edit · Delete
   function openRoutine(r, editing = false) {
     const box = h('div', { class: 'dialog routine-dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': r.name || 'Routine' });
     const close = openModal(box);
@@ -4740,7 +4740,7 @@
           }
         },
       },
-      'Reset character to default'
+      'Restore the original look'
     );
     const box = h(
       'div',
@@ -4757,7 +4757,7 @@
     const close = openModal(box);
   }
 
-  // ───────────────────────────── "Create New Bot" (settings-and-bots.md 4.2) ─────────────────────────────
+  // ───────────────────────────── "New Bot" ─────────────────────────────
   // ── group chats ──
   const MAX_GROUP = 6;
   const memberNames = (g) => {
@@ -4916,7 +4916,7 @@
       paintAvatar(prev, next, 96, { live: true, interactive: true });
       pokeAvatar(prev);
     });
-    const nameIn = h('input', { class: 'field ne-name', value: preset ? preset.name : '', placeholder: 'Name your Bot', maxlength: '255', 'aria-label': 'Bot name' });
+    const nameIn = h('input', { class: 'field ne-name', value: preset ? preset.name : '', placeholder: 'Bot name', maxlength: '255', 'aria-label': 'Bot name' });
     const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
     const createBtn = h('button', { class: 'btn primary', onclick: create }, 'Create');
     let busy = false;
@@ -4954,9 +4954,9 @@
     });
     const box = h(
       'div',
-      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Create New Bot' },
+      { class: 'dialog', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'New Bot' },
       h('button', { class: 'icon-btn dialog-close', onclick: () => !busy && close(), 'aria-label': 'Close' }, icon('x', 16)),
-      h('h2', { class: 'dialog-title' }, 'Create New Bot'),
+      h('h2', { class: 'dialog-title' }, 'New Bot'),
       h('div', { class: 'ne-preview' }, prev),
       nameIn,
       h('label', { class: 'f-label' }, 'Color'),
@@ -4982,9 +4982,9 @@
     const close = openModal(
       h(
         'div',
-        { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bot templates' },
+        { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Starter Bots' },
         h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
-        h('h2', { class: 'dialog-title' }, 'Bot templates'),
+        h('h2', { class: 'dialog-title' }, 'Starter Bots'),
         h('p', { class: 'dialog-body' }, 'Start from a template or make your own. You can change everything later.'),
         h(
           'div',
@@ -5018,9 +5018,9 @@
     return [
       { title: 'New Bot', icon: 'plus', type: 'Action', run: () => openNewBot() },
       { title: 'New group chat', icon: 'users', type: 'Action', run: () => openNewGroup() },
-      { title: 'Bot templates', icon: 'gridPlus', type: 'Action', run: () => openTemplates() },
+      { title: 'Starter Bots', icon: 'gridPlus', type: 'Action', run: () => openTemplates() },
       curBot() && { title: 'Bot settings', sub: curBot().name, icon: 'gear', type: 'Action', run: () => setPanel(true) },
-      { title: 'Toggle compact sidebar', icon: 'sidebar', type: 'Action', sub: MOD + 'B', run: () => toggleRail() },
+      { title: 'Collapse or expand the sidebar', icon: 'sidebar', type: 'Action', sub: MOD + 'B', run: () => toggleRail() },
       { title: 'Keyboard shortcuts', icon: 'keyboard', type: 'Action', sub: 'Help', run: () => openShortcuts() },
       { title: 'How oBot works', icon: 'sparkle', type: 'Action', sub: 'Help', run: () => openOnboarding() },
       { title: 'Set up an always-on computer', icon: 'monitor', type: 'Action', sub: 'Help', run: () => openSetupWizard() },
@@ -5180,9 +5180,9 @@
       [
         { label: 'Settings', icon: 'gear', kbd: MOD + ',', action: () => openSettings('general') },
         { label: 'Computer', icon: 'monitor', action: () => openSettings('computer') },
-        { label: 'Usage & Billing', icon: 'bars', action: () => openSettings('usage') },
+        { label: 'Usage and plan', icon: 'bars', action: () => openSettings('usage') },
         '-',
-        { label: 'Bot templates', icon: 'gridPlus', action: () => openTemplates() },
+        { label: 'Starter Bots', icon: 'gridPlus', action: () => openTemplates() },
         { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: MOD + '/', action: () => openShortcuts() },
         { label: 'How oBot works', icon: 'sparkle', action: () => openOnboarding() },
       ],
@@ -5214,18 +5214,18 @@
       )
     );
   }
-  // ───────────────────────────── settings (settings-and-bots.md 1.x, 2.1, 3.7, 6) ─────────────────────────────
+  // ───────────────────────────── settings ─────────────────────────────
   const TABS = [
     ['general', 'General', 'gear'],
     ['computer', 'Computer', 'monitor'],
     ['permissions', 'Permissions', 'shield'],
     ['vault', 'Vault', 'vault'],
     ['connections', 'Connections', 'plug'],
-    ['usage', 'Usage & Billing', 'bars'],
+    ['usage', 'Usage and plan', 'bars'],
     ['updates', 'Updates', 'updates'],
   ];
   const TAB_ALIAS = { account: 'usage' };
-  const SAVE_ERR = 'Couldn’t save. Try again.';
+  const SAVE_ERR = 'Didn’t save. Please retry.';
   const USAGE_URL = 'https://claude.ai/settings/usage';
   // The desktop app's menu bar (oBot › Settings…, Connect to Remote Computer…) calls this.
   window.obotOpenSettings = (tab) => openSettings(tab);
@@ -5327,7 +5327,7 @@
   const section = (label, ...kids) => h('div', { class: 'set-section' }, label ? h('div', { class: 'set-label' }, label) : null, ...kids);
   const card = (...rows) => h('div', { class: 'set-card' }, ...rows);
   const note = (...kids) => h('div', { class: 'set-note' }, ...kids);
-  // row(title, control, sub, cls, anchor): a failed save on `anchor` swaps the description for "Couldn't save. Try again."
+  // row(title, control, sub, cls, anchor): a failed save on `anchor` swaps the description for "Didn’t save. Please retry."
   function row(title, control, sub, cls = '', anchor = null) {
     const err = anchor && S.settingsUI && S.settingsUI.errs.has(anchor);
     return h(
@@ -5387,7 +5387,7 @@
     if (!w) copyText(url, 'Link copied. Paste it in your browser.');
   }
 
-  // searchable dropdown (Timezone, 1.3 §6)
+  // searchable dropdown (Timezone)
   function searchSelect({ value, options, placeholder, label, closeLabel, onChange }) {
     const cur = () => options().find((o) => o.value === value) || options()[0];
     const b = h('button', { class: 'pill-btn', 'aria-haspopup': 'listbox', 'aria-label': label }, h('span', { class: 'pill-btn-text' }, cur().label), icon('chevronDown', 12, '', 2));
@@ -5476,7 +5476,7 @@
     return out;
   }
 
-  // ── General (1.3) ──
+  // ── General ──
   function tabGeneral() {
     const name = (S.prefs.userName || '').trim();
     const claude = (S.computer && S.computer.claude) || {};
@@ -5517,7 +5517,7 @@
           { class: 'set-row-text' },
           nameIn,
           signedIn
-            ? h('div', { class: 'acct-email' }, h('span', null, claude.email), h('button', { class: 'ghost-btn sm', 'aria-label': 'Copy email address', 'data-tip': 'Copy email address', onclick: () => copyText(claude.email) }, icon('copy', 14)))
+            ? h('div', { class: 'acct-email' }, h('span', null, claude.email), h('button', { class: 'ghost-btn sm', 'aria-label': 'Copy email', 'data-tip': 'Copy email', onclick: () => copyText(claude.email) }, icon('copy', 14)))
             : h('div', { class: 'set-row-sub' }, claude.installed === false ? 'Not signed in. Install Claude Code on the computer where Bots run.' : 'Not signed in. Run claude in a terminal on that computer to sign in.')
         ),
         signedIn && h('div', { class: 'set-row-ctl' }, pillBtn('Sign Out', signOut))
@@ -5530,7 +5530,7 @@
       options: timezoneOptions,
       placeholder: 'Search timezone',
       label: 'Timezone',
-      closeLabel: 'Close timezone picker',
+      closeLabel: 'Close the time zone list',
       // Saved on the computer where Bots run: routine times use it.
       onChange: (v) => putSettings({ timezone: v }),
     });
@@ -5552,7 +5552,7 @@
           ),
           row('Language', selectEl('system', [['system', 'Follow System']], () => {})),
           row(
-            'Check Spelling While Typing',
+            'Spell check',
             toggleEl(S.prefs.spellcheck !== false, (v) => {
               S.prefs.spellcheck = v;
               savePrefs();
@@ -5578,7 +5578,7 @@
           )
         )
       ),
-      section(null, card(row('Import Memory to oBot', pillBtn('Import', () => openImportMemory()), 'Transfer your preferences and context from another AI assistant', '', 'import-memory'))),
+      section(null, card(row('Bring memories into oBot', pillBtn('Import', () => openImportMemory()), 'Bring over what another AI assistant knows about you', '', 'import-memory'))),
       section(
         'Help',
         card(
@@ -5589,31 +5589,20 @@
     );
   }
   const IMPORT_PROMPT = [
-    "Export all of my stored memories and any context you've learned about me from past conversations. Preserve my words verbatim where possible, especially for instructions and preferences.",
+    'I am moving to a new assistant and want to bring along what you know about me.',
     '',
-    '## Categories (output in this order):',
+    'Please list everything you have saved or learned about me: facts, preferences and standing instructions. Keep my own wording for instructions.',
     '',
-    '1. **Instructions**: Rules I\'ve explicitly asked you to follow going forward — tone, format, style, "always do X", "never do Y", and corrections to your behavior. Only include rules from stored memories, not from conversations.',
+    'Group the list under these headings, in this order:',
+    '- Instructions: how I asked you to write or behave (tone, format, things to always or never do).',
+    '- About me: name, where I live, school or work, family, languages, interests.',
+    '- Work: jobs, roles and skills.',
+    '- Projects: one line per project, starting with its name, saying what it is and where it stands.',
+    '- Preferences: tastes and ways of working that apply in general.',
     '',
-    '2. **Identity**: Name, age, location, education, family, relationships, languages, and personal interests.',
+    'Write one item per line as: [YYYY-MM-DD] - the item. Use [unknown] when you don’t know the date. Oldest first within each heading.',
     '',
-    '3. **Career**: Current and past roles, companies, and general skill areas.',
-    '',
-    '4. **Projects**: Projects I meaningfully built or committed to. Ideally ONE entry per project. Include what it does, current status, and any key decisions. Use the project name or a short descriptor as the first words of the entry.',
-    '',
-    '5. **Preferences**: Opinions, tastes, and working-style preferences that apply broadly.',
-    '',
-    '## Format:',
-    '',
-    'Use section headers for each category. Within each category, list one entry per line, sorted by oldest date first. Format each line as:',
-    '',
-    '[YYYY-MM-DD] - Entry content here.',
-    '',
-    'If no date is known, use [unknown] instead.',
-    '',
-    '## Output:',
-    '- Wrap the entire export in a single code block for easy copying.',
-    '- After the code block, state whether this is the complete set or if more remain.',
+    'Put the whole list in one code block so I can copy it, then tell me if anything was left out.',
   ].join('\n');
   function openImportMemory() {
     const copyBtn = h('button', { class: 'btn small' }, icon('copy', 14), h('span', null, 'Copy'));
@@ -5622,7 +5611,7 @@
       copyBtn.lastChild.textContent = 'Copied';
       setTimeout(() => copyBtn.isConnected && (copyBtn.lastChild.textContent = 'Copy'), 2000);
     });
-    const ta = h('textarea', { class: 'field', rows: '6', placeholder: 'Paste your memory details here', 'aria-label': 'Paste your memory details here' });
+    const ta = h('textarea', { class: 'field', rows: '6', placeholder: 'Paste what your other assistant gave you', 'aria-label': 'Paste what your other assistant gave you' });
     const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
     const addBtn = h('button', { class: 'btn primary', disabled: true }, 'Add to Memory');
     ta.addEventListener('input', () => (addBtn.disabled = !ta.value.trim()));
@@ -5649,16 +5638,16 @@
       } catch (e) {
         addBtn.disabled = false;
         addBtn.textContent = 'Add to Memory';
-        err.textContent = e && e.network ? 'Couldn’t add to memory. Check your connection and try again.' : e.message;
+        err.textContent = e && e.network ? 'Couldn’t add to memory. Make sure you’re online, then retry.' : e.message;
         err.hidden = false;
       }
     });
     const box = h(
       'div',
-      { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Import Memory to oBot' },
+      { class: 'dialog wide', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Bring memories into oBot' },
       h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
-      h('h2', { class: 'dialog-title' }, 'Import Memory to oBot'),
-      h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '1'), h('span', null, 'Copy this prompt into a chat with your other AI assistant')),
+      h('h2', { class: 'dialog-title' }, 'Bring memories into oBot'),
+      h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '1'), h('span', null, 'Paste this prompt into your other AI assistant')),
       h('div', { class: 'im-prompt' }, h('pre', null, IMPORT_PROMPT), h('div', { class: 'im-copy' }, copyBtn)),
       h('div', { class: 'im-step' }, h('span', { class: 'im-num' }, '2'), h('span', null, 'Paste the results below to add them to oBot’s memory')),
       ta,
@@ -5668,7 +5657,7 @@
     const close = openModal(box);
   }
 
-  // ── Computer (1.7.2) ──
+  // ── Computer ──
   const EXEC_OPTS = [
     ['allow_all', 'Always allow'],
     ['ask', 'Ask every time'],
@@ -5690,9 +5679,9 @@
           'Your computer',
           card(
             row(
-              conn.mode === 'remote' && c && c.hostname ? `Execution on ${c.hostname}` : 'Execution on this computer',
+              conn.mode === 'remote' && c && c.hostname ? `Running actions on ${c.hostname}` : 'Running actions on this computer',
               selectEl(pm, EXEC_OPTS, (v) => putSettings({ permission_mode: v }, 'local-execution'), 'ghost'),
-              'Let oBot open files and run tasks on your computer. Auto-review still checks everything first.',
+              'Let oBot open files and run tasks on your computer. Auto-review screens each action before it runs.',
               '',
               'local-execution'
             ),
@@ -5718,11 +5707,11 @@
           )
         )
       );
-    } else out.append(section('Your computer', card(row('Execution on this computer', null, S.settingsLoadErr ? 'Couldn’t load this setting' : 'Loading…'))));
+    } else out.append(section('Your computer', card(row('Running actions on this computer', null, S.settingsLoadErr ? 'Couldn’t load this setting' : 'Loading…'))));
 
     // where bots run (a phone or other browser is paired with this computer and can't switch it)
     if (!TAURI && !onThisComputer()) {
-      out.append(section('Where Bots run', card(row(h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()), null, `Your Bots run on this computer. This ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} is paired with it.`))));
+      out.append(section('Where Bots run', card(row(h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()), null, `Your Bots work on this computer. This ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} is paired with it.`))));
     } else {
     const seg = h(
       'div',
@@ -5844,7 +5833,7 @@
         row(
           '',
           btn(`Use ${thisDevice()}`, () => useThisDevice(), 'primary'),
-          `Switch back so bots run on this computer instead of ${hostOf(conn.url)}.`
+          `Switch back so Bots work here instead of ${hostOf(conn.url)}.`
         )
       );
     }
@@ -6083,7 +6072,7 @@
     return u.replace(/\/+$/, '');
   }
 
-  // Custom MCP form (4.8)
+  // Custom MCP form
   const mcpSlug = (n) => n.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   function openMcpForm() {
     const st = { editor: 'form', type: 'http', name: '', url: '', headers: [['', '']], command: '', args: [''], env: [['', '']], json: '' };
@@ -6134,7 +6123,7 @@
       );
       bodyEl.append(h('div', { class: 'f-inline' }, h('label', { class: 'f-label inline' }, 'Editor'), editorSeg));
       if (st.editor === 'json') {
-        const ta = h('textarea', { class: 'field mono', rows: '10', placeholder: '{\n  "my-server": {\n    "type": "http",\n    "url": "https://example.com/mcp"\n  }\n}', 'aria-label': 'MCP server JSON', spellcheck: 'false' });
+        const ta = h('textarea', { class: 'field mono', rows: '10', placeholder: '{\n  "my-server": {\n    "type": "http",\n    "url": "https://tools.example.org/mcp"\n  }\n}', 'aria-label': 'MCP server JSON', spellcheck: 'false' });
         ta.value = st.json;
         ta.addEventListener('input', () => (st.json = ta.value));
         bodyEl.append(h('label', { class: 'f-label' }, 'MCP server JSON'), ta);
@@ -6152,7 +6141,7 @@
       );
       bodyEl.append(h('label', { class: 'f-label' }, 'Name'), nameIn, h('label', { class: 'f-label' }, 'Type'), typeSeg);
       if (st.type === 'http') {
-        const urlIn = h('input', { class: 'field mono', value: st.url, placeholder: 'https://example.com/mcp', 'aria-label': 'Server URL', spellcheck: 'false' });
+        const urlIn = h('input', { class: 'field mono', value: st.url, placeholder: 'https://tools.example.org/mcp', 'aria-label': 'Server URL', spellcheck: 'false' });
         urlIn.addEventListener('input', () => (st.url = urlIn.value));
         bodyEl.append(h('label', { class: 'f-label' }, 'Server URL'), urlIn, h('label', { class: 'f-label' }, 'HTTP headers'), kvRows(st.headers, 'Key', 'Value', 'Header'));
       } else {
@@ -6181,17 +6170,17 @@
         if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Enter valid JSON');
         const servers = v.mcpServers && typeof v.mcpServers === 'object' ? v.mcpServers : v;
         const names = Object.keys(servers);
-        if (names.length !== 1) throw new Error('Add one server at a time');
+        if (names.length !== 1) throw new Error('Add a single server per entry');
         const cfg = servers[names[0]] || {};
         if (cfg.url) return { displayName: names[0], body: { type: 'http', url: String(cfg.url), headers: cfg.headers || {} } };
         if (cfg.command) return { displayName: names[0], body: { type: 'stdio', command: String(cfg.command), args: Array.isArray(cfg.args) ? cfg.args.map(String) : [], env: cfg.env || {} } };
-        throw new Error('The server needs a URL or a command');
+        throw new Error('Give the server either a URL or a command');
       }
       if (st.type === 'http') {
-        if (!st.url.trim()) throw new Error('The server needs a URL or a command');
+        if (!st.url.trim()) throw new Error('Give the server either a URL or a command');
         return { displayName: st.name, body: { type: 'http', url: st.url.trim(), headers: fromPairs(st.headers) } };
       }
-      if (!st.command.trim()) throw new Error('The server needs a URL or a command');
+      if (!st.command.trim()) throw new Error('Give the server either a URL or a command');
       return { displayName: st.name, body: { type: 'stdio', command: st.command.trim(), args: st.args.filter((a) => a !== ''), env: fromPairs(st.env) } };
     };
     addBtn.addEventListener('click', async () => {
@@ -6200,7 +6189,7 @@
       try {
         out = build();
         const slug = mcpSlug(out.displayName || '');
-        if (!slug) throw new Error('Name must contain at least one letter or number');
+        if (!slug) throw new Error('Use at least one letter or digit in the name');
         if ((S.settings.mcp_servers || []).some((m) => mcpSlug(m.name) === slug) || slug === 'obot') throw new Error(`A server named "${out.displayName.trim()}" already exists`);
         out.body.name = slug;
       } catch (e) {
@@ -6233,10 +6222,10 @@
     const close = openModal(box);
   }
 
-  // ── Permissions (2.1) ──
+  // ── Permissions ──
   const RULE_LISTS = [
-    { key: 'review_ask', title: 'Always Ask', explain: 'Stop and ask when an action matches these rules', example: 'Purchases over $50' },
-    { key: 'review_allow', title: 'Allow without Asking', explain: 'Continue automatically when an action matches these rules', example: 'Emails to my team at acme.com' },
+    { key: 'review_ask', title: 'Ask first', explain: 'Check with me before any matching action', example: 'Spending more than $25' },
+    { key: 'review_allow', title: 'Auto-approve', explain: 'Run matching actions without asking', example: 'Messages to coworkers at example.org' },
   ];
   function tabPermissions() {
     const s = S.settings;
@@ -6260,7 +6249,7 @@
           'div',
           { class: 'set-alert warn' },
           icon('alert', 16),
-          h('div', { class: 'set-alert-text' }, h('div', { class: 'set-alert-title' }, 'Rules aren’t used while Auto-review is off'), h('div', null, 'oBot runs actions without checking them. Tools set to Needs approval still ask.')),
+          h('div', { class: 'set-alert-text' }, h('div', { class: 'set-alert-title' }, 'Rules are paused while Auto-review is turned off'), h('div', null, 'oBot runs actions without checking them. Tools set to Needs approval still ask.')),
           pillBtn('Turn on', () => putSettings({ auto_review: true }, 'auto-review'))
         )
       );
@@ -6276,7 +6265,7 @@
       }, { 'aria-label': `Add Rule to ${L.title}`, disabled: full || !!ui.ruleEdit || !!ui.ruleBusy });
       const head = h(
         'div',
-        { class: 'set-head', id: 'set-' + (L.key === 'review_ask' ? 'always-ask-rules' : 'allow-without-asking-rules') },
+        { class: 'set-head', id: 'set-' + (L.key === 'review_ask' ? 'ask-first-rules' : 'auto-approve-rules') },
         h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, L.title), h('div', { class: 'set-explain' }, L.explain)),
         full && h('span', { class: 'chip' }, 'max 20 rules'),
         addBtn
@@ -6330,7 +6319,7 @@
   async function saveRules(key, list) {
     const ui = S.settingsUI;
     ui.ruleBusy = true;
-    const ok = await putSettings({ [key]: list }, key === 'review_ask' ? 'always-ask-rules' : 'allow-without-asking-rules');
+    const ok = await putSettings({ [key]: list }, key === 'review_ask' ? 'ask-first-rules' : 'auto-approve-rules');
     ui.ruleBusy = false;
     if (ok) ui.ruleEdit = null;
     rerenderSettings(true);
@@ -6389,7 +6378,7 @@
       h('label', { class: 'f-label' }, 'Applies to'),
       ta,
       err,
-      h('div', { class: 'f-hint' }, 'Name the action and who or what it affects, like “Emails to dana@acme.com”'),
+      h('div', { class: 'f-hint' }, 'Say what the action is and who it involves, for example “Messages to sam@example.org”'),
       h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(ed.index === -1 ? 'Add rule' : 'Save rule', submit, 'primary'))
     );
   }
@@ -6636,7 +6625,7 @@
       rerenderSettings(true);
     } catch (e) {
       st.busy = false;
-      st.err = e.message || 'Couldn’t save. Try again.';
+      st.err = e.message || 'Didn’t save. Please retry.';
       st.redraw();
     }
   }
@@ -6658,7 +6647,7 @@
     const firstHost = () => siteHost(st.sites.find((x) => validHost(siteHost(x))) || '');
     let m;
     const remove = async () => {
-      const ok = await confirmDialog({ title: 'Remove this login?', body: `Bots can no longer sign in to ${loginTitle(login)} with it.`, confirmText: 'Remove', danger: true });
+      const ok = await confirmDialog({ title: 'Delete this saved login?', body: `Bots can no longer sign in to ${loginTitle(login)} with it.`, confirmText: 'Remove', danger: true });
       if (ok) vaultSave(st, '/api/vault/logins/' + encodeURIComponent(login.id), 'DELETE', undefined, () => m.close());
     };
     const view = () => {
@@ -6668,7 +6657,7 @@
         h('div', { class: 'vault-dlg-head' }, vaultTile('login', loginTitle(login)), h('h2', { class: 'dialog-title' }, loginTitle(login))),
         r('Website', ...login.sites.map((x) => h('div', { class: 'vault-site' }, h('span', null, x), h('a', { class: 'icon-btn', href: 'https://' + x, target: '_blank', rel: 'noopener noreferrer', 'aria-label': `Open ${x}` }, icon('external', 14))))),
         login.username ? r('Username', h('span', { class: 'mono' }, login.username)) : null,
-        r('Password', login.locked ? h('span', { class: 'secret-problem' }, 'Can’t be unlocked on this computer. Use Edit to enter it again.') : h('span', { class: 'vault-dots', 'aria-label': 'Saved password, hidden' }, '••••••••••')),
+        r('Password', login.locked ? h('span', { class: 'secret-problem' }, 'Can’t be unlocked on this computer. Use Edit to enter it again.') : h('span', { class: 'vault-dots', 'aria-label': 'Password (hidden)' }, '••••••••••')),
         login.hints ? r('Hints', login.hints) : null,
         r('Bots', scopeText(login.bots, 'Edit')),
         st.err ? h('div', { class: 'dialog-error', role: 'alert' }, st.err) : null,
@@ -6772,13 +6761,13 @@
     const phoneProblem = (v, i) => {
       if (!v) return '';
       const digits = v.replace(/\D/g, '').length;
-      if (digits < 7 || digits > 15 || !/^[0-9 +\-().]+$/.test(v)) return 'Enter a valid phone number';
-      return st.phones.slice(0, i).some((x) => x.trim() === v) ? 'Already listed above' : '';
+      if (digits < 7 || digits > 15 || !/^[0-9 +\-().]+$/.test(v)) return 'That doesn’t look like a phone number';
+      return st.phones.slice(0, i).some((x) => x.trim() === v) ? 'Duplicate of an earlier entry' : '';
     };
     const emailProblem = (v, i) => {
       if (!v) return '';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'Enter a valid email';
-      return st.emails.slice(0, i).some((x) => x.trim().toLowerCase() === v.toLowerCase()) ? 'Already listed above' : '';
+      return st.emails.slice(0, i).some((x) => x.trim().toLowerCase() === v.toLowerCase()) ? 'Duplicate of an earlier entry' : '';
     };
     const remove = async () => {
       const ok = await confirmDialog({ title: `Remove “${contactName(c)}”?`, body: 'Bots can no longer use this contact info.', confirmText: 'Remove', danger: true });
@@ -6803,7 +6792,7 @@
       text('address1', 'Address'),
       text('address2', 'Address line 2'),
       h('div', { class: 'vault-pair' }, text('city', 'City'), text('region', 'State or region')),
-      h('div', { class: 'vault-pair' }, text('postal_code', 'ZIP or postal code'), text('country', 'Country')),
+      h('div', { class: 'vault-pair' }, text('postal_code', 'Postal code'), text('country', 'Country')),
       ...list('phones', 'Phone', phoneProblem),
       ...list('emails', 'Email', emailProblem),
       text('label', 'Label', { placeholder: 'Home, Work…' }),
@@ -6908,7 +6897,7 @@
       st.busy = false;
       m.redraw();
     };
-    const LABEL = { ready: 'Ready', duplicate: 'Already in your vault', full: 'Vault full' };
+    const LABEL = { ready: 'Ready', duplicate: 'Saved already', full: 'Vault full' };
     const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
     m = vaultModal('wide', () => {
       const head = [dlgClose(() => m.close()), h('h2', { class: 'dialog-title' }, 'Import logins')];
@@ -6961,7 +6950,7 @@
   }
   function secretForm(form, existing) {
     const ui = S.settingsUI;
-    const nameIn = h('input', { class: 'field mono', value: existing ? existing.name : form.nameV || '', placeholder: 'GITHUB_TOKEN', maxlength: '128', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Environment variable name', disabled: !!existing });
+    const nameIn = h('input', { class: 'field mono', value: existing ? existing.name : form.nameV || '', placeholder: 'GITHUB_TOKEN', maxlength: '128', spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Variable name', disabled: !!existing });
     const descIn = h('input', { class: 'field', value: existing ? existing.description || '' : form.descV || '', placeholder: 'GitHub access for opening pull requests', maxlength: '300', 'aria-label': 'What it is for (shown to the Bot)' });
     const keepOk = existing && !existing.locked; // an empty value keeps the saved one
     const valIn = h('input', { class: 'field mono', type: 'password', placeholder: keepOk ? 'Leave empty to keep the current value' : '', autocomplete: 'new-password', 'aria-label': 'Value' });
@@ -7021,7 +7010,7 @@
     return h(
       'div',
       { class: 'set-row stack secret-form' },
-      h('label', { class: 'f-label' }, 'Environment variable name'),
+      h('label', { class: 'f-label' }, 'Variable name'),
       nameIn,
       nameErr,
       h('label', { class: 'f-label' }, 'What it is for (shown to the Bot)'),
@@ -7375,7 +7364,7 @@
     rerenderSettings(true);
   }
 
-  // ── Usage & Billing (1.4 / 6) ──
+  // ── Usage and plan ──
   function usageInfo() {
     const rl = S.usage && S.usage.rate_limit;
     if (!rl || rl.utilization == null) return null;
@@ -7403,19 +7392,19 @@
         h(
           'div',
           { class: 'set-card usage-card' },
-          h('div', { class: 'usage-title' }, info && !info.weekly ? '5-hour usage limit' : 'Weekly usage limit'),
+          h('div', { class: 'usage-title' }, info && !info.weekly ? 'Usage this 5-hour window' : 'Usage this week'),
           info ? h('div', { class: 'usage-big' }, h('span', { class: 'num' }, `${info.pct}%`), h('span', { class: 'unit' }, 'used')) : h('div', { class: 'usage-big' }, h('span', { class: 'num dim' }, '—')),
           h('div', { class: 'meter big' }, h('div', { class: 'meter-fill', style: { width: clamp(info ? info.pct : 0, 0, 100) + '%' } })),
           h('div', { class: 'usage-sub' }, info ? resetsText(info.resetsAt) : 'Shows up after your Bots’ next reply.')
         ),
-        note(info && !info.weekly ? 'Included usage with your subscription. Resets every 5 hours.' : 'Included usage with your subscription. Resets weekly.')
+        note(info && !info.weekly ? 'Part of your subscription. Renews every 5 hours.' : 'Part of your subscription. Renews every week.')
       )
     );
     const plan = claude.subscription ? claude.subscription[0].toUpperCase() + claude.subscription.slice(1) : '';
     out.append(
       section(
-        'Manage Plan',
-        card(row(plan ? `Current plan: ${plan}` : 'Current plan', pillBtn(h('span', { class: 'btn-ext' }, 'Manage Plan', icon('external', 13)), () => openExternal(USAGE_URL)), 'View, change, or upgrade your plan on claude.ai'))
+        'Your plan',
+        card(row(plan ? `Current plan: ${plan}` : 'Current plan', pillBtn(h('span', { class: 'btn-ext' }, 'Open claude.ai', icon('external', 13)), () => openExternal(USAGE_URL)), 'View, change, or upgrade your plan on claude.ai'))
       )
     );
     if (s) {
@@ -7474,7 +7463,7 @@
     }
     return out;
   }
-  // chat banner at 75 / 90 / 100 % of the weekly limit (1.4)
+  // chat banner at 75 / 90 / 100 % of the weekly limit
   function renderUsageBanner() {
     const el = $('#usageBanner');
     if (!el) return;
@@ -7493,13 +7482,13 @@
       el.textContent = '';
       el.append(
         icon('alert', 15),
-        h('span', { class: 'ub-text' }, th === 100 ? 'Weekly usage limit reached.' : `You’re at ${info.pct}% of your weekly usage limit.`),
-        h('button', { class: 'btn small primary', onclick: () => openExternal(USAGE_URL) }, th === 100 ? 'Upgrade' : 'Get More Usage'),
+        h('span', { class: 'ub-text' }, th === 100 ? 'You’ve used all of this week’s usage.' : `You’ve used ${info.pct}% of this week’s usage.`),
+        h('button', { class: 'btn small primary', onclick: () => openExternal(USAGE_URL) }, th === 100 ? 'Upgrade' : 'See plans'),
         h(
           'button',
           {
             class: 'ghost-btn sm',
-            'aria-label': 'Dismiss usage warning',
+            'aria-label': 'Close usage notice',
             onclick: () => {
               try {
                 localStorage.setItem('obot.usageWarning', key);
@@ -7641,7 +7630,7 @@
     return rows;
   }
 
-  // ── Updates (1.5) ──
+  // ── Updates ──
   function tabUpdates() {
     const claude = (S.computer && S.computer.claude) || {};
     const ui = S.settingsUI;
@@ -7649,20 +7638,20 @@
     const cv = (claude.version || '').replace(/^v/, '').split(' ')[0];
     const check = async () => {
       up.busy = true;
-      up.status = 'Checking for updates…';
+      up.status = 'Looking for updates…';
       rerenderSettings(true);
       try {
         const r = await api('/api/claude/update', { method: 'POST' });
         const text = (r && r.output) || '';
         const last = text.split('\n').map((l) => l.trim()).filter(Boolean).pop() || '';
-        up.status = r && r.ok ? (/up to date|latest/i.test(text) ? 'You’re up to date' : last || 'Claude Code was updated') : last || 'Couldn’t check for updates. Check your connection and try again.';
+        up.status = r && r.ok ? (/up to date|latest/i.test(text) ? 'You’re up to date' : last || 'Claude Code was updated') : last || 'Couldn’t check for updates. Make sure you’re online, then retry.';
         up.bad = !(r && r.ok);
         api('/api/computer').then((c) => {
           S.computer = c;
           rerenderSettings();
         });
       } catch (e) {
-        up.status = e && e.network ? 'Couldn’t check for updates. Check your connection and try again.' : e.message;
+        up.status = e && e.network ? 'Couldn’t check for updates. Make sure you’re online, then retry.' : e.message;
         up.bad = true;
       }
       up.busy = false;
@@ -8043,7 +8032,7 @@
     return close;
   }
 
-  // ── first-run onboarding (settings-and-bots.md 4.4; avatar moods per avatars.md "Onboarding steps") ──
+  // ── first-run onboarding (the avatar's mood changes with each step) ──
   const SUGGESTIONS = ['What can you do for me?', 'Every weekday at 8am, send me a short news summary', 'Help me plan my week'];
   function maybeOnboard() {
     if (S.prefs.onboarded || S.onboardingOpen) return;
@@ -8215,7 +8204,7 @@
     paint();
   }
 
-  // ── connection + Claude status around the app (settings-and-bots.md 1.7.5 sidebar banners) ──
+  // ── connection + Claude status around the app (sidebar banners) ──
   async function useThisDevice(quiet) {
     try {
       S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'local', url: '', token: '' } });
@@ -8302,7 +8291,7 @@
           remote && ['Help', () => openSetupWizard({ step: 1 })],
         ],
       };
-    if (S.link === 'connecting') return { kind: 'wait', title: 'Connecting to your computer…' };
+    if (S.link === 'connecting') return { kind: 'wait', title: 'Reaching your computer…' };
     const c = S.computer && S.computer.claude;
     if (c && !c.installed)
       return { kind: 'warn', title: `Claude Code isn’t installed on ${name}`, body: 'Your Bots need it to work.', actions: [['How to fix', openClaudeHelp, 'primary'], ['Check again', recheckClaude]] };

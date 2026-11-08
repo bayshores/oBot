@@ -1607,7 +1607,7 @@ struct ImportBody {
     text: String,
 }
 
-/// "Import memory": paste what another assistant knows about you; one fact per line.
+/// "Bring memories into oBot": paste what another assistant knows about you; one fact per line.
 async fn import_memories(State(st): State<Shared>, Json(b): Json<ImportBody>) -> ApiResult<Json<Value>> {
     let mut n = 0;
     for line in b.text.lines() {

@@ -71,9 +71,9 @@ pub struct Config {
     pub claude_path: String,
     /// Auto-review: a fast Claude model checks each action that needs approval against the rules below.
     pub auto_review: bool,
-    /// "Allow without Asking" rules (plain language).
+    /// "Auto-approve" rules (plain language).
     pub review_allow: Vec<String>,
-    /// "Always Ask" rules (plain language). These win over allow rules.
+    /// "Ask first" rules (plain language). These win over allow rules.
     pub review_ask: Vec<String>,
     /// Extra MCP servers for every bot: {name, type:"http"|"stdio", url, headers, command, args, env}.
     pub mcp_servers: Vec<Value>,

@@ -18,7 +18,7 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
 * **Chat and remember.** Each Bot is one long Claude Code conversation with its own folder. It keeps a
   small always-loaded **profile** of facts about you and a searchable **log**, and tidies both weekly.
 * **Use their own screen.** Each Bot gets a Linux desktop with Chrome. You can watch it live or choose
-  **Take control**.
+  **Use screen**.
 * **Sign in for you.** Saved **Vault** logins are typed into the login page without the Bot seeing the
   password. If nothing is saved, the Bot shows a **secure form** in the chat.
 * **Work in the background.** Routines, check-ins and long commands wake the Bot up when it's time.
@@ -40,7 +40,7 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   and show **oBot X is available · Update**; one click installs it (Settings › Updates). Updates are
   signed, and anything that doesn't match oBot's key is refused. See [docs/releasing.md](docs/releasing.md).
 * **Recover from errors.** Temporary errors are retried by themselves. Otherwise you get **Try again**,
-  **Edit and resend** or **Start a new conversation**. Messages sent while a Bot is busy wait as
+  **Edit and resend** or **Start a fresh chat**. Messages sent while a Bot is busy wait as
   **Queued** (tap **Send now** to interrupt it).
 
 Bots use **Sonnet 5.5 at extra-high effort** unless you change it in Settings › General (or per Bot).
@@ -108,7 +108,7 @@ Data lives in `%APPDATA%\oBot` (settings, chats), and Bot folders in `%USERPROFI
   tries (20 in a minute) lock that address out for 5 minutes.
 * GitHub access is saved encrypted on the PC like the other connections, and only the Bots you pick can
   use it. Bots run `git` with the key passed in memory, so it's never written into a repository's settings.
-* **Permissions:** Settings › Computer › **Execution on this computer** is *Ask every time* (default), *Always allow* or
+* **Permissions:** Settings › Computer › **Running actions on this computer** is *Ask every time* (default), *Always allow* or
   *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions
   using your rules and asks you about the rest with an **Allow / Always allow / Deny** card. Sending
   email, inviting people, sharing Drive files and deleting always ask.
