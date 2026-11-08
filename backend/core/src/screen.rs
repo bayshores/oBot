@@ -607,7 +607,8 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
             format!("Typed {} characters.", text.chars().count())
         }
         "computer_key" => {
-            let keys = args.get("keys").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            // "key" too: a Bot that hasn't loaded this tool's details yet often guesses that name.
+            let keys = args.get("keys").or_else(|| args.get("key")).and_then(Value::as_str).unwrap_or("").trim().to_string();
             if !valid_keys(&keys) {
                 return Err("keys must be xdotool key names like Return, ctrl+l, ctrl+shift+t, Page_Down (several separated by spaces)".into());
             }
