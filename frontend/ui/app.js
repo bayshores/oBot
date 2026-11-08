@@ -4501,39 +4501,122 @@
     setTimeout(() => (sk ? bodyIn : nameIn).focus(), 40);
   }
 
+  // The panel shows one summary row; the list itself opens in a window (openMemories), so a Bot
+  // with dozens of memories doesn't turn the panel into a wall of cards, and facts shared by all
+  // Bots aren't repeated in every Bot's panel.
   function paintMemories(list) {
     const box = P.memories;
     box.textContent = '';
     if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load memories.'));
     if (!list.length) return box.append(h('div', { class: 'p-empty' }, 'Nothing remembered yet. Say “remember that…” and it shows up here.'));
-    // Profile facts (always in the Bot's mind) first, then the searchable log, newest first.
-    const profile = list.filter((mm) => mm.tier !== 'log');
-    const log = list.filter((mm) => mm.tier === 'log').reverse();
-    const groups = [
-      ['Always remembered', profile],
-      ['Notes (the Bot searches these when needed)', log],
-    ].filter(([, l]) => l.length);
-    for (const [label, items] of groups) {
-      if (groups.length > 1 || label !== 'Always remembered') box.append(h('div', { class: 'p-group' }, label));
-      for (const mm of items) box.append(memoryRow(mm));
-    }
+    const shared = list.filter((mm) => !mm.bot_id).length;
+    const own = list.length - shared;
+    const sub = [own && `${own} for this Bot`, shared && `${shared} about you`].filter(Boolean).join(' · ');
+    const id = P.botId;
+    const open = () => openMemories(S.bots.get(id));
+    box.append(
+      h(
+        'div',
+        {
+          class: 'p-row clickable',
+          role: 'button',
+          tabindex: '0',
+          'aria-label': 'See memories',
+          onclick: open,
+          onkeydown: (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              open();
+            }
+          },
+        },
+        h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, list.length === 1 ? '1 memory' : `${list.length} memories`), h('div', { class: 'p-row-sub' }, sub)),
+        icon('chevronRight', 14)
+      )
+    );
   }
-  function memoryRow(mm) {
-    const forget = async () => {
-      try {
-        await api(`/api/memories/${encodeURIComponent(mm.id)}`, { method: 'DELETE' });
-        loadPanelLists('memories');
-      } catch (e) {
-        fail(e);
+  // "[2026-11-02] - text" → { date: "Nov 2", text }
+  function memoryParts(t) {
+    const m = /^\s*\[(\d{4})-(\d{2})-(\d{2})\]\s*(?:-\s*)?/.exec(t || '');
+    if (!m) return { date: '', text: t || '' };
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    const date = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+    return { date, text: t.slice(m[0].length) };
+  }
+  function openMemories(b) {
+    if (!b) return;
+    const q = h('input', { class: 'search-input', type: 'search', placeholder: 'Search memories', 'aria-label': 'Search memories' });
+    const list = h('div', { class: 'mem-list' }, h('div', { class: 'p-empty' }, spinner('xs')));
+    let all = [];
+    const paint = () => {
+      list.textContent = '';
+      const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const hit = (mm) => words.every((w) => (mm.text || '').toLowerCase().includes(w));
+      const shown = all.filter(hit);
+      const groups = [
+        ['About you · shared with all Bots', shown.filter((mm) => !mm.bot_id && mm.tier !== 'log')],
+        [`${b.name} · always remembered`, shown.filter((mm) => mm.bot_id && mm.tier !== 'log')],
+        ['Notes · looked up when needed', shown.filter((mm) => mm.tier === 'log').reverse()],
+      ].filter(([, l]) => l.length);
+      if (!groups.length) return list.append(h('div', { class: 'p-empty center' }, all.length ? 'No memories match.' : 'Nothing remembered yet.'));
+      for (const [label, items] of groups) {
+        list.append(h('div', { class: 'p-group' }, `${label} (${items.length})`));
+        const card = h('div', { class: 'panel-card' });
+        for (const mm of items) card.append(memRow(mm));
+        list.append(card);
       }
     };
-    const sub = mm.bot_id ? `Saved ${timeLabel(mm.created_at || Date.now())}` : 'About you · shared with all Bots';
-    return h(
+    const memRow = (mm) => {
+      const { date, text } = memoryParts(mm.text);
+      const body = h('div', { class: 'mem-text', title: 'Show all' }, text);
+      body.addEventListener('click', () => body.classList.toggle('open'));
+      const row = h(
+        'div',
+        { class: 'p-row mem-row' },
+        h('div', { class: 'p-row-text' }, body, date && h('div', { class: 'p-row-sub' }, date)),
+        h(
+          'button',
+          {
+            class: 'ghost-btn sm danger mem-del',
+            'aria-label': 'Forget this',
+            'data-tip': mm.bot_id ? 'Forget' : 'Forget (for all Bots)',
+            onclick: async () => {
+              try {
+                await api(`/api/memories/${encodeURIComponent(mm.id)}`, { method: 'DELETE' });
+                all = all.filter((x) => x.id !== mm.id);
+                paint();
+                loadPanelLists('memories');
+              } catch (e) {
+                fail(e);
+              }
+            },
+          },
+          icon('trash', 14)
+        )
+      );
+      return row;
+    };
+    q.addEventListener('input', paint);
+    const box = h(
       'div',
-      { class: 'p-row' },
-      h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, mm.text), h('div', { class: 'p-row-sub' }, sub)),
-      h('button', { class: 'ghost-btn danger', 'aria-label': 'Forget this', 'data-tip': 'Forget', onclick: forget }, icon('trash', 15))
+      { class: 'dialog wide mem-dlg', role: 'dialog', 'aria-modal': 'true', 'aria-label': `${b.name}’s memories` },
+      h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
+      h('h2', { class: 'dialog-title' }, 'Memories'),
+      h('p', { class: 'dialog-body' }, `What ${b.name} remembers. Facts about you are shared with all your Bots.`),
+      h('div', { class: 'mem-search' }, icon('search', 15), q),
+      list
     );
+    const close = openModal(box);
+    api(`/api/bots/${b.id}/memories`)
+      .then((r) => {
+        all = Array.isArray(r) ? r : [];
+        paint();
+      })
+      .catch(() => {
+        list.textContent = '';
+        list.append(h('div', { class: 'p-empty' }, 'Couldn’t load memories.'));
+      });
+    setTimeout(() => q.focus(), 40);
   }
 
   // ───────────────────────────── avatar picker (skin grids) ─────────────────────────────
