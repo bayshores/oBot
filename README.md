@@ -67,8 +67,9 @@ account. This is how the app reaches the PC privately, from anywhere.
 
 1. Install [Claude Code](https://claude.com/claude-code) (`irm https://claude.ai/install.ps1 | iex`) and
    [Git for Windows](https://git-scm.com/download/win). Run `claude` once and log in.
-2. Get `obot-server.exe`: download it from this repository's **Actions** tab (artifact
-   `obot-windows-latest`), or build it with [Rust](https://rustup.rs): `cargo build --release -p obot-server`.
+2. Get `obot-server.exe`: download it from the [latest release](https://github.com/bayshores/oBot/releases/latest)
+   (or the newest build in the **Actions** tab, artifact `obot-windows-latest`), or build it with
+   [Rust](https://rustup.rs): `cargo build --release -p obot-server`.
 3. In **PowerShell as Administrator**, in this folder:
    ```powershell
    Set-ExecutionPolicy -Scope Process Bypass
@@ -79,8 +80,9 @@ account. This is how the app reaches the PC privately, from anywhere.
 4. For Bot screens, install WSL with Ubuntu (`wsl --install -d Ubuntu`), then in the app choose
    Settings › Computer › Bot screens › **Set up**.
 
-**3. On the Mac**, install the app (the `.dmg` from **Actions**, or build it: `cargo install tauri-cli
---version "^2" --locked`, then `cargo tauri build` in `frontend/desktop`). Open Settings › Computer ›
+**3. On the Mac** (Apple silicon), install the app: `oBot-mac-apple-silicon.dmg` from the
+[latest release](https://github.com/bayshores/oBot/releases/latest) is signed and notarized by Apple. (Or
+build it: `cargo install tauri-cli --version "^2" --locked`, then `cargo tauri build` in `frontend/desktop`.) Open Settings › Computer ›
 **Remote computer** and enter the address and pairing code.
 
 **4. On your iPhone (or any phone)**, install Tailscale and sign in with the same account. In the Mac
