@@ -106,6 +106,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
     crate::accounts::spawn_keep_alive(state.clone());
     crate::routines::spawn_scheduler(state.clone());
     crate::memory_tidy::spawn(state.clone());
+    spawn_auto_update(state.clone());
     runner::start_workers();
     runner::recover_queued(&state);
     {
@@ -1814,20 +1815,50 @@ async fn update_status() -> ApiResult<Json<Value>> {
 /// Install the newer oBot on this computer and start again (Windows, see update.rs). Working Bots
 /// are stopped first; the app reconnects by itself once the new version is running.
 async fn install_update(State(st): State<Shared>) -> ApiResult<Json<Value>> {
-    let version = tokio::task::spawn_blocking(|| crate::update::install(crate::VERSION))
-        .await
-        .map_err(|e| bad(&e.to_string()))?
-        .map_err(|e| bad(&e))?;
+    let version = apply_update(&st).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "ok": true, "version": version })))
+}
+
+/// Download and put in place the newest version, stop working Bots and restart under the supervisor.
+async fn apply_update(st: &Shared) -> Result<String, String> {
+    let version = tokio::task::spawn_blocking(|| crate::update::install(crate::VERSION)).await.map_err(|e| e.to_string())??;
     let running: Vec<String> = st.runs.lock().await.keys().cloned().collect();
     for id in &running {
-        crate::runner::stop(&st, id).await;
+        crate::runner::stop(st, id).await;
     }
     tracing::info!("updated to oBot {version}; starting again");
     tokio::spawn(async {
         tokio::time::sleep(Duration::from_millis(1500)).await;
         std::process::exit(crate::update::RESTART_CODE);
     });
-    Ok(Json(json!({ "ok": true, "version": version })))
+    Ok(version)
+}
+
+/// Installs new versions by itself (Settings › Updates › Update automatically): checks a few
+/// minutes after start and every few hours, and installs only while no Bot is working.
+fn spawn_auto_update(st: Shared) {
+    tokio::spawn(async move {
+        let mut wait = Duration::from_secs(300);
+        loop {
+            tokio::time::sleep(wait).await;
+            wait = Duration::from_secs(3 * 3600);
+            if !st.config.read().await.auto_update {
+                continue;
+            }
+            let found = tokio::task::spawn_blocking(|| crate::update::status(crate::VERSION)).await.unwrap_or_default();
+            if found["can_install"] != true {
+                continue;
+            }
+            if !st.runs.lock().await.is_empty() {
+                wait = Duration::from_secs(600); // a Bot is working: try again soon
+                continue;
+            }
+            match apply_update(&st).await {
+                Ok(v) => tracing::info!("automatic update to oBot {v}"),
+                Err(e) => tracing::warn!("automatic update failed: {e}"),
+            }
+        }
+    });
 }
 
 /// Settings › General › Sign Out: signs Claude Code out on this computer.
@@ -1868,6 +1899,7 @@ struct SettingsBody {
     runner: Option<String>,
     wsl_distro: Option<String>,
     auto_review: Option<bool>,
+    auto_update: Option<bool>,
     review_allow: Option<Vec<String>>,
     review_ask: Option<Vec<String>>,
     timezone: Option<String>,
@@ -1965,6 +1997,9 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
         }
         if let Some(v) = b.auto_review {
             cfg.auto_review = v;
+        }
+        if let Some(v) = b.auto_update {
+            cfg.auto_update = v;
         }
         if let Some(v) = b.review_allow {
             cfg.review_allow = clean_rules(v)?;

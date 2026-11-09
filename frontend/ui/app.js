@@ -7628,6 +7628,7 @@
     const rows = [];
     if (window.__TAURI_INTERNALS__) rows.push(one('This app', U.app, (U.app && U.app.current) || '', 'app'));
     if (serverUpdates()) rows.push(one(window.__TAURI_INTERNALS__ ? `oBot on ${computerName()}` : 'oBot', U.server, S.version, 'server'));
+    if (serverUpdates()) rows.push(row('Update automatically', toggleEl(S.settings.auto_update !== false, (v) => putSettings({ auto_update: v }, 'auto-update')), `Installs new versions of oBot on ${window.__TAURI_INTERNALS__ ? computerName() : 'this computer'} by itself when no Bot is working.`, '', 'auto-update'));
     return rows;
   }
 

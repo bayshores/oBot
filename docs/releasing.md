@@ -2,7 +2,8 @@
 
 A release puts a new version on [github.com/bayshores/oBot/releases](https://github.com/bayshores/oBot/releases).
 The apps find it by themselves: the Mac app and the always-on computer check every few hours, show
-**oBot X is available · Update** above the message box, and update from Settings › Updates.
+**oBot X is available · Update** above the message box, and update from Settings › Updates. The always-on computer also installs it by itself,
+when no Bot is working (Settings › Updates › Update automatically, on by default).
 
 ## Make a release
 

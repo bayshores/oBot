@@ -37,7 +37,8 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   your repos, files, issues and pull requests, including private ones, and can work on a copy of the code.
   Comments, new issues and pushes always ask you first.
 * **Updates itself.** The Mac app and the always-on PC check GitHub for a new version every few hours
-  and show **oBot X is available · Update**; one click installs it (Settings › Updates). Updates are
+  and show **oBot X is available · Update**; one click installs it (Settings › Updates). The always-on PC also installs
+  new versions by itself when no Bot is working (turn off with Settings › Updates › Update automatically). Updates are
   signed, and anything that doesn't match oBot's key is refused. See [docs/releasing.md](docs/releasing.md).
 * **Recover from errors.** Temporary errors are retried by themselves. Otherwise you get **Try again**,
   **Edit and resend** or **Start a fresh chat**. Messages sent while a Bot is busy wait as

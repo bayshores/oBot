@@ -172,6 +172,7 @@ Settings = {
                                                      // (Settings › Connections; tokens are never sent)
   accounts_ready: { google: boolean, microsoft: boolean }  // can this build connect accounts?
   auto_review: boolean,                              // Settings › Permissions › Auto-Review (default true)
+  auto_update: boolean,                              // Settings › Updates › Update automatically (default true)
   review_ask: string[],   // "Ask first" plain-language rules (max 20, 1000 chars each; wins over allow)
   review_allow: string[], // "Auto-approve" rules
   mcp_servers: [{ name, type: "http"|"stdio", url?, headers?, command?, args?, env? }]  // header/env values masked
@@ -272,7 +273,7 @@ Usage = {
 | GET | /api/bots/:id/memories | – | `[{id, bot_id (null = about the user), text, created_at}]` |
 | DELETE | /api/memories/:id | – | `{ok}` |
 | GET | /pages/:id | – | HTML made by a bot (sandboxed by CSP). The server appends a script that posts `{type:'obot:height', height}` to the parent. |
-| PUT | /api/settings | also `{auto_review, review_ask, review_allow}` | `Settings` |
+| PUT | /api/settings | also `{auto_review, auto_update, review_ask, review_allow}` | `Settings` |
 | POST | /api/vault | `{name, value, description, bots}`: adds or edits a secret. Empty `value` = keep the saved one. `bots`: null = every Bot, else a non-empty list of Bot ids. 400 for reserved names (see `vault_reserved`), values over 4 KiB, or an empty `bots` list. Saved values are replaced with `••••` in chats and memories from then on, including older ones. | `Settings` |
 | POST | /api/bots/:id/make-main | – | `{ok}` ("Replace with different Bot") |
 | DELETE | /api/bots/:id | – | 400 for the Main Bot |

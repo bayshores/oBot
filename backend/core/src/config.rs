@@ -71,6 +71,8 @@ pub struct Config {
     pub claude_path: String,
     /// Auto-review: a fast Claude model checks each action that needs approval against the rules below.
     pub auto_review: bool,
+    /// Install new oBot versions by itself when no Bot is working (Settings › Updates).
+    pub auto_update: bool,
     /// "Auto-approve" rules (plain language).
     pub review_allow: Vec<String>,
     /// "Ask first" rules (plain language). These win over allow rules.
@@ -120,6 +122,7 @@ impl Default for Config {
             prefs: json!({}),
             claude_path: String::new(),
             auto_review: true,
+            auto_update: true,
             review_allow: vec![],
             review_ask: vec![],
             mcp_servers: vec![],
@@ -210,6 +213,7 @@ impl Config {
             "vault_protection": crate::vault::protection(),
             "vault_reserved": {"names": &crate::vault::RESERVED_NAMES[..], "prefixes": &crate::vault::RESERVED_PREFIXES[..]},
             "auto_review": self.auto_review,
+            "auto_update": self.auto_update,
             "review_allow": self.review_allow,
             "review_ask": self.review_ask,
             "mcp_servers": self.mcp_servers.iter().map(mask_mcp).collect::<Vec<_>>(),
