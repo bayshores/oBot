@@ -81,12 +81,15 @@ Bot = {
   members: string[]       // group chats: the member Bot ids, in order (1–6)
 }
 // A group chat uses the Bot routes for its chat (messages, read, stop, retry, reset, PATCH name/members/pinned/
-// notifications, DELETE). When the user writes, each member Bot (or only the ones named with @Name) takes a turn: it
-// reads what was said since its last turn there and answers, or replies PASS to stay quiet. A Bot can name another
+// notifications, DELETE). When the user writes, the Bots named with @Name take a turn; otherwise a fast model picks
+// who does from the Bots' jobs and the recent chat (usually one; several when the user asks for everyone or for
+// separate things), and "retry" reruns those. A Bot taking a turn reads what was said since its last turn there
+// and answers, or replies PASS to stay quiet. A Bot can name another
 // member with @Name to give it a turn (at most 6 such turns per user message). Each Bot keeps a separate Claude Code
 // conversation per group and works in its own folder; what it posts (replies, tool rows, cards) goes to the group
 // with meta.speaker = its id. While it runs: running = true, activity = {kind, label: "Food Bot and School Bot are
-// working" (or "<Bot>: <what it's doing>"), members: [ids working]}.
+// working" (or "<Bot>: <what it's doing>"), members: [ids working]}; for the first seconds, while picking:
+// {kind: "working", label: "Picking who answers", members: [all member ids]}.
 
 Message = {
   id: string, bot_id: string,

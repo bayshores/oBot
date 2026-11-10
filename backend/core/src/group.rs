@@ -1,9 +1,10 @@
 //! Group chats: the user and up to 6 of their Bots in one chat.
 //!
 //! A group is stored like a Bot (`kind = "group"`, with `members`), so it has its own chat, preview
-//! and unread count. When the user writes, each member Bot gets a turn: it reads what was said since
-//! its last turn there and answers, or replies PASS to stay quiet. A Bot can bring in another member
-//! with @Name; those follow-up turns are capped so Bots can't keep talking to each other.
+//! and unread count. When the user writes, a fast model picks who answers (usually one Bot, see
+//! [`pick`]); the Bots they @name answer instead when they name some. A Bot reads what was said
+//! since its last turn there and answers, or replies PASS to stay quiet. A Bot can bring in another
+//! member with @Name; those follow-up turns are capped so Bots can't keep talking to each other.
 //!
 //! Each Bot keeps a separate Claude Code conversation for each group, and works in its own folder
 //! with its own tools. While it takes a group turn, everything it posts goes to the group
@@ -28,6 +29,10 @@ fn seen_key(group: &str, bot: &str) -> String {
 }
 fn bot_turns_key(group: &str) -> String {
     format!("group_bot_turns:{group}")
+}
+/// The Bots picked to answer the user's latest message (a JSON list of ids).
+fn picked_key(group: &str) -> String {
+    format!("group_picked:{group}")
 }
 
 /// The Bot chose to stay quiet.
@@ -200,16 +205,13 @@ fn mentioned(st: &Shared, members: &[String], text: &str) -> Vec<String> {
     members.iter().filter(|m| lower.contains(&format!("@{}", name_of(st, m).to_lowercase()))).cloned().collect()
 }
 
-/// The user wrote in the group. Everyone gets a turn, or only the Bots they @mentioned, or only
-/// `only` (the Bot whose question they answered).
+/// The user wrote in the group. The Bots they @mentioned answer, or only `only` (the Bot whose
+/// question they answered), or otherwise the Bots [`pick`] chooses (usually one).
 pub async fn user_posted(st: &Shared, group: &Bot, text: &str, only: Option<&str>) {
     st.db.kv_set(&bot_turns_key(&group.id), "0");
-    let picked = match only.filter(|o| group.members.iter().any(|m| m == o)) {
+    let chosen = match only.filter(|o| group.members.iter().any(|m| m == o)) {
         Some(o) => vec![o.to_string()],
-        None => {
-            let named = mentioned(st, &group.members, text);
-            if named.is_empty() { group.members.clone() } else { named }
-        }
+        None => mentioned(st, &group.members, text),
     };
     // A Bot here waiting on a card: the user moved on, so the card is skipped and the Bot reads
     // the new message right after.
@@ -223,9 +225,83 @@ pub async fn user_posted(st: &Shared, group: &Bot, text: &str, only: Option<&str
     if cut {
         crate::runner::add_event(st, &group.id, "Stopped to read your new message", json!({"kind": "steered"}));
     }
-    for m in picked {
-        crate::runner::enqueue_group(st, &m, &group.id, false).await;
+    let (st, group, text) = (st.clone(), group.clone(), text.to_string());
+    // Picking takes a few seconds, so the message is saved and shown first.
+    tokio::spawn(async move {
+        let answer = if !chosen.is_empty() {
+            chosen
+        } else if group.members.len() == 1 {
+            group.members.clone()
+        } else {
+            crate::runner::set_activity(&st, &group.id, Some(("thinking", "Picking who answers"))).await;
+            let p = pick(&st, &group, &text).await;
+            crate::runner::set_activity(&st, &group.id, None).await;
+            p
+        };
+        st.db.kv_set(&picked_key(&group.id), &json!(answer).to_string());
+        for m in answer {
+            crate::runner::enqueue_group(&st, &m, &group.id, false).await;
+        }
+    });
+}
+
+/// Which Bots should answer the user's message: a fast model reads the Bots' jobs and the recent
+/// chat and picks the one that fits (more only when the user asks for several, or for separate
+/// things that are different Bots' jobs). If that fails, the Bot that spoke last answers.
+async fn pick(st: &Shared, group: &Bot, text: &str) -> Vec<String> {
+    let bots: Vec<Bot> = group.members.iter().filter_map(|m| st.db.get_bot(m).ok().flatten()).collect();
+    let recent = st.db.list_messages(&group.id, None, 12).unwrap_or_default();
+    let last_speaker = recent.iter().rev().find_map(|m| m.meta.get("speaker").and_then(Value::as_str).map(str::to_string));
+    let fallback = || vec![last_speaker.clone().filter(|s| group.members.contains(s)).unwrap_or_else(|| group.members[0].clone())];
+    let about = |b: &Bot| {
+        let job = [b.label.trim(), b.instructions.trim()].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(". ");
+        format!("- {}: {}", b.name, truncate_chars(&job, 400))
+    };
+    let chat: Vec<String> = recent
+        .iter()
+        .filter_map(|m| match m.role.as_str() {
+            "user" => Some(format!("The user: {}", truncate_chars(m.text.trim(), 300))),
+            "bot" => m.meta.get("speaker").and_then(Value::as_str).map(|s| format!("{}: {}", name_of(st, s), truncate_chars(m.text.trim(), 300))),
+            _ => None,
+        })
+        .collect();
+    let prompt = format!(
+        "You decide which assistants (\"Bots\") answer the user's newest message in a group chat. Each Bot has its own job.\n\n\
+         Bots:\n{}\n\nRecent messages, oldest first:\n{}\n\n\
+         Rules:\n\
+         - Pick ONE Bot: the one whose job fits the newest message best. If the message continues a conversation with \
+         a Bot (a reply, \"yeah\", a follow-up question), pick that Bot.\n\
+         - Pick more than one only when the user asks for several or all of them (\"everyone\", \"each of you\") or asks \
+         separate things that are clearly different Bots' jobs.\n\
+         - The Bot you pick can ask another Bot for help itself, so don't add Bots just in case.\n\
+         Reply with ONLY a JSON object: {{\"answer\": [\"<Bot name>\"]}}",
+        bots.iter().map(about).collect::<Vec<_>>().join("\n"),
+        if chat.is_empty() { format!("The user: {}", truncate_chars(text, 300)) } else { chat.join("\n") },
+    );
+    let cfg = st.config.read().await.clone();
+    let Some(reply) = crate::review::quick_answer(&cfg, &st.data_dir, &prompt, 30).await else {
+        tracing::warn!("group {}: couldn't pick who answers; the last Bot to speak does", group.id);
+        return fallback();
+    };
+    let names: Vec<(String, String)> = bots.iter().map(|b| (b.id.clone(), b.name.clone())).collect();
+    let picked = parse_pick(&reply, &names);
+    if picked.is_empty() { fallback() } else { picked }
+}
+
+/// The ids of the Bots named in the picker's `{"answer": [...]}` reply.
+fn parse_pick(reply: &str, bots: &[(String, String)]) -> Vec<String> {
+    let (Some(a), Some(b)) = (reply.find('{'), reply.rfind('}')) else { return vec![] };
+    let Ok(v) = serde_json::from_str::<Value>(&reply[a..=b.max(a)]) else { return vec![] };
+    let mut out = vec![];
+    for n in v.get("answer").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+        let n = n.trim().trim_start_matches('@').to_lowercase();
+        if let Some((id, _)) = bots.iter().find(|(_, name)| name.to_lowercase() == n) {
+            if !out.contains(id) {
+                out.push(id.clone());
+            }
+        }
     }
+    out
 }
 
 /// "Clear chat" in the group: each Bot starts a fresh conversation there.
@@ -238,10 +314,11 @@ pub async fn forget_history(st: &Shared, g: &Bot) {
     }
 }
 
-/// "Try again" on an error in the group: Bots with something unanswered get another turn.
+/// "Try again" on an error in the group: the Bots picked for the user's last message try again.
 pub async fn retry(st: &Shared, group: &str) -> Result<(), String> {
     let g = get_group(st, group).ok_or("No such group chat")?;
-    for m in &g.members {
+    let picked: Vec<String> = st.db.kv_get(&picked_key(group)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    for m in g.members.iter().filter(|m| picked.is_empty() || picked.contains(m)) {
         crate::runner::enqueue_group(st, m, group, false).await;
     }
     Ok(())
@@ -297,6 +374,13 @@ pub fn turn_prompt(st: &Shared, group: &str, bot: &str, winding_down: bool) -> O
     st.db.kv_set(&seen_key(group, bot), &last.to_string());
     let mut p = crate::reactions::take_notes(st, group, bot);
     p.push_str(&format!("<obot_group name=\"{}\">\n{}\n</obot_group>", g.name.replace('"', "'"), lines.join("\n\n")));
+    if !winding_down {
+        let picked: Vec<String> = st.db.kv_get(&picked_key(group)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let others: Vec<String> = picked.iter().filter(|m| m.as_str() != bot).map(|m| name_of(st, m)).collect();
+        if !others.is_empty() {
+            p.push_str(&format!("\n[oBot: {} also answer this message. Do only your part.]", join_names(&others)));
+        }
+    }
     if winding_down {
         p.push_str(
             "\n[oBot: Another Bot in the group named you. Answer if it asked you something; otherwise reply PASS. \
@@ -359,23 +443,12 @@ pub fn persona(st: &Shared, group: &str, me: &Bot) -> String {
     s.push_str(
         "Each message you get here holds what was said in the group since your last turn, inside <obot_group> tags. \
          Everyone in the group sees what you write, with your name on it.\n\
-         - Answer when the message is for you, when it's in your area, or when you can add something the others can't. \
-         Otherwise reply with only the word PASS, and nothing is posted.\n\
-         - The other Bots answer at the same time as you, so do your part, keep it short, and don't repeat what \
-         another Bot is better placed to say.\n\
+         - oBot picks who answers each of the user's messages, usually one Bot. When you get a turn, the message is for \
+         you: answer it. Reply with only the word PASS (nothing is posted) if it's clearly another Bot's job.\n\
          - To ask a Bot in this group something, write @ and its name in your reply; it gets a turn to answer. \
          Don't use message_bot for Bots in this group.\n\
          - Tools, files and cards work as usual and show in the group.\n",
     );
-    // Everyone answers at once, so "can one of you…" got an "I'll take it" from several Bots. The
-    // first member always takes those, and the rest know to stay out.
-    let lead = g.members.first().map(|m| if *m == me.id { "you".to_string() } else { name_of(st, m) });
-    if let Some(lead) = lead {
-        s.push_str(&format!(
-            "- When the user asks for just one of you (\"can one of you…\", \"just 1 bot\") without naming which, \
-             {lead} answers and everyone else replies PASS.\n"
-        ));
-    }
     s
 }
 
@@ -390,6 +463,14 @@ mod tests {
         assert!(is_pass("**PASS**"));
         assert!(!is_pass("I'll pass this to School Bot."));
         assert!(!is_pass("Passport photos are due."));
+    }
+
+    #[test]
+    fn picker_reply_is_read() {
+        let bots = vec![("a".to_string(), "Life Admin".to_string()), ("b".to_string(), "School Bot".to_string())];
+        assert_eq!(parse_pick(r#"{"answer": ["Life Admin"]}"#, &bots), vec!["a"]);
+        assert_eq!(parse_pick("Sure: {\"answer\": [\"@school bot\", \"Life Admin\", \"Nobody\"]}", &bots), vec!["b", "a"]);
+        assert!(parse_pick("no json here", &bots).is_empty());
     }
 
     #[test]

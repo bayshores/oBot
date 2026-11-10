@@ -26,9 +26,9 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   you say so; the other Bot picks it up in its own chat.
 * **Reactions and replies.** React to any message with an emoji or reply to it with a quote; Bots see
   both, and can react to your messages too.
-* **Group chats.** Put up to 6 Bots in one chat. Each answers when the message is for it (or you name it
-  with @), stays quiet otherwise, and can bring in another Bot with @Name. Ask for "just one of you" and the
-  first Bot in the group answers.
+* **Group chats.** Put up to 6 Bots in one chat. oBot picks the one Bot whose job fits each message (or the
+  Bots you name with @), so you don't get the same answer several times. Say "everyone" to hear from all of
+  them. A Bot can bring in another with @Name.
 * **Email, calendar and files.** Connected Gmail / Google Calendar / Google Drive and Outlook accounts.
   Bots use all your calendars, add repeating events with reminders and video links, find free time and
   answer invitations; invites show as an event card you send yourself. With Google Drive for desktop on

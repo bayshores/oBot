@@ -142,7 +142,15 @@ impl AppState {
         };
         b.running = !working.is_empty();
         b.last_preview = crate::vault::redact(&b.last_preview);
-        if b.running {
+        if !b.running {
+            // Before anyone answers: "Picking who answers" (group.rs).
+            if let Some(Value::Object(a)) = self.activity.lock().ok().and_then(|a| a.get(&b.id).cloned()) {
+                b.running = true;
+                b.activity = json!({ "kind": "working", "label": a.get("label").cloned().unwrap_or(Value::Null), "members": b.members });
+            }
+            return b;
+        }
+        {
             let names: Vec<String> = working.iter().filter_map(|id| self.db.get_bot(id).ok().flatten()).map(|x| x.name).collect();
             let waiting = {
                 let a = self.activity.lock().unwrap_or_else(|e| e.into_inner());

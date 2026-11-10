@@ -55,7 +55,6 @@ pub async fn review(
     tool: &str,
     input: &Value,
 ) -> Option<Verdict> {
-    let claude = find_claude(&cfg.claude_path)?;
     let rules = |list: &Vec<String>| {
         if list.is_empty() {
             "(none)".to_string()
@@ -73,6 +72,13 @@ pub async fn review(
         truncate_chars(&input.to_string(), 4000),
     );
 
+    parse(&quick_answer(cfg, data_dir, &prompt, 45).await?)
+}
+
+/// One short answer from a fast Claude model, with no tools or personal settings (used by
+/// Auto-Review and by group chats to pick who answers). None if it fails or takes over `secs`.
+pub async fn quick_answer(cfg: &Config, data_dir: &std::path::Path, prompt: &str, secs: u64) -> Option<String> {
+    let claude = find_claude(&cfg.claude_path)?;
     let mut cmd = Command::new(&claude);
     cmd.args([
         "-p",
@@ -83,7 +89,7 @@ pub async fn review(
         "--max-turns",
         "1",
         "--strict-mcp-config",
-        // No personal Claude Code settings, hooks, plugins or CLAUDE.md: the safety check sees only this prompt.
+        // No personal Claude Code settings, hooks, plugins or CLAUDE.md: the model sees only this prompt.
         "--setting-sources=",
         "--permission-mode",
         "dontAsk",
@@ -113,10 +119,10 @@ pub async fn review(
         stdin.write_all(prompt.as_bytes()).await.ok()?;
         drop(stdin);
     }
-    let out = tokio::time::timeout(Duration::from_secs(45), child.wait_with_output()).await.ok()?.ok()?;
+    let out = tokio::time::timeout(Duration::from_secs(secs), child.wait_with_output()).await.ok()?.ok()?;
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
     let text = v.get("result").and_then(Value::as_str)?;
-    parse(text)
+    Some(text.to_string())
 }
 
 /// For the approval card's "Always allow": a suggested plain-language rule.
