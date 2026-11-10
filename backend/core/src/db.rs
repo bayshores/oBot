@@ -256,13 +256,37 @@ impl Db {
                 conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {col} {def}"))?;
             }
         }
+        rerender_messages(&conn)?;
         Ok(Db { conn: Mutex::new(conn) })
     }
 
     fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
 
+/// Saved Bot messages keep the HTML they were shown with. When the markdown renderer changes
+/// (markdown::VERSION), render them again once so old messages look like new ones.
+fn rerender_messages(conn: &Connection) -> anyhow::Result<()> {
+    let done: Option<String> = conn.query_row("SELECT v FROM kv WHERE k = 'markdown_version'", [], |r| r.get(0)).optional()?;
+    if done.as_deref() == Some(crate::markdown::VERSION) {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut read = tx.prepare("SELECT id, text FROM messages WHERE html != ''")?;
+        let rows = read.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+        let mut write = tx.prepare("UPDATE messages SET html = ?2 WHERE id = ?1")?;
+        for (id, text) in rows {
+            write.execute(params![id, crate::markdown::render(&text)])?;
+        }
+    }
+    tx.execute("INSERT OR REPLACE INTO kv (k, v) VALUES ('markdown_version', ?1)", [crate::markdown::VERSION])?;
+    tx.commit()?;
+    Ok(())
+}
+
+impl Db {
     // ---------- bots ----------
 
     /// The user's Bots (not group chats).

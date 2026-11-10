@@ -96,7 +96,7 @@ Message = {
   role: "user" | "bot" | "tool" | "approval" | "error" | "system"
       | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "note" | "event",
   text: string,           // raw text / markdown
-  html: string,           // server-rendered safe HTML for role "bot" (markdown). "" for others.
+  html: string,           // server-rendered safe HTML for role "bot" (markdown; plain web addresses become links). "" for others.
   status: "done" | "running" | "ok" | "failed" | "stopped" | "declined" | "pending" | "allowed" | "denied" | "expired" | "skipped" | "replaced",
           // expired = approval left open when the turn ended or oBot restarted; skipped = approval closed because the
           // user pressed Stop or sent a new message (a new message while a card waits stops the turn and is read right away); stopped = a tool cut off by Stop or by a new
