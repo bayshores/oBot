@@ -97,6 +97,9 @@ Message = {
       | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "note" | "event",
   text: string,           // raw text / markdown
   html: string,           // server-rendered safe HTML for role "bot" (markdown; plain web addresses become links). "" for others.
+                          // Pictures in a bot reply (![alt](web address or file path)) are saved in the bot's
+                          // folder under shown/ when the reply finishes, and `text` then points at
+                          // /api/bots/{id}/files/shown/… (pictures that can't be saved become a link).
   status: "done" | "running" | "ok" | "failed" | "stopped" | "declined" | "pending" | "allowed" | "denied" | "expired" | "skipped" | "replaced",
           // expired = approval left open when the turn ended or oBot restarted; skipped = approval closed because the
           // user pressed Stop or sent a new message (a new message while a card waits stops the turn and is read right away); stopped = a tool cut off by Stop or by a new
@@ -342,7 +345,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 | Tool | What it does |
 |---|---|
 | `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message) |
-| `send_file {path, caption?}` · `show_page {title, html \| path}` | file in the chat · sandboxed HTML page |
+| `send_file {path, caption?}` · `show_page {title, html \| path}` | file in the chat · sandboxed HTML page. To show pictures inside a reply, bots write markdown images instead (see `html` above) |
 | `remember {fact, tier: "profile"\|"log", about?: "user"\|"me", bot?}` | save a fact. `profile` (standing instructions and rules like "never ask me to sign in to X", core identity) is in the bot's prompt every turn; `log` (everything else) is searched with `recall`, and only its newest 15 entries are in the prompt. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
 | `recall {query?, bot?}` · `update_memory {id, fact?, tier?}` · `forget {id}` | search facts by words (no query: profile + newest log) · fix one or move it between tiers · delete one |
 | `check_back_later {note, in_minutes \| at}` | one-time wake-up |
@@ -440,6 +443,8 @@ The bot gets these MCP tools (each returns a screenshot): `computer_screenshot`,
 `computer_scroll {x,y,direction,amount?}`, `computer_type {text}`, `computer_key {keys}` (xdotool
 names like `ctrl+l`), `computer_open {url, new_tab?}` (opens in the tab in front unless `new_tab`),
 `computer_tabs {action: "list"|"switch"|"close"|"close_others", id?}` and `computer_wait {seconds?}`.
+`computer_images` (no screenshot) lists the pictures on the page in front: its `og:image` preview, then
+each picture at least 100 px, top to bottom, with its description, size, address and the page it links to.
 A Bot's browser keeps at most 6 tabs (blank, then least recently used ones close first), and when a
 screen starts only the 3 newest of the reopened tabs are kept. While it uses them,
 `bot.activity.kind` is `on_its_computer`. `request_control {reason}` posts a widget message with

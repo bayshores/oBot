@@ -30,7 +30,9 @@ pub fn render(md: &str) -> String {
             }
             Event::Start(Tag::Image { link_type, dest_url, title, id }) => {
                 no_links += 1;
-                let dest = if safe_url(&dest_url) { dest_url } else { CowStr::from("#") };
+                // Pictures a Bot showed are saved in its folder (media.rs) and served by oBot.
+                let ours = dest_url.starts_with("/api/bots/") && !dest_url.contains("..");
+                let dest = if ours || safe_url(&dest_url) { dest_url } else { CowStr::from("#") };
                 events.push(Event::Start(Tag::Image { link_type, dest_url: dest, title, id }));
             }
             Event::Start(t @ Tag::CodeBlock(_)) => {

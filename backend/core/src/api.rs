@@ -403,17 +403,6 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn percent_encode_path(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.bytes() {
-        match c {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(c as char),
-            _ => out.push_str(&format!("%{c:02X}")),
-        }
-    }
-    out
-}
-
 // ---------------------------------------------------------------- web UI
 
 mod ui_assets {
@@ -1155,7 +1144,7 @@ async fn upload(State(st): State<Shared>, UrlPath(id): UrlPath<String>, mut mp: 
             "path": rel,
             "mime": mime,
             "size": data.len(),
-            "url": format!("/api/bots/{id}/files/{}", percent_encode_path(&rel)),
+            "url": format!("/api/bots/{id}/files/{}", crate::util::url_path(&rel)),
         }));
     }
     Ok(Json(out))
@@ -1738,7 +1727,7 @@ async fn list_library(State(st): State<Shared>, UrlPath(id): UrlPath<String>) ->
             out.push(json!({
                 "name": name, "path": rel, "size": md.len(), "modified": modified,
                 "mime": mime_guess::from_path(&name).first_or_octet_stream().to_string(),
-                "url": format!("/api/bots/{id}/files/{}", percent_encode_path(&rel)),
+                "url": format!("/api/bots/{id}/files/{}", crate::util::url_path(&rel)),
             }));
             if out.len() >= 2000 {
                 break;

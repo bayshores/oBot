@@ -2566,7 +2566,7 @@
   function replyInfo(m) {
     const who = m.role === 'user' ? 'You' : (ownerOf(m) || {}).name || 'Bot';
     // Plain text, like the sidebar preview (no Markdown marks).
-    const quote = (m.text || (m.meta && m.meta.name) || 'a message').replace(/\s+/g, ' ').replace(/[*`#>]/g, '').replace(/^[-+\s]+/, '').trim();
+    const quote = noPictures(m.text || (m.meta && m.meta.name) || 'a message').replace(/\s+/g, ' ').replace(/[*`#>]/g, '').replace(/^[-+\s]+/, '').trim();
     return { id: m.id, who, quote: quote.length > 140 ? quote.slice(0, 139) + '…' : quote };
   }
   function startReply(m) {
@@ -2603,6 +2603,8 @@
       h('button', { class: 'pend-x', type: 'button', 'aria-label': 'Cancel reply', onclick: () => cancelReply() }, icon('x', 12, '', 2.4))
     );
   }
+  // "Here ![Blue jeans](/api/…) look" -> "Here 🖼️ Blue jeans look" (notifications, reply quotes).
+  const noPictures = (t) => String(t || '').replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => '🖼️ ' + (alt.trim() || 'Picture'));
   function fillBotBubble(bubble, m) {
     if (bubble.classList.contains('emoji')) {
       bubble.textContent = m.text;
@@ -2615,6 +2617,23 @@
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
     }
+    // Pictures the Bot showed: saved on its computer (media.rs), opened full size on click.
+    const pics = [...md.querySelectorAll('img[src]')];
+    const items = pics.map((img) => {
+      const src = img.getAttribute('src');
+      return { url: src.startsWith('/api/') ? fileUrl(src) : src, name: img.alt || 'Picture' };
+    });
+    pics.forEach((img, i) => {
+      img.src = items[i].url;
+      img.loading = 'lazy';
+      img.classList.add('md-pic', 'loading');
+      img.addEventListener('load', () => {
+        img.classList.remove('loading');
+        if (S.pinned) msgsEl.scrollTop = msgsEl.scrollHeight;
+      });
+      img.addEventListener('error', () => img.replaceWith(h('span', { class: 'md-pic-missing' }, icon('image', 13), img.alt || 'Picture')));
+      img.addEventListener('click', () => openLightbox(items, i));
+    });
     for (const pre of md.querySelectorAll('pre')) {
       const fig = h('div', { class: 'code-fig' });
       pre.replaceWith(fig);
@@ -3615,7 +3634,7 @@
       const orig = m;
       m = Object.assign({}, orig, { text: `${who.name}: ${orig.text || ''}`, meta: Object.assign({}, orig.meta, orig.meta && orig.meta.summary ? { summary: `${who.name}: ${orig.meta.summary}` } : {}) });
     }
-    if (m.role === 'bot' && m.status === 'done' && (m.text || '').trim()) maybeNotify(b, 'done', m.text, 'd:' + m.id);
+    if (m.role === 'bot' && m.status === 'done' && (m.text || '').trim()) maybeNotify(b, 'done', noPictures(m.text), 'd:' + m.id);
     else if (m.role === 'attachment' && created) maybeNotify(b, 'done', m.text || `Sent ${(m.meta && m.meta.name) || 'a file'}`, 'd:' + m.id);
     else if (m.role === 'visualization' && created) maybeNotify(b, 'done', (m.meta && m.meta.title) || 'Made a page', 'd:' + m.id);
     else if (m.role === 'approval' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.summary) || m.text, 'a:' + m.id);

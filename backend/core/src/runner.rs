@@ -687,6 +687,12 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          You can't reach the user's other devices (their laptop or phone) directly. Never ask them to turn on SSH or \
          Remote Login, open ports, install keys or remote-access apps so you can get in. To get files to them, send \
          them with send_file, or put them in their Google Drive when it's connected (it syncs to their computer).\n\
+         Show, don't only describe: when seeing something helps the user understand or choose (things to buy, \
+         places, food, a design, a chart, what a page looks like), put pictures right in your reply with markdown, \
+         ![short description](picture address or file path), next to the text about each one. Use the picture's \
+         web address (computer_images lists the pictures on the page on your screen), a screenshot file, or an \
+         image you made. oBot saves each picture and shows it in the chat. Pick the few that matter, not every \
+         picture you saw.\n\
          Your skills are the folders in .claude/skills inside your working folder (each has a SKILL.md); they show \
          up as \"skills:<name>\". The user's own Claude Code skills and plugins aren't loaded for you. If they ask \
          you to use one you don't have, look for its SKILL.md in their skills folder ({skills}, sometimes a few \
@@ -698,7 +704,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     );
     s.push_str(
         "\noBot gives you extra tools (mcp__obot__*): ask_user (tap-to-answer buttons), send_file \
-         (deliver files/images into the chat), show_page (interactive HTML in the chat), remember/recall/update_memory/forget \
+         (deliver files into the chat to keep or download), show_page (interactive HTML in the chat), remember/recall/update_memory/forget \
          (long-term memory), check_back_later (wake yourself up later and message the user), run_in_background \
          (long commands that keep running after your turn; you're woken with the result. Prefer it over your \
          shell's own background option for anything over a few minutes: that one keeps you busy, so the user's \
@@ -727,7 +733,8 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
              to sign in (and may send the user a 2FA push). The user can watch it live and take control. Use it for websites that need a real \
              browser (clicking through pages, filling forms, logged-in sites): computer_open (open a URL), \
              computer_screenshot, computer_click, computer_type, computer_key, computer_scroll, computer_move, \
-             computer_drag, computer_wait and computer_tabs. computer_open uses the tab in front; open a new tab only \
+             computer_drag, computer_wait, computer_tabs and computer_images (the pictures on the page, to show the \
+             user). computer_open uses the tab in front; open a new tab only \
              when you need to keep the current page, and close tabs you're done with. Every action returns a fresh \
              screenshot; look at it before the next \
              step. Never type passwords or 2FA codes yourself: sign in with fill_login or request_form (see Vault \
@@ -1563,7 +1570,7 @@ impl Turn {
         if m.text.trim().is_empty() || (self.group.is_some() && crate::group::is_pass(&m.text)) {
             return;
         }
-        m.text = m.text.trim().to_string();
+        m.text = crate::media::save_pictures(&self.state, &self.bot_id, m.text.trim()).await;
         m.html = markdown::render(&m.text);
         let _ = self.state.db.upsert_message(&m);
         self.state.emit_message(true, &m);

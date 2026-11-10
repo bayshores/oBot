@@ -31,11 +31,41 @@ pub fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// One-line preview used in the sidebar.
+/// A file path in a Bot's folder as it goes in a web address ("shown/a b.png" -> "shown/a%20b.png").
+pub fn url_path(rel: &str) -> String {
+    let mut out = String::new();
+    for c in rel.bytes() {
+        match c {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(c as char),
+            _ => out.push_str(&format!("%{c:02X}")),
+        }
+    }
+    out
+}
+
 pub fn preview(s: &str) -> String {
-    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = without_pictures(s).split_whitespace().collect::<Vec<_>>().join(" ");
     let flat = flat.replace(['*', '`', '#', '>'], "");
     let flat = flat.trim_start_matches(|c: char| c == '-' || c == '+' || c.is_whitespace());
     truncate_chars(flat.trim(), 120)
+}
+
+/// "Here ![Blue jeans](/api/…) look" -> "Here 🖼️ Blue jeans look" (for previews and notifications).
+fn without_pictures(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("![") {
+        let after = &rest[i + 2..];
+        let Some(close) = after.find("](") else { break };
+        let Some(end) = after[close + 2..].find(')') else { break };
+        out.push_str(&rest[..i]);
+        let alt = after[..close].trim();
+        out.push_str(if alt.is_empty() { "🖼️ Picture" } else { "🖼️ " });
+        out.push_str(alt);
+        rest = &after[close + 2 + end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// "A", "A and B", "A, B, and C".

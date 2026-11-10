@@ -642,6 +642,10 @@ b, strong { font-weight: var(--w-semibold); }
 .md th, .md td { border: .5px solid var(--b2); padding: 5px 9px; text-align: left; }
 .md th { font-weight: var(--w-medium); background: var(--secondary); }
 .md img { max-width: 100%; border-radius: 12px; }
+/* Pictures in a Bot's reply: several in a row sit side by side. */
+.md .md-pic { display: inline-block; vertical-align: top; max-height: 320px; max-width: min(100%, 420px); margin: 2px 6px 2px 0; object-fit: contain; background: var(--secondary); cursor: zoom-in; }
+.md .md-pic.loading { min-width: 120px; min-height: 120px; }
+.md-pic-missing { display: inline-flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 13px; }
 .code-fig { position: relative; max-width: 100%; }
 .code-fig pre {
   margin: 0;

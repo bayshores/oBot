@@ -21,6 +21,7 @@ pub mod hooks;
 pub mod jobs;
 pub mod logins;
 pub mod markdown;
+pub mod media;
 pub mod memory_tidy;
 pub mod mcp;
 pub mod migrate;

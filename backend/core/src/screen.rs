@@ -700,6 +700,31 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
                 .collect();
             format!("Tabs, most recently used first:\n{}\n", tabs.join("\n"))
         }
+        "computer_images" => {
+            let v = browser_run(&cfg, info.display, bot_id, json!({"mode": "images"})).await?;
+            state.screens.touch(bot_id, 0).await;
+            let lines: Vec<String> = v["images"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|i| {
+                    let alt = i["alt"].as_str().filter(|a| !a.is_empty()).unwrap_or("(no description)");
+                    let size = match (i["w"].as_i64(), i["h"].as_i64()) {
+                        (Some(w), Some(h)) if w > 0 => format!(" ({w} x {h})"),
+                        _ => String::new(),
+                    };
+                    let link = i["link"].as_str().filter(|l| !l.is_empty()).map(|l| format!("\n  links to {l}")).unwrap_or_default();
+                    format!("- {alt}{size}\n  {}{link}", i["src"].as_str().unwrap_or(""))
+                })
+                .collect();
+            let url = v["url"].as_str().unwrap_or("");
+            let text = if lines.is_empty() {
+                format!("No pictures on {url} (scroll to load more, or show a screenshot instead).")
+            } else {
+                format!("Pictures on {url}, top to bottom. Show one with ![description](address).\n{}", lines.join("\n"))
+            };
+            return Ok(ToolOut { text, image: None });
+        }
         "computer_wait" => {
             let secs = args.get("seconds").and_then(Value::as_f64).unwrap_or(2.0).clamp(0.5, 30.0);
             tokio::time::sleep(Duration::from_millis((secs * 1000.0) as u64)).await;
@@ -727,6 +752,7 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({"name": "computer_scroll", "description": "Scroll at (x, y). Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"x": xy("pixels from the left"), "y": xy("pixels from the top"), "direction": {"type": "string", "enum": ["up", "down", "left", "right"]}, "amount": {"type": "integer", "description": "steps, default 5"}}, "required": ["x", "y", "direction"]}}),
         json!({"name": "computer_move", "description": "Move the pointer to (x, y) without clicking (e.g. to hover a menu). Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"x": xy("pixels from the left"), "y": xy("pixels from the top")}, "required": ["x", "y"]}}),
         json!({"name": "computer_drag", "description": "Drag with the left button from one point to another. Returns a screenshot.", "inputSchema": {"type": "object", "properties": {"from_x": {"type": "integer"}, "from_y": {"type": "integer"}, "to_x": {"type": "integer"}, "to_y": {"type": "integer"}}, "required": ["from_x", "from_y", "to_x", "to_y"]}}),
+        json!({"name": "computer_images", "description": "List the pictures on the page in front of your screen (description, size, web address, and the page each links to), top to bottom after the page's preview picture. Use a picture's address to show it in your reply: ![description](address).", "inputSchema": {"type": "object", "properties": {}}}),
         json!({"name": "computer_wait", "description": "Wait for a page to load or an animation to finish, then get a screenshot.", "inputSchema": {"type": "object", "properties": {"seconds": {"type": "number"}}}}),
         json!({"name": "request_control", "description": "Ask the user to take over your screen for something only they should do: logging in, a password or 2FA code, a CAPTCHA, a payment, or anything you're stuck on. First recall what you know about that site: the user may have told you how to get in or that they can't. A card with an 'Open screen' button appears in the chat. Returns right away: end your turn; the user's 'I'm done' arrives as their next message, then take a screenshot and continue.", "inputSchema": {"type": "object", "properties": {"reason": {"type": "string", "description": "What you need them to do, in one short sentence"}}, "required": ["reason"]}}),
     ]

@@ -315,17 +315,6 @@ fn post(state: &Shared, bot_id: &str, role: &str, text: &str, meta: Value) -> Me
     m
 }
 
-fn url_path(rel: &str) -> String {
-    let mut out = String::new();
-    for c in rel.bytes() {
-        match c {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(c as char),
-            _ => out.push_str(&format!("%{c:02X}")),
-        }
-    }
-    out
-}
-
 /// What a tool hands back to the model: text, and for screen tools a screenshot.
 pub struct ToolResult {
     pub text: String,
@@ -498,7 +487,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 "attachment",
                 s(args, "caption"),
                 json!({"name": fname, "path": rel, "mime": mime, "size": size,
-                       "url": format!("/api/bots/{bot_id}/files/{}", url_path(&rel))}),
+                       "url": format!("/api/bots/{bot_id}/files/{}", crate::util::url_path(&rel))}),
             );
             Ok(format!("Sent {fname} to the user."))
         }

@@ -10,6 +10,7 @@
 //     {mode: "fill", host, fields: [{target, value}]} -> {url, filled: [targets], missing: [targets]}
 //         target: "username" | "password" | "new_password" | "one_time_code" | "focused" | a CSS selector
 //     {mode: "navigate", url}                    -> {url}   (in the tab in front)
+//     {mode: "images"}                           -> {url, images: [{src, alt, w, h, link}]}  pictures on the page
 //     {mode: "tabs"}                             -> {tabs: [{id, title, url, front}]}  most recently used first
 //     {mode: "switch", id} / {mode: "close", id} -> {tabs}
 //     {mode: "close_others"}                     -> {tabs}
@@ -123,6 +124,26 @@ const FIND = function (target) {
   return document.activeElement === el;
 };
 
+// Runs inside the page: its preview picture, then the pictures big enough to matter, top to bottom.
+const IMAGES = function () {
+  const out = [];
+  const seen = new Set();
+  const add = (src, alt, w, h, link) => {
+    if (!/^https?:/.test(src || '') || seen.has(src) || out.length >= 40) return;
+    seen.add(src);
+    out.push({ src, alt: (alt || '').replace(/\s+/g, ' ').trim().slice(0, 140), w, h, link: /^https?:/.test(link || '') ? link : '' });
+  };
+  const og = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+  if (og) add(new URL(og.content, location.href).href, 'Preview picture of this page', 0, 0, '');
+  for (const img of document.images) {
+    const r = img.getBoundingClientRect();
+    if (r.width < 100 || r.height < 100) continue;
+    const a = img.closest('a');
+    add(img.currentSrc || img.src, img.alt || img.title || (a && a.textContent), Math.round(r.width), Math.round(r.height), a && a.href);
+  }
+  return out;
+};
+
 const short = (id) => id.slice(0, 6).toLowerCase();
 const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
 
@@ -212,6 +233,7 @@ const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
   }
   const url = await evaluate(c, 'location.href');
   if (req.mode === 'inspect') done({ url, title: p.title });
+  if (req.mode === 'images') done({ url, images: await evaluate(c, `(${IMAGES})()`) });
 
   // Only fill the page oBot checked: same https website as when it decided.
   let host = '';
