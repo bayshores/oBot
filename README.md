@@ -24,6 +24,9 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
 * **Show you things.** Bots put pictures right in their replies when seeing helps: a product, a place, a
   chart, part of a web page. oBot saves each picture on the PC, so it loads on every device. Click one to
   see it full size.
+* **Send pages from your own browser.** Some websites block Bots' browsers. Add the **Send to oBot** bookmark
+  (Settings › Connections), open the page in your browser, tap the bookmark and pick a Bot: the page's link,
+  text and pictures are attached to your message.
 * **Work in the background.** Routines, check-ins and long commands wake the Bot up when it's time.
 * **Work together.** A Bot tells you when another of your Bots fits a task better and passes it on when
   you say so; the other Bot picks it up in its own chat.

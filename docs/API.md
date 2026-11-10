@@ -27,7 +27,10 @@ that token in `sessionStorage` and removes it from the address bar. A browser on
 over Tailscale) has no token: it shows a pairing screen, trades a 6-digit code for a device token with
 `POST /api/pair`, and keeps that in `localStorage`. The pairing link `https://<computer>.ts.net/#pair=<code>`
 (the QR code in Settings › Computer › Pair a new device) fills the code in; the part after `#` never
-leaves the phone. `#bot=<id>` opens that chat (a tapped phone notification).
+leaves the phone. `#bot=<id>` opens that chat (a tapped phone notification). `#share=<page>` comes from the
+"Send to oBot" bookmark (Settings › Connections): `z` + base64url of gzipped JSON (or `p` + plain JSON)
+`{u: address, t: title, s: selected text, x: page text, i: [[picture, description, link]], j: JSON-LD}`. The app
+asks which Bot gets it and attaches it to the next message as a Markdown file (`<site> - <title>.md`).
 
 **Phones** (home-screen web app): `/manifest.webmanifest`, `/icons/phone-{180,192,512}.png` and the service
 worker `/sw.js` are served without a token. The service worker shows Web Push notifications and opens the

@@ -2109,3 +2109,13 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .c-reply-body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); text-align: left; }
 .c-reply-who { font-weight: var(--w-medium); color: var(--text-2); flex: none; }
 .c-reply-quote { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* "Send this page to a Bot" (a page sent from the user's own browser) */
+.share-dlg { width: min(440px, calc(100vw - 32px)); }
+.share-page { display: flex; flex-direction: column; gap: 2px; }
+.share-title { color: var(--text); overflow-wrap: anywhere; }
+.share-facts { font-size: 13px; }
+.share-bots { display: flex; flex-direction: column; gap: 2px; margin-top: 14px; max-height: 50vh; overflow: auto; }
+.share-bot { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; text-align: left; font-size: 14px; }
+.share-bot:hover, .share-bot:focus-visible { background: var(--secondary); }
+.share-bm { cursor: grab; text-decoration: none; }
