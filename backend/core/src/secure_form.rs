@@ -19,7 +19,7 @@ const TARGETS: [&str; 5] = ["username", "password", "new_password", "one_time_co
 
 pub fn tool_definitions() -> Vec<Value> {
     vec![json!({"name": "request_form",
-        "description": "Ask the user for private values (a password, a 2FA or verification code, a new password...) with a secure form in the chat. Use it when a login page on your screen needs something that isn't saved in the Vault. What they type goes straight into the page in front on your screen; you never see it. Open the right page first. They can also save a password to the Vault. End your turn after calling it; you'll get a message saying which boxes were filled.",
+        "description": "Ask the user for private values (a password, a 2FA or verification code, a new password...) with a secure form in the chat. Use it when a login page on your screen needs something that isn't saved in the Vault. What they type goes straight into the page in front on your screen; you never see it. Open the right page first. They can also save a password to the Vault. Your turn ends when the form appears, so say anything else before calling it; you'll get a message saying which boxes were filled.",
         "inputSchema": {"type": "object", "properties": {
             "title": {"type": "string", "description": "Short, like 'Sign in to UC San Diego'"},
             "reason": {"type": "string", "description": "One sentence: why you need it"},

@@ -408,10 +408,11 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
   `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
   skill folder is limited to 200 files and 5 MB.
-* Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with two Claude Code hooks that start the oBot program as
-  `<obot> hook stop|precompact --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
+* Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with Claude Code hooks that start the oBot program as
+  `<obot> hook stop|precompact|after-ask --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself.
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event.
+  * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
   (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.
 * Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn

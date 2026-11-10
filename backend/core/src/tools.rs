@@ -29,7 +29,7 @@ pub fn definitions() -> Value {
     let mut list = json!([
         {
             "name": "ask_user",
-            "description": "Ask the user a quick question with tap-to-answer buttons in the chat (like 'Which one?' with 2-5 options). Returns right away; the user's choice arrives later as their next message, so end your turn after calling this.",
+            "description": "Ask the user a quick question with tap-to-answer buttons in the chat (like 'Which one?' with 2-5 options). Your turn ends when the card appears (the user's choice arrives as their next message), so say anything else in the question or before calling this.",
             "inputSchema": {"type": "object", "properties": {
                 "question": {"type": "string"},
                 "options": {"type": "array", "items": {"type": "string"}, "description": "2 to 5 short answers"},

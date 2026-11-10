@@ -1054,9 +1054,12 @@ fn build_command(
     // autoCompactEnabled: someone who turned off summarizing for their own Claude Code on this
     // computer (it's kept in ~/.claude.json, which --setting-sources= doesn't skip) would turn it off
     // for every Bot too, and then COMPACT_WINDOW never applies.
+    // After a question card (or a secure form, or "take over my screen") the turn ends: see hooks.rs.
+    let mut after_ask = hook("after-ask");
+    after_ask[0]["matcher"] = json!("mcp__obot__ask_user|mcp__obot__request_form|mcp__obot__request_control");
     let mut settings = json!({
         "autoCompactEnabled": true,
-        "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact") }
+        "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact"), "PostToolUse": after_ask }
     });
     if wsl {
         // Claude Code's sandbox (bubblewrap) works in WSL2: commands can only write inside the bot's folder.

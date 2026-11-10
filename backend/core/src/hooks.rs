@@ -1,13 +1,16 @@
 //! Claude Code hooks for Bots.
 //!
 //! Each run gets a settings file (see `runner::build_command`) telling Claude Code to start this
-//! same program as `<obot> hook <event> --config <bot's mcp.json>` at two moments:
+//! same program as `<obot> hook <event> --config <bot's mcp.json>` at these moments:
 //!
 //! - **Stop** (the Bot is about to end its turn): if its last reply promises to follow up later
 //!   ("I'll check back tomorrow") but it never scheduled anything, it's sent back once to call
 //!   check_back_later (or say it won't follow up).
 //! - **PreCompact** (Claude Code is about to summarize older messages to save space): the user's
 //!   recent requests are saved as a memory log entry, so the summary loses less.
+//! - **PostToolUse** of ask_user, request_form and request_control (`after-ask`): the card is in the
+//!   chat and the Bot must wait for the user, so its turn ends right there. Otherwise it often wrote
+//!   the same thing again as a reply under the card.
 //!
 //! Hooks must never break a run: any problem means "do nothing" (exit 0, no output).
 
@@ -17,6 +20,9 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+/// What ask_user, request_form and request_control answer when their card is in the chat.
+pub const ASKED: &str = "End your turn now";
+
 /// Entry point for `hook <event> --config <path> [--distro <name>]`. Returns the exit code.
 pub fn run(args: &[String]) -> i32 {
     let event = args.first().map(String::as_str).unwrap_or("");
@@ -24,6 +30,13 @@ pub fn run(args: &[String]) -> i32 {
     let mut input = String::new();
     let _ = std::io::stdin().take(1 << 20).read_to_string(&mut input);
     let Ok(input) = serde_json::from_str::<Value>(&input) else { return 0 };
+    if event == "after-ask" {
+        // Only when the card really went up (the tool says "End your turn now"), not after an error.
+        if input.get("tool_response").is_some_and(|r| r.to_string().contains(ASKED)) {
+            println!("{}", json!({ "continue": false, "stopReason": "" }));
+        }
+        return 0;
+    }
     let transcript = input
         .get("transcript_path")
         .and_then(Value::as_str)
