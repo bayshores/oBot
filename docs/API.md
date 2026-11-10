@@ -428,7 +428,9 @@ Actions on other bots leave an `event` message in both chats with `meta {kind, b
 Each bot can have its own Linux screen: a virtual display (Xvfb, 1280×800) with the openbox
 window manager, a Chrome/Chromium window with the bot's own profile
 (`~/.obot/screens/<bot>/profile` inside Linux), and an x11vnc server on 127.0.0.1 only.
-On Windows hosts it runs inside WSL (`wsl_distro`); on Linux hosts directly. Screens start on
+On Windows hosts it runs inside WSL (`wsl_distro`); on Linux hosts directly. Each screen keeps its process
+group in `~/.obot/screens/<bot>/screen.pgid`. At start, a server stops only its own Bots' leftover screens,
+and skips display numbers another program (or another oBot server on the same computer) is using. Screens start on
 first use and stop after 30 minutes with no bot run and no viewer. A starting screen waits for the browser
 window (it reopens the last tabs), and the first computer tool result then tells the bot its screen was off
 and its logins are kept.

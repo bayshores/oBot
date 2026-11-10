@@ -166,12 +166,15 @@ pub async fn page_fill(state: &Shared, bot_id: &str, host: &str, fields: &[Fill]
 const START_SCRIPT: &str = r#"set -u
 N="$OB_DISPLAY"; P="$OB_PORT"; DIR="$HOME/.obot/screens/$OB_BOT"
 mkdir -p "$DIR/profile"; chmod 700 "$HOME/.obot" "$HOME/.obot/screens" "$DIR" 2>/dev/null
-PGF="/tmp/obot-screen-$N.pgid"
-# A screen left over from an earlier run of oBot: stop it first.
+PGF="$DIR/screen.pgid"
+# This Bot's screen left over from an earlier run of oBot: stop it first.
 __FIND_BROWSER__
 [ -f "$PGF" ] && ob_killgroup "$(cat "$PGF")"
 ob_browser_close
-rm -f "/tmp/.X$N-lock" "/tmp/.X11-unix/X$N"
+# Another program (or another oBot server on this computer) uses this display: oBot picks the next one.
+L="/tmp/.X$N-lock"
+if [ -f "$L" ] && [ -d "/proc/$(tr -dc 0-9 < "$L")" ]; then echo BUSY; exit 0; fi
+rm -f "$L" "/tmp/.X11-unix/X$N"
 echo $$ > "$PGF"
 trap 'trap - EXIT INT TERM HUP; ob_browser_close; kill -- -$$ 2>/dev/null; exit 0' EXIT INT TERM HUP
 export DISPLAY=":$N"
@@ -208,12 +211,25 @@ pub struct Screens {
     swept: std::sync::atomic::AtomicBool,
 }
 
-/// Stops every screen and bot browser left running by an earlier run of oBot
-/// (for example after the server was killed or the computer slept).
+/// Stops the screens and browsers of this server's Bots (OB_BOTS) left running by an earlier run of
+/// oBot (for example after the server was killed or the computer slept). Screens of Bots it doesn't
+/// know belong to another oBot server on the same computer and are left alone.
+/// Screens started before oBot 0.2.7 kept their process group in /tmp/obot-screen-<display>.pgid:
+/// those are stopped only when one of this server's Bots' browsers runs in them.
 /// Screens from before the rename to oBot used the name "openbot": stop those too, then move their
 /// folder (with each Bot's browser logins) to ~/.obot.
-const SWEEP_SCRIPT: &str = r#"for f in /tmp/obot-screen-*.pgid /tmp/openbot-screen-*.pgid; do [ -f "$f" ] && ob_killgroup "$(cat "$f")"; rm -f "$f"; done
-pkill -TERM -f -- "--user-data-dir=$HOME/.obot/screens/" 2>/dev/null
+const SWEEP_SCRIPT: &str = r#"for b in $OB_BOTS; do
+  f="$HOME/.obot/screens/$b/screen.pgid"; [ -f "$f" ] && ob_killgroup "$(cat "$f")"; rm -f "$f"
+  OBPROF="$HOME/.obot/screens/$b/profile"; ob_browser_close
+done
+for f in /tmp/obot-screen-*.pgid; do
+  [ -f "$f" ] || continue; g=$(tr -dc 0-9 < "$f")
+  [ -n "$g" ] && pgrep -g "$g" >/dev/null || { rm -f "$f"; continue; }
+  for b in $OB_BOTS; do
+    if pgrep -a -g "$g" | grep -q -- "--user-data-dir=$HOME/.obot/screens/$b/"; then ob_killgroup "$g"; rm -f "$f"; break; fi
+  done
+done
+for f in /tmp/openbot-screen-*.pgid; do [ -f "$f" ] && ob_killgroup "$(cat "$f")"; rm -f "$f"; done
 pkill -TERM -f -- "--user-data-dir=$HOME/.openbot/screens/" 2>/dev/null; sleep 0.5
 if [ -d "$HOME/.openbot" ] && [ ! -e "$HOME/.obot" ]; then
   pkill -KILL -f -- "--user-data-dir=$HOME/.openbot/screens/" 2>/dev/null; mv "$HOME/.openbot" "$HOME/.obot"
@@ -368,7 +384,8 @@ impl Screens {
         let cfg = state.config.read().await.clone();
         let mut map = self.inner.lock().await;
         if !self.swept.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            let _ = run(&cfg, &format!("{FIND_BROWSER}{SWEEP_SCRIPT}"), &[("OB_BOT", String::new())], 30).await;
+            let ids: Vec<String> = state.db.list_bots().unwrap_or_default().into_iter().map(|b| b.id).collect();
+            let _ = run(&cfg, &format!("{FIND_BROWSER}{SWEEP_SCRIPT}"), &[("OB_BOT", String::new()), ("OB_BOTS", ids.join(" "))], 60).await;
         }
         if let Some(s) = map.get_mut(bot_id) {
             if matches!(s.child.try_wait(), Ok(None)) {
@@ -377,33 +394,46 @@ impl Screens {
             }
             map.remove(bot_id);
         }
-        let used: Vec<u16> = map.values().map(|s| s.display).collect();
-        let display = (FIRST_DISPLAY..FIRST_DISPLAY + 400).find(|d| !used.contains(d)).ok_or("Too many screens are open")?;
+        let mut used: Vec<u16> = map.values().map(|s| s.display).collect();
         let password = random_password();
         let script = START_SCRIPT.replace("__FIND_BROWSER__", FIND_BROWSER);
-        let env = [
-            ("OB_DISPLAY", display.to_string()),
-            ("OB_PORT", port_of(display).to_string()),
-            ("OB_PW", password.clone()),
-            ("OB_BOT", bot_id.to_string()),
-        ];
-        let mut child = linux(&cfg, &script, &env, false).spawn().map_err(|e| format!("Couldn't start the screen: {e}"))?;
-        let stdout = child.stdout.take().ok_or("no output from the screen")?;
-        let mut lines = BufReader::new(stdout).lines();
-        let ready = tokio::time::timeout(Duration::from_secs(40), async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                if line.trim() == "READY" {
-                    return Ok(());
+        // A display number something else uses answers BUSY: try the next one.
+        let (display, mut child, mut lines, ready) = loop {
+            let display = (FIRST_DISPLAY..FIRST_DISPLAY + 400).find(|d| !used.contains(d)).ok_or("Too many screens are open")?;
+            let env = [
+                ("OB_DISPLAY", display.to_string()),
+                ("OB_PORT", port_of(display).to_string()),
+                ("OB_PW", password.clone()),
+                ("OB_BOT", bot_id.to_string()),
+            ];
+            let mut child = linux(&cfg, &script, &env, false).spawn().map_err(|e| format!("Couldn't start the screen: {e}"))?;
+            let stdout = child.stdout.take().ok_or("no output from the screen")?;
+            let mut lines = BufReader::new(stdout).lines();
+            let ready = tokio::time::timeout(Duration::from_secs(40), async {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    match line.trim() {
+                        "READY" => return Ok(true),
+                        "BUSY" => return Ok(false),
+                        l => {
+                            if let Some(e) = l.strip_prefix("ERROR ") {
+                                return Err(e.to_string());
+                            }
+                        }
+                    }
                 }
-                if let Some(e) = line.strip_prefix("ERROR ") {
-                    return Err(e.to_string());
-                }
+                Err("the screen stopped while starting".to_string())
+            })
+            .await;
+            if matches!(ready, Ok(Ok(false))) && used.len() < 400 {
+                let _ = child.wait().await;
+                used.push(display);
+                continue;
             }
-            Err("the screen stopped while starting".to_string())
-        })
-        .await;
+            break (display, child, lines, ready);
+        };
         match ready {
-            Ok(Ok(())) => {}
+            Ok(Ok(true)) => {}
+            Ok(Ok(false)) => return Err("Too many screens are open".into()),
             Ok(Err(e)) => {
                 let _ = child.kill().await;
                 let st = status(&cfg).await;
@@ -442,7 +472,7 @@ impl Screens {
         let removed = self.inner.lock().await.remove(bot_id);
         if let Some(mut s) = removed {
             let cfg = state.config.read().await.clone();
-            let script = format!("{FIND_BROWSER}PGF=/tmp/obot-screen-$OB_DISPLAY.pgid; [ -f \"$PGF\" ] && ob_killgroup \"$(cat \"$PGF\")\"; ob_browser_close; rm -f \"$PGF\"; true");
+            let script = format!("{FIND_BROWSER}PGF=\"$OBDIR/screen.pgid\"; [ -f \"$PGF\" ] && ob_killgroup \"$(cat \"$PGF\")\"; ob_browser_close; rm -f \"$PGF\"; true");
             let _ = run(&cfg, &script, &[("OB_DISPLAY", s.display.to_string()), ("OB_BOT", bot_id.to_string())], 20).await;
             let _ = s.child.kill().await;
             state.emit("screen.updated", json!({"bot_id": bot_id, "running": false}));
