@@ -10,5 +10,17 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <!-- obot://share#<page>: the "Send to oBot" bookmark opens the app with a page from the browser. -->
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>app.obot.desktop</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>obot</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

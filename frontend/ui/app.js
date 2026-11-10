@@ -5248,8 +5248,11 @@
   // "Send to oBot" bookmark: it opens oBot with the page (link, text, pictures) after "#share=",
   // gzipped when the browser can. The user picks a Bot and the page is attached to their message.
   // The page's content is only data for the Bot; nothing secret is in the bookmark.
-  function shareBookmarklet(origin) {
-    const code = String.raw`(()=>{const B=${JSON.stringify(origin)},d=document,w=window.open('','_blank'),go=(h)=>{const u=B+'/#share='+h;w?w.location.href=u:location.href=u},I=[],seen=new Set(),add=(s,a,l)=>{if(!/^https?:/.test(s||'')||seen.has(s)||I.length>=30)return;seen.add(s);I.push([s,(a||'').replace(/\s+/g,' ').trim().slice(0,140),/^https?:/.test(l||'')?l:''])},og=d.querySelector('meta[property="og:image"],meta[name="twitter:image"]');if(og&&og.content)add(new URL(og.content,location.href).href,'Preview picture','');for(const i of d.images){const r=i.getBoundingClientRect();if(r.width<100||r.height<100)continue;const a=i.closest('a');add(i.currentSrc||i.src,i.alt||i.title,a&&a.href)}const m=d.querySelector('main,[role=main]')||d.body,D={u:location.href,t:d.title,s:String(getSelection()||'').trim().slice(0,20000),x:(m.innerText||'').slice(0,60000),i:I,j:[...d.querySelectorAll('script[type="application/ld+json"]')].map((s)=>s.textContent.trim()).join('\n').slice(0,20000)},raw=new TextEncoder().encode(JSON.stringify(D)),b64=(u)=>{let s='';for(let k=0;k<u.length;k+=32768)s+=String.fromCharCode.apply(null,u.subarray(k,k+32768));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};if(window.CompressionStream)new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer().then((b)=>go('z'+b64(new Uint8Array(b))));else go('p'+b64(raw))})()`;
+  // In the Mac app the bookmark opens the app itself (obot://share#<page>, see the desktop app's
+  // main.rs); elsewhere it opens oBot's web page on `origin`.
+  function shareBookmarklet(origin, toApp) {
+    const open = toApp ? `go=(h)=>{location.href='obot://share#'+h}` : `w=window.open('','_blank'),go=(h)=>{const u=B+'/#share='+h;w?w.location.href=u:location.href=u}`;
+    const code = String.raw`(()=>{const B=${JSON.stringify(origin)},d=document,${open},I=[],seen=new Set(),add=(s,a,l)=>{if(!/^https?:/.test(s||'')||seen.has(s)||I.length>=30)return;seen.add(s);I.push([s,(a||'').replace(/\s+/g,' ').trim().slice(0,140),/^https?:/.test(l||'')?l:''])},og=d.querySelector('meta[property="og:image"],meta[name="twitter:image"]');if(og&&og.content)add(new URL(og.content,location.href).href,'Preview picture','');for(const i of d.images){const r=i.getBoundingClientRect();if(r.width<100||r.height<100)continue;const a=i.closest('a');add(i.currentSrc||i.src,i.alt||i.title,a&&a.href)}const m=d.querySelector('main,[role=main]')||d.body,D={u:location.href,t:d.title,s:String(getSelection()||'').trim().slice(0,20000),x:(m.innerText||'').slice(0,60000),i:I,j:[...d.querySelectorAll('script[type="application/ld+json"]')].map((s)=>s.textContent.trim()).join('\n').slice(0,20000)},raw=new TextEncoder().encode(JSON.stringify(D)),b64=(u)=>{let s='';for(let k=0;k<u.length;k+=32768)s+=String.fromCharCode.apply(null,u.subarray(k,k+32768));return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')};if(window.CompressionStream)new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer().then((b)=>go('z'+b64(new Uint8Array(b))));else go('p'+b64(raw))})()`;
     return 'javascript:' + encodeURIComponent(code);
   }
   async function decodeShare(s) {
@@ -5279,10 +5282,12 @@
     const name = `${host} - ${p.title || 'page'}`.replace(/[\\/:*?"<>|\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) + '.md';
     return new File([parts.join('\n\n') + '\n'], name, { type: 'text/markdown' });
   }
+  // The Mac app calls this when the bookmark opened it with a page.
+  window.obotShare = () => S.booted && receiveShare();
   async function receiveShare() {
-    let raw = null;
+    let raw = TAURI ? await invoke('take_share') : null;
     try {
-      raw = sessionStorage.getItem('obot.share');
+      raw = raw || sessionStorage.getItem('obot.share');
       sessionStorage.removeItem('obot.share');
     } catch {}
     if (!raw) return;
@@ -5317,10 +5322,12 @@
     close = openModal(box);
   }
   function shareSection() {
-    const link = shareBookmarklet(S.apiBase || location.origin);
+    const web = shareBookmarklet(S.apiBase || location.origin, false);
+    // Dragged from the Mac app, the bookmark opens the app; anywhere else, oBot in the browser.
+    const toApp = !!TAURI && /Mac/.test(navigator.platform || navigator.userAgent);
     const drag = h(
       'a',
-      { class: 'btn pill share-bm', href: link, draggable: 'true', onclick: (e) => (e.preventDefault(), toast('Drag this button to your web browser’s bookmarks bar')) },
+      { class: 'btn pill share-bm', href: toApp ? shareBookmarklet('', true) : web, draggable: 'true', onclick: (e) => (e.preventDefault(), toast('Drag this button to your web browser’s bookmarks bar')) },
       icon('external', 13),
       'Send to oBot'
     );
@@ -5329,10 +5336,10 @@
       { class: 'set-section' },
       h('div', { class: 'set-head' }, h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, 'Send pages to your Bots'), h('div', { class: 'set-explain' }, 'Some websites block Bots’ browsers. Open the page in your own browser, tap the “Send to oBot” bookmark and pick a Bot: the page’s link, text and pictures are attached to your message.'))),
       card(
-        row('On a computer', drag, 'Drag this button to your browser’s bookmarks bar.'),
-        row('On iPhone or iPad', pillBtn('Copy bookmark', () => copyText(link, 'Bookmark copied')), 'In Safari, bookmark any page, then edit the bookmark: name it “Send to oBot” and paste over its address. On a page, open Bookmarks and tap it.')
+        row(toApp ? 'On this Mac' : 'On a computer', drag, toApp ? 'Drag this button to your browser’s bookmarks bar. Pages you send open here in the oBot app (your browser asks the first time).' : 'Drag this button to your browser’s bookmarks bar.'),
+        row('On iPhone or iPad', pillBtn('Copy bookmark', () => copyText(web, 'Bookmark copied')), 'In Safari, bookmark any page, then edit the bookmark: name it “Send to oBot” and paste over its address. On a page, open Bookmarks and tap it. Pages open in Safari: Apple doesn’t let a link open a Home Screen app.')
       ),
-      note('Use it in a browser where oBot is open. To set one up, open this computer’s oBot address there and pair it with a code from Settings › Computer › Pair a new device.')
+      note(toApp ? 'On iPhone, use it in Safari with oBot paired: open this computer’s oBot address there and pair it with a code from Settings › Computer › Pair a new device.' : 'Use it in a browser where oBot is open. To set one up, open this computer’s oBot address there and pair it with a code from Settings › Computer › Pair a new device.')
     );
   }
 

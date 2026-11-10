@@ -8,6 +8,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::webview::NewWindowResponse;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_notification::NotificationExt;
@@ -16,6 +17,26 @@ use tauri_plugin_notification::NotificationExt;
 #[tauri::command]
 fn notify(app: tauri::AppHandle, title: String, body: String) {
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// A page sent with the "Send to oBot" bookmark (obot://share#<page>) that the window hasn't
+/// taken yet. The page asks for it when it starts and when it's told one arrived.
+static SHARED: Mutex<Option<String>> = Mutex::new(None);
+
+#[tauri::command]
+fn take_share() -> Option<String> {
+    SHARED.lock().ok()?.take()
+}
+
+/// The page part of an obot://share#<page> link (see shareBookmarklet in app.js).
+fn share_of(url: &url::Url) -> Option<String> {
+    let page = url.fragment()?;
+    let ok = url.scheme() == "obot"
+        && url.host_str() == Some("share")
+        && page.len() > 1
+        && page.starts_with(['z', 'p'])
+        && page.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    ok.then(|| page.to_string())
 }
 
 /// Number on the Dock / taskbar icon = unread messages across all bots.
@@ -203,7 +224,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().pubkey(obot_core::update::PUBLIC_KEY).build())
-        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file, app_update_check, app_update_install])
+        .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file, app_update_check, app_update_install, take_share])
         // Menu bar: oBot › Settings… (⌘,) and Connect to Remote Computer…
         .menu(|app| {
             let menu = tauri::menu::Menu::default(app)?;
@@ -252,13 +273,41 @@ fn main() {
             builder.build()?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running oBot");
+        .build(tauri::generate_context!())
+        .expect("error while running oBot")
+        .run(|_app, _event| {
+            // "Send to oBot" in the user's browser opened obot://share#<page> (Info.plist registers
+            // the obot:// scheme): bring the window forward and let the page take it.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &_event {
+                if let Some(page) = urls.iter().find_map(share_of) {
+                    if let Ok(mut s) = SHARED.lock() {
+                        *s = Some(page);
+                    }
+                    if let Some(w) = _app.get_webview_window("main") {
+                        let _ = w.unminimize();
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                        let _ = w.eval("window.obotShare && window.obotShare()");
+                    }
+                }
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn share_links() {
+        let page = |s: &str| share_of(&url::Url::parse(s).unwrap());
+        assert_eq!(page("obot://share#zH4sIAAA-_x").as_deref(), Some("zH4sIAAA-_x"));
+        assert_eq!(page("obot://share#q123"), None);
+        assert_eq!(page("obot://share#z<script>"), None);
+        assert_eq!(page("obot://other#z123"), None);
+        assert_eq!(page("https://share#z123"), None);
+    }
 
     #[test]
     fn config_uses_the_release_key() {

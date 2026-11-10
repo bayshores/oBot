@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser, save files a Bot sent and update the app.",
+  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser, save files a Bot sent, update the app and take pages sent with the Send to oBot bookmark.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
@@ -14,6 +14,7 @@
     "allow-open-url",
     "allow-save-file",
     "allow-app-update-check",
-    "allow-app-update-install"
+    "allow-app-update-install",
+    "allow-take-share"
   ]
 }

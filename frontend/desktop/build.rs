@@ -3,6 +3,6 @@
 // Without this, Tauri refuses these commands from the page (it is served by the built-in local
 // server, which Tauri treats as a remote address).
 fn main() {
-    let commands = tauri_build::AppManifest::new().commands(&["notify", "set_badge", "is_focused", "open_url", "save_file", "app_update_check", "app_update_install"]);
+    let commands = tauri_build::AppManifest::new().commands(&["notify", "set_badge", "is_focused", "open_url", "save_file", "app_update_check", "app_update_install", "take_share"]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(commands)).expect("tauri build step failed");
 }
