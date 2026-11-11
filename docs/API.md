@@ -396,9 +396,23 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 * The message goes to Claude Code as one JSON line on stdin (`--input-format stream-json`). With plain text, Claude Code
   sometimes wrote a different number into its own tool descriptions from one run to the next, and any change there
   makes the model re-read the whole conversation at full price.
-* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` (unless obot-server was started with its own value), so Claude
-  Code summarizes older messages once a conversation reaches about 100k tokens instead of near the model's 1M limit.
-  Every message re-reads the whole conversation, so a long one makes every message cost more.
+* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=150000` (unless obot-server was started with its own value), so Claude
+  Code summarizes older messages once a conversation reaches about 117k tokens (it does so about 33k before the
+  window) instead of near the model's 1M limit. Every message re-reads the whole conversation, so a long one makes
+  every message cost more. A conversation is already about 45k tokens right after a summary, so a smaller window
+  (100k was tried) summarizes every few minutes of work and the Bot loses detail each time.
+* A Bot's main conversation is also summarized while the Bot is idle, 75 seconds before Claude stops keeping its cache
+  (so 3 minutes 45 seconds after its last request with an API key, 58 minutes 45 seconds with a Claude subscription).
+  The first message after a longer pause pays full price to read the whole conversation again. A summary made while
+  the cache is still there is read at the cheap price, and afterwards that first message only reads the summary. oBot
+  runs Claude Code's `/compact` for it, with the instructions the conversation last ran with. It happens only when the
+  conversation has grown by 30,000 tokens or more since its last summary (or since it began), because below that the
+  summary costs about as much as it saves. The Bot doesn't show as working meanwhile. A message for the Bot that
+  arrives during the summary stops it and is answered right away; a routine waits for it. The chat shows a
+  `compacted` event ("Summarized older messages while the Bot was idle …"). Group chats and routines' own
+  conversations are not summarized this way. oBot reads the cache length from the sign-in mode and from Claude Code's
+  own variables when obot-server was started with them (`FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL`,
+  `ENABLE_PROMPT_CACHING_1H`).
 * A routine (and "Test routine") runs in a new, short conversation of its own instead of the Bot's main one, with the
   Bot's current instructions. A routine starts hours after the Bot last ran, when nothing of the main conversation is
   cached any more, so running it there meant re-reading that whole conversation at full price. Its message ends with
@@ -420,7 +434,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 * Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with Claude Code hooks that start the oBot program as
   `<obot> hook stop|precompact|after-ask --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself.
-  * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event.
+  * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event. This also runs before an idle summary (see above).
   * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
   (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.

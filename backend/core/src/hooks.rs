@@ -108,13 +108,15 @@ struct Turn {
 }
 
 /// What the user (or oBot for them) wrote in a transcript entry. Not Claude Code's own entries:
-/// its notes to the model (`isMeta`) and the summary it writes in place of older messages.
+/// its notes to the model (`isMeta`), the summary it writes in place of older messages, and what
+/// it records about a command of its own (oBot's idle summary is "/compact", see runner.rs).
 fn user_text(entry: &Value) -> Option<String> {
     let flag = |name: &str| entry.get(name).and_then(Value::as_bool) == Some(true);
     if entry.get("type").and_then(Value::as_str) != Some("user") || flag("isMeta") || flag("isCompactSummary") {
         return None;
     }
     match entry.pointer("/message/content") {
+        Some(Value::String(s)) if s.starts_with("<command-name>") || s.starts_with("<local-command-stdout>") => None,
         Some(Value::String(s)) => Some(s.clone()),
         Some(Value::Array(items)) => {
             let texts: Vec<&str> = items
@@ -293,6 +295,10 @@ mod tests {
         let summary = json!({"type": "user", "isCompactSummary": true, "message": {"content": "This session is being continued"}});
         assert_eq!(user_text(&summary), None);
         assert_eq!(user_text(&json!({"type": "user", "message": {"content": "hi"}})), Some("hi".to_string()));
+        let command = json!({"type": "user", "message": {"content": "<command-name>/compact</command-name>\n<command-args></command-args>"}});
+        assert_eq!(user_text(&command), None);
+        let printed = json!({"type": "user", "message": {"content": "<local-command-stdout>Compacted </local-command-stdout>"}});
+        assert_eq!(user_text(&printed), None);
     }
 
     #[test]

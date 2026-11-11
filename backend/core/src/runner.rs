@@ -239,6 +239,98 @@ fn side_news_note(news: &str) -> String {
     )
 }
 
+/// About the Bot's main conversation, as "<size> <asked> <start>": its size in tokens at its newest
+/// request (0 = it was just summarized), when that request started (unix ms), and its size right
+/// after its last summary (or when it began).
+const CONTEXT: &str = "context:";
+/// Tokens a conversation must have grown since its last summary to be summarized while idle. With
+/// less, making the summary costs about as much as it saves.
+const IDLE_SUMMARY_GROWTH: u64 = 30_000;
+/// The size a conversation is taken to have started with when that was never measured (what the
+/// Bots' conversations usually are right after a summary, see `COMPACT_WINDOW`).
+const USUAL_START: u64 = 45_000;
+/// The idle summary starts this long before the conversation's cache ends, so its request still
+/// arrives in time after Claude Code has started.
+const IDLE_SUMMARY_LEAD_MS: i64 = 75_000;
+/// With less than this left, the request could arrive after the cache ended and cost full price.
+const IDLE_SUMMARY_LATEST_MS: i64 = 30_000;
+
+/// What `CONTEXT` holds for a Bot: (size, asked, start). All 0 when nothing was saved yet.
+fn saved_context(state: &Shared, bot_id: &str) -> (u64, i64, u64) {
+    let saved = state.db.kv_get(&format!("{CONTEXT}{bot_id}")).unwrap_or_default();
+    let mut parts = saved.split(' ');
+    let mut next = || parts.next().unwrap_or("");
+    (next().parse().unwrap_or(0), next().parse().unwrap_or(0), next().parse().unwrap_or(0))
+}
+
+/// How long to wait (ms) before summarizing an idle conversation that is `size` tokens now, was
+/// `start` tokens after its last summary (0 = not measured) and whose newest request started at
+/// `asked`. `None` = don't: it hasn't grown enough, or its cache is (almost) gone.
+fn idle_summary_in(size: u64, start: u64, asked: i64, now: i64, cache_ms: i64) -> Option<i64> {
+    let start = if start == 0 { USUAL_START } else { start };
+    let ends = asked + cache_ms;
+    (size >= start + IDLE_SUMMARY_GROWTH && now <= ends - IDLE_SUMMARY_LATEST_MS).then(|| (ends - IDLE_SUMMARY_LEAD_MS - now).max(0))
+}
+
+/// Returns when the Bot's main conversation should be summarized because nothing was sent to it
+/// and its cache is about to end. Never returns when there's nothing to gain.
+async fn idle_summary_due(state: &Shared, bot_id: &str) {
+    let (size, asked, start) = saved_context(state, bot_id);
+    let has_conversation = state.db.get_bot(bot_id).ok().flatten().is_some_and(|b| !b.session_id.is_empty());
+    let cache = cache_ms(&*state.config.read().await);
+    let wait = idle_summary_in(size, start, asked, now_ms(), cache).filter(|_| has_conversation);
+    match wait {
+        Some(ms) => tokio::time::sleep(Duration::from_millis(ms as u64)).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Summarize the Bot's main conversation while it is idle, just before its cache ends.
+///
+/// Claude keeps a conversation cheap to continue only for `cache_ms` after its last request. The
+/// first message after a longer pause pays full price to read the whole conversation again (up to
+/// `COMPACT_WINDOW` tokens). A summary made while the cache is still there is read at the cheap
+/// price, and afterwards the conversation is only the summary, so that first message is cheap too.
+/// The Bot keeps its memory log and the summary, and loses the exact wording of older messages.
+///
+/// The Bot doesn't show as working meanwhile. Returns the turns that arrived while it ran: one for
+/// the main conversation stops the summary (the cache is still there, so it isn't needed any more),
+/// a routine or group turn waits for it.
+async fn summarize_idle(state: &Shared, bot_id: &str, rx: &mut mpsc::UnboundedReceiver<Job>) -> Vec<Job> {
+    let stop = Arc::new(Notify::new());
+    let steer = Arc::new(AtomicBool::new(false));
+    // "finishing" first: the Bot never counts as busy, so a new message isn't marked "Queued".
+    state.finishing.lock().unwrap_or_else(|e| e.into_inner()).insert(bot_id.to_string());
+    state.runs.lock().await.insert(bot_id.to_string(), RunHandle { stop: stop.clone(), steer: steer.clone() });
+    let mut arrived = vec![];
+    {
+        let run = drive(state, bot_id, None, false, true, "/compact", stop.clone(), Arc::new(AtomicBool::new(false)), steer, true);
+        tokio::pin!(run);
+        loop {
+            tokio::select! {
+                done = &mut run => {
+                    if let Err(e) = done {
+                        tracing::warn!("bot {bot_id}: the idle summary didn't run: {e}");
+                    }
+                    break;
+                }
+                job = rx.recv() => {
+                    let for_main = job.as_ref().is_none_or(|j| j.group.is_none() && !j.side);
+                    arrived.extend(job);
+                    if for_main {
+                        stop.notify_one();
+                        let _ = (&mut run).await;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    state.runs.lock().await.remove(bot_id);
+    state.finishing.lock().unwrap_or_else(|e| e.into_inner()).remove(bot_id);
+    arrived
+}
+
 async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<Job>) {
     let mut steered = false;
     // oBot's own turns (wake-ups, routines...) that were waiting when the user pressed Stop.
@@ -246,9 +338,17 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
     loop {
         let mut jobs = std::mem::take(&mut carry);
         if jobs.is_empty() {
-            match rx.recv().await {
-                Some(j) => jobs.push(j),
-                None => break,
+            tokio::select! {
+                job = rx.recv() => match job {
+                    Some(j) => jobs.push(j),
+                    None => break,
+                },
+                _ = idle_summary_due(&state, &bot_id) => {
+                    jobs = summarize_idle(&state, &bot_id, &mut rx).await;
+                    if jobs.is_empty() {
+                        continue;
+                    }
+                }
             }
         }
         while let Ok(more) = rx.try_recv() {
@@ -564,7 +664,7 @@ async fn run_turn(
     let mut attempt = 0;
     let mut current = prompt.to_string();
     let failure = loop {
-        let outcome = match drive(state, bot_id, group, side, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
+        let outcome = match drive(state, bot_id, group, side, false, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
             Ok(o) => o,
             Err(e) => Outcome::Failed(Failure::from_text(&e.to_string(), true)),
         };
@@ -957,10 +1057,18 @@ fn persona_keys(bot: &str, group: Option<&str>) -> (String, String, String) {
 }
 
 /// How long Claude keeps a conversation's cache after its last request, in milliseconds: 5 minutes
-/// with an API key (1 hour if the user turned that on), 1 hour with a Claude subscription.
+/// with an API key, 1 hour with a Claude subscription. Someone who chose a length for obot-server
+/// with Claude Code's own variables gets that one (same order as Claude Code reads them).
 fn cache_ms(cfg: &Config) -> i64 {
-    let short = uses_api_key(cfg) && std::env::var_os("ENABLE_PROMPT_CACHING_1H").is_none();
-    if short { 5 * 60_000 } else { 60 * 60_000 }
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let on = |name: &str| !matches!(var(name).as_str(), "" | "0" | "false");
+    let hour = match var("CLAUDE_CODE_PROMPT_CACHE_TTL").as_str() {
+        _ if on("FORCE_PROMPT_CACHING_5M") => false,
+        "5m" => false,
+        "1h" => true,
+        _ => on("ENABLE_PROMPT_CACHING_1H") || !uses_api_key(cfg),
+    };
+    if hour { 60 * 60_000 } else { 5 * 60_000 }
 }
 
 /// Runs are paid with the user's API key (not this computer's Claude subscription login). A locked
@@ -981,8 +1089,16 @@ const MAX_CHANGE_NOTE: usize = 6000;
 fn stdin_message(text: &str) -> String {
     format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": text } }))
 }
-/// Tokens a conversation may reach before Claude Code summarizes its older messages.
-const COMPACT_WINDOW: u32 = 100_000;
+/// Tokens a conversation may reach before Claude Code summarizes its older messages. Claude Code
+/// does it about 33,000 tokens earlier, so at about 117,000.
+///
+/// Measured on six Bots' real conversations (3,350 requests, API key): right after a summary a
+/// conversation is already about 45,000 tokens (Claude Code's instructions and tools, the Bot's
+/// instructions and memory, the summary, the newest messages kept as they were). With 100,000 here
+/// a summary came every 22,000 tokens, about every 15 looks at a web page: 331 summaries, each one
+/// losing detail and costing a request. 150,000 with the idle summary above gave 112 summaries and
+/// the lowest cost (75% of what 200,000 without it cost; 100,000 was 80%).
+const COMPACT_WINDOW: u32 = 150_000;
 
 /// What changed in a Bot's instructions, as a note for its next message ("" = nothing).
 ///
@@ -1085,6 +1201,7 @@ fn build_command(
     bot: &Bot,
     group: Option<&str>,
     side: bool,
+    tidy: bool,
     cfg: &Config,
     claude: &PathBuf,
     resume: bool,
@@ -1115,6 +1232,10 @@ fn build_command(
     // A routine's conversation is new, so it gets the current instructions as they are.
     let (persona_text, change_note) = if side {
         (current, String::new())
+    } else if tidy {
+        // An idle summary is only cheap with exactly the instructions the conversation last ran with.
+        let snap = state.db.kv_get(&persona_keys(&bot.id, group).0).filter(|s| !s.is_empty());
+        (snap.ok_or_else(|| anyhow!("the conversation's instructions weren't saved"))?, String::new())
     } else {
         stable_persona(state, bot, group, current, resume && !session.is_empty(), cache_ms(cfg))
     };
@@ -1349,6 +1470,8 @@ async fn drive(
     bot_id: &str,
     group: Option<&str>,
     side: bool,
+    // An idle summary (see `summarize_idle`): `prompt` is the Claude Code command, sent as it is.
+    tidy: bool,
     prompt: &str,
     stop: Arc<Notify>,
     stopped: Arc<AtomicBool>,
@@ -1365,7 +1488,7 @@ async fn drive(
         )
     })?;
 
-    let (mut cmd, change_note) = build_command(state, &bot, group, side, &cfg, &claude, resume)?;
+    let (mut cmd, change_note) = build_command(state, &bot, group, side, tidy, &cfg, &claude, resume)?;
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("Couldn't start Claude Code ({}): {e}", claude.display()))?;
@@ -1373,7 +1496,8 @@ async fn drive(
 
     if let Some(mut stdin) = child.stdin.take() {
         // If Claude Code exits right away, its error output says why; the write error doesn't.
-        let _ = stdin.write_all(stdin_message(&with_time(&format!("{change_note}{prompt}"))).as_bytes()).await;
+        let text = if tidy { prompt.to_string() } else { with_time(&format!("{change_note}{prompt}")) };
+        let _ = stdin.write_all(stdin_message(&text).as_bytes()).await;
         stdin.shutdown().await.ok();
         drop(stdin);
     }
@@ -1400,7 +1524,10 @@ async fn drive(
 
     let stdout = child.stdout.take().ok_or_else(|| anyhow!("no output from Claude Code"))?;
     let mut lines = BufReader::new(stdout).lines();
-    let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string), side);
+    let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string), side, tidy);
+    let (old_size, _, old_start) = saved_context(state, bot_id);
+    // The first request of a new or just summarized conversation shows the size it starts with.
+    turn.fresh = old_size == 0 || !resume || bot.session_id.is_empty();
     let mut deadline: Option<tokio::time::Instant> = None;
 
     loop {
@@ -1439,6 +1566,22 @@ async fn drive(
     if !side {
         persona_used(state, bot_id, group);
     }
+    if group.is_none() && !side {
+        // An idle summary that failed or was stopped isn't tried again: the time of the newest
+        // request is cleared (the next one sets it). Nothing was summarized, so the sizes stay.
+        let context = if tidy { turn.context.or(Some((old_size, 0))) } else { turn.context };
+        if let Some((size, asked)) = context {
+            let start = turn.start.unwrap_or(old_start);
+            state.db.kv_set(&format!("{CONTEXT}{bot_id}"), &format!("{size} {asked} {start}"));
+        }
+    }
+    if tidy {
+        // Nothing to show or try again: without the summary, the next message costs what it always did.
+        if let Some(e) = turn.error.as_deref().filter(|_| !stopped.load(Ordering::SeqCst)) {
+            tracing::warn!("bot {bot_id}: the idle summary failed: {}", truncate_chars(e, 300));
+        }
+        return Ok(Outcome::Done);
+    }
 
     if resume && (turn.resume_failed || (!turn.got_result && resume_failed(&stderr))) {
         turn.cleanup();
@@ -1467,6 +1610,16 @@ struct Turn {
     group: Option<String>,
     /// A routine in its own conversation (see `enqueue_side`).
     side: bool,
+    /// An idle summary (see `summarize_idle`): the chat only gets the line saying it happened.
+    tidy: bool,
+    /// When the newest request to the model started (unix ms).
+    asked: i64,
+    /// The conversation's size in tokens at its newest request, and when that request started.
+    context: Option<(u64, i64)>,
+    /// The next request is the first of a new or just summarized conversation.
+    fresh: bool,
+    /// The conversation's size at such a first request, if this run had one.
+    start: Option<u64>,
     cur_api_msg: String,
     /// content-block index -> message id (text blocks of the current model message)
     blocks: HashMap<u64, String>,
@@ -1596,12 +1749,17 @@ fn result_text(content: &Value) -> String {
 }
 
 impl Turn {
-    fn new(state: Shared, bot_id: String, group: Option<String>, side: bool) -> Self {
+    fn new(state: Shared, bot_id: String, group: Option<String>, side: bool, tidy: bool) -> Self {
         Self {
             state,
             chat: group.clone().unwrap_or_else(|| bot_id.clone()),
             group,
             side,
+            tidy,
+            asked: 0,
+            context: None,
+            fresh: false,
+            start: None,
             bot_id,
             cur_api_msg: String::new(),
             blocks: HashMap::new(),
@@ -1651,15 +1809,21 @@ impl Turn {
                     if !self.side {
                         retell_persona(&self.state, &self.bot_id, self.group.as_deref());
                     }
-                    add_event(
-                        &self.state,
-                        &self.chat,
-                        "Summarized older messages to make room. The Bot still has its memory.",
-                        json!({"kind": "compacted"}),
-                    );
+                    self.context = Some((0, now_ms()));
+                    self.fresh = true;
+                    let text = if self.tidy {
+                        let tokens = |k: &str| v.pointer(&format!("/compact_metadata/{k}")).and_then(Value::as_u64).unwrap_or(0);
+                        tracing::info!("bot {}: summarized its idle conversation ({} to {} tokens)", self.bot_id, tokens("pre_tokens"), tokens("post_tokens"));
+                        "Summarized older messages while the Bot was idle, so the next message costs less. The Bot still has its memory."
+                    } else {
+                        "Summarized older messages to make room. The Bot still has its memory."
+                    };
+                    add_event(&self.state, &self.chat, text, json!({"kind": "compacted"}));
                 }
                 _ => {}
             },
+            // An idle summary writes no reply; what Claude Code prints about its command isn't one.
+            "stream_event" | "assistant" | "user" if self.tidy => {}
             "stream_event" => self.stream_event(&v["event"]).await,
             "assistant" => self.assistant(&v["message"]),
             "user" => {
@@ -1694,6 +1858,7 @@ impl Turn {
         let idx = ev.get("index").and_then(Value::as_u64).unwrap_or(0);
         match ev.get("type").and_then(Value::as_str).unwrap_or("") {
             "message_start" => {
+                self.asked = now_ms();
                 self.flush_held().await;
                 self.cur_api_msg = ev.pointer("/message/id").and_then(Value::as_str).unwrap_or("").to_string();
                 self.blocks.clear();
@@ -1825,6 +1990,14 @@ impl Turn {
 
     fn assistant(&mut self, msg: &Value) {
         let api_id = msg.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+        let used = |k: &str| msg.pointer(&format!("/usage/{k}")).and_then(Value::as_u64).unwrap_or(0);
+        let size = used("input_tokens") + used("cache_read_input_tokens") + used("cache_creation_input_tokens") + used("output_tokens");
+        if size > 0 {
+            if std::mem::take(&mut self.fresh) {
+                self.start = Some(size);
+            }
+            self.context = Some((size, if self.asked > 0 { self.asked } else { now_ms() }));
+        }
         let Some(blocks) = msg.get("content").and_then(Value::as_array) else { return };
         let synthetic = msg.get("model").and_then(Value::as_str) == Some("<synthetic>");
         for b in blocks {
@@ -2093,6 +2266,29 @@ mod tests {
         assert_eq!(persona_plan("a", "a", "a\nb", false, &none), None);
         assert_eq!(persona_plan("", "", "a", true, &none), None);
         assert_eq!(persona_plan("a", "a", &"x\n".repeat(MAX_CHANGE_NOTE), true, &none), None);
+    }
+
+    #[test]
+    fn idle_conversations_are_summarized_just_before_the_cache_ends() {
+        let (min, five) = (60_000, 5 * 60_000);
+        // A conversation that grew a lot: 75 seconds before its 5 minutes are over.
+        assert_eq!(idle_summary_in(80_000, 40_000, 0, 0, five), Some(225_000));
+        assert_eq!(idle_summary_in(80_000, 40_000, 10 * min, 12 * min, five), Some(105_000));
+        // The Bot was busy with a routine until then: right away, while there's still time.
+        assert_eq!(idle_summary_in(80_000, 40_000, 0, 4 * min + 20_000, five), Some(0));
+        // Too late: the request could arrive after the cache ended.
+        assert_eq!(idle_summary_in(80_000, 40_000, 0, 4 * min + 40_000, five), None);
+        assert_eq!(idle_summary_in(80_000, 40_000, 0, 20 * min, five), None);
+        // Not grown enough since its last summary, or just summarized.
+        assert_eq!(idle_summary_in(80_000, 55_000, 0, 0, five), None);
+        assert_eq!(idle_summary_in(0, 40_000, 0, 0, five), None);
+        // Its starting size was never measured: taken as the usual one.
+        assert_eq!(idle_summary_in(USUAL_START + IDLE_SUMMARY_GROWTH, 0, 0, 0, five), Some(225_000));
+        assert_eq!(idle_summary_in(USUAL_START + IDLE_SUMMARY_GROWTH - 1, 0, 0, 0, five), None);
+        // A Claude subscription keeps the cache for an hour.
+        assert_eq!(idle_summary_in(80_000, 40_000, 0, 0, 60 * min), Some(58 * min + 45_000));
+        // A summary that failed or was stopped clears the time of the newest request: not again.
+        assert_eq!(idle_summary_in(80_000, 40_000, 0, 1_794_000_000_000, five), None);
     }
 
     fn job(p: &str, user: bool, busy: bool) -> Job {
