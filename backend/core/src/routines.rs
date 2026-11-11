@@ -183,6 +183,8 @@ pub fn routine_prompt(r: &Routine, test: bool) -> String {
          3. Then send the user only what's worth their attention: short, with the most important thing first. If \
             nothing changed or matters, say so in one line.\n\
          4. Don't create, change or delete routines or Bots during a routine unless the task says to.\n\
+         5. Each routine run is its own conversation, separate from your main chat with the user. Later runs and \
+            your main conversation only know what you post in the chat now or save with remember.\n\
          </instructions>",
         task = r.prompt.trim(),
         test = if test { " (the user asked for a test run now)" } else { "" },
@@ -246,8 +248,13 @@ pub fn spawn_scheduler(state: Shared) {
                     &format!("{label}: {}", r.name),
                     json!({"kind": "routine-run", "routine_id": r.id}),
                 );
-                let prompt = if is_wakeup { wakeup_prompt(&r) } else { routine_prompt(&r, false) };
-                runner::enqueue(&state, &r.bot_id, prompt).await;
+                // A check-in the Bot set for itself continues what it was doing, so it runs in the
+                // main conversation. A routine is a task of its own and gets its own conversation.
+                if is_wakeup {
+                    runner::enqueue(&state, &r.bot_id, wakeup_prompt(&r)).await;
+                } else {
+                    runner::enqueue_side(&state, &r.bot_id, routine_prompt(&r, false)).await;
+                }
             }
         }
     });

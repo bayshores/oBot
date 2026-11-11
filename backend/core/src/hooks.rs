@@ -107,8 +107,11 @@ struct Turn {
     tools: Vec<String>,
 }
 
+/// What the user (or oBot for them) wrote in a transcript entry. Not Claude Code's own entries:
+/// its notes to the model (`isMeta`) and the summary it writes in place of older messages.
 fn user_text(entry: &Value) -> Option<String> {
-    if entry.get("type").and_then(Value::as_str) != Some("user") || entry.get("isMeta").and_then(Value::as_bool) == Some(true) {
+    let flag = |name: &str| entry.get(name).and_then(Value::as_bool) == Some(true);
+    if entry.get("type").and_then(Value::as_str) != Some("user") || flag("isMeta") || flag("isCompactSummary") {
         return None;
     }
     match entry.pointer("/message/content") {
@@ -167,6 +170,20 @@ fn stop_check(t: &Turn) -> Option<String> {
     })
 }
 
+/// The user's own words in a message, without the notes oBot put above them: one-line ones like
+/// "[oBot: It's Friday 2026-11-06 20:01 now.]", and the changed-instructions and routine-posts notes,
+/// which run over several lines and end with a line that is just "]". (Chats from before the rename
+/// use "[openbot".)
+fn own_words(mut t: &str) -> &str {
+    loop {
+        t = t.trim_start();
+        let Some(note) = t.strip_prefix("[oBot").or_else(|| t.strip_prefix("[openbot")) else { return t };
+        let long = note.starts_with(": Your setup changed") || note.starts_with(": Routines posted");
+        let end = if long { "\n]\n" } else { "\n" };
+        t = t.split_once(end).map(|x| x.1).unwrap_or("");
+    }
+}
+
 /// A memory log entry with the user's latest requests, or None if there's nothing worth saving.
 fn precompact_fact(transcript: &str) -> Option<String> {
     let requests: Vec<String> = transcript
@@ -175,16 +192,12 @@ fn precompact_fact(transcript: &str) -> Option<String> {
         .filter_map(|e| user_text(&e))
         .map(|t| {
             // oBot's own wake-ups and routines are tagged; keep only a short label for them.
-            // "[oBot: ...]" is a note oBot put above the user's own words: keep the words.
-            // (Chats from before the rename use "<openbot" and "[openbot".)
+            // (Chats from before the rename use "<openbot".)
             let t = t.trim();
             if t.starts_with("<obot") || t.starts_with("<openbot") {
                 crate::util::truncate_chars(t.lines().next().unwrap_or(""), 80)
-            } else if t.starts_with("[oBot") || t.starts_with("[openbot") {
-                let rest = t.split_once('\n').map(|x| x.1).unwrap_or("");
-                crate::util::truncate_chars(&rest.replace('\n', " "), 160)
             } else {
-                crate::util::truncate_chars(&t.replace('\n', " "), 160)
+                crate::util::truncate_chars(&own_words(t).replace('\n', " "), 160)
             }
         })
         .filter(|t| !t.trim().is_empty())
@@ -273,5 +286,26 @@ mod tests {
     fn precompact_keeps_latest_requests() {
         let f = precompact_fact(&transcript("x", &[])).unwrap();
         assert!(f.contains("old request | track my package"), "{f}");
+    }
+
+    #[test]
+    fn claude_codes_own_summary_is_not_a_request() {
+        let summary = json!({"type": "user", "isCompactSummary": true, "message": {"content": "This session is being continued"}});
+        assert_eq!(user_text(&summary), None);
+        assert_eq!(user_text(&json!({"type": "user", "message": {"content": "hi"}})), Some("hi".to_string()));
+    }
+
+    #[test]
+    fn notes_above_a_message_are_not_the_request() {
+        assert_eq!(own_words("plain"), "plain");
+        assert_eq!(own_words("[oBot: It's Friday 2026-11-06 20:01 now.]\nbuy socks"), "buy socks");
+        let noted = "[oBot: It's Friday 2026-11-06 20:01 now.]\n[oBot: Your setup changed since this conversation \
+                     started. These lines are now part of your instructions:\n- [m1|user] Likes teal\nThese lines no \
+                     longer apply:\n- - [m2|user] Old\n]\nbuy socks\nin blue";
+        assert_eq!(own_words(noted), "buy socks\nin blue");
+        assert_eq!(own_words("[openbot: It's Friday now.]\n"), "");
+        let news = "[oBot: Routines posted since your last turn in this conversation. The user may be answering \
+                    one:\n[Mon 2026-11-09 08:00] You: Two new emails.\nReply to Ana?\n]\nyes, reply";
+        assert_eq!(own_words(news), "yes, reply");
     }
 }

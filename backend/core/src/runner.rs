@@ -29,27 +29,38 @@ use crate::util::{hide_console, new_id, now_ms, preview, truncate_chars};
 /// Queue a turn oBot starts itself (routine, wake-up, background job...). Runs after anything
 /// already waiting.
 pub async fn enqueue(state: &Shared, bot_id: &str, prompt: String) {
-    push(state, bot_id, prompt, None, None, false).await;
+    push(state, bot_id, prompt, None, None, false, false).await;
+}
+
+/// Queue a routine. It runs in a new, short conversation of its own, not the Bot's main one.
+///
+/// A routine starts hours after the Bot last ran, when nothing of the main conversation is cached
+/// any more, so running it there meant paying full price to re-read that whole conversation (up to
+/// `COMPACT_WINDOW` tokens) for a task that doesn't need it. On its own it reads only the Bot's
+/// instructions, the task and the last few chat messages (`side_prompt`). The main conversation
+/// is told what the routine posted with its next message (`take_side_news`).
+pub async fn enqueue_side(state: &Shared, bot_id: &str, prompt: String) {
+    push(state, bot_id, prompt, None, None, false, true).await;
 }
 
 /// An automatic note about something the Bot posted (a form it sent, say): goes to the Bot that
 /// posted it, in the chat it's in (its own, or a group).
 pub async fn enqueue_reply(state: &Shared, m: &Message, prompt: String) {
     match m.meta.get("speaker").and_then(Value::as_str) {
-        Some(bot) => push(state, bot, prompt, None, Some(m.bot_id.clone()), false).await,
-        None => push(state, &m.bot_id, prompt, None, None, false).await,
+        Some(bot) => push(state, bot, prompt, None, Some(m.bot_id.clone()), false, false).await,
+        None => push(state, &m.bot_id, prompt, None, None, false, false).await,
     };
 }
 
 /// Give a Bot a turn in a group chat (see group.rs). It waits behind the Bot's other work.
 pub async fn enqueue_group(state: &Shared, bot_id: &str, group_id: &str, winding_down: bool) {
-    push(state, bot_id, String::new(), None, Some(group_id.to_string()), winding_down).await;
+    push(state, bot_id, String::new(), None, Some(group_id.to_string()), winding_down, false).await;
 }
 
 /// Queue the user's chat message. Returns true when the bot is busy, so the message waits (it's
 /// marked "Queued" in the chat and can be sent right away with `steer`).
 pub async fn enqueue_user(state: &Shared, bot_id: &str, prompt: String, msg_id: &str) -> bool {
-    push(state, bot_id, prompt, Some(msg_id.to_string()), None, false).await
+    push(state, bot_id, prompt, Some(msg_id.to_string()), None, false, false).await
 }
 
 type WorkerStart = (Shared, String, mpsc::UnboundedReceiver<Job>);
@@ -69,7 +80,15 @@ pub fn start_workers() {
     });
 }
 
-async fn push(state: &Shared, bot_id: &str, prompt: String, user_msg: Option<String>, group: Option<String>, winding_down: bool) -> bool {
+async fn push(
+    state: &Shared,
+    bot_id: &str,
+    prompt: String,
+    user_msg: Option<String>,
+    group: Option<String>,
+    winding_down: bool,
+    side: bool,
+) -> bool {
     if state.db.get_bot(bot_id).ok().flatten().is_some_and(|b| b.is_group()) {
         // A group chat isn't a Bot; its Bots take turns (group.rs).
         tracing::warn!("ignored a turn queued for group chat {bot_id}");
@@ -95,7 +114,7 @@ async fn push(state: &Shared, bot_id: &str, prompt: String, user_msg: Option<Str
         if let (true, Some(id)) = (busy, user_msg.as_deref()) {
             mark_queued(state, id, true, false);
         }
-        let _ = tx.send(Job { prompt, user_msg, while_busy: busy, group, winding_down });
+        let _ = tx.send(Job { prompt, user_msg, while_busy: busy, group, winding_down, side });
     }
     busy
 }
@@ -141,6 +160,84 @@ fn merge(jobs: &[Job], steered: bool) -> String {
 }
 
 const LAST_PROMPT: &str = "last_prompt:";
+/// "1" when the last turn was a routine in its own conversation, so "Try again" runs it there too.
+const LAST_SIDE: &str = "last_side:";
+/// The conversation of the routine turn that is running (only kept to continue it after an error).
+const SIDE_SESSION: &str = "side_session:";
+/// What routines posted in the chat since the main conversation's last turn.
+const SIDE_NEWS: &str = "side_news:";
+/// Most characters of routine posts the main conversation is told about (the newest are kept).
+const MAX_SIDE_NEWS: usize = 6000;
+
+/// The chat messages a turn can be told about: what the user wrote and what the Bot answered or asked.
+fn said(m: &Message) -> Option<(&'static str, String)> {
+    let text = match m.role.as_str() {
+        "user" | "bot" => m.text.trim().to_string(),
+        "widget" => m.meta.get("question").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+        _ => String::new(),
+    };
+    let who = if m.role == "user" { "User" } else { "You" };
+    (!text.is_empty()).then_some((who, text))
+}
+
+fn said_line(m: &Message, max: usize) -> Option<String> {
+    let (who, text) = said(m)?;
+    let at = crate::util::local_time(m.created_at).format("%a %Y-%m-%d %H:%M");
+    Some(format!("[{at}] {who}: {}\n", truncate_chars(&text, max)))
+}
+
+/// A routine's message for its own conversation: the task, then the last few messages of the Bot's
+/// chat, so it knows what it reported last time and what the user said about it.
+fn side_prompt(state: &Shared, bot_id: &str, prompt: &str) -> String {
+    let recent = state.db.list_messages(bot_id, None, 80).unwrap_or_default();
+    let lines: Vec<String> = recent.iter().filter_map(|m| said_line(m, 700)).collect();
+    if lines.is_empty() {
+        return prompt.to_string();
+    }
+    let from = lines.len().saturating_sub(8);
+    format!(
+        "{prompt}\n\n<recent_chat>\nThe last messages in your chat with the user, oldest first. They are background \
+         only: this routine runs in its own conversation, so you don't have the rest of the chat.\n{}</recent_chat>",
+        lines[from..].concat()
+    )
+}
+
+/// After a routine's turn: keep what it posted in the chat, for the main conversation's next turn.
+fn add_side_news(state: &Shared, bot_id: &str, since: i64) {
+    let recent = state.db.list_messages(bot_id, None, 80).unwrap_or_default();
+    let posted: String = recent.iter().filter(|m| m.created_at >= since && m.role != "user").filter_map(|m| said_line(m, 1500)).collect();
+    if posted.is_empty() {
+        return;
+    }
+    let key = format!("{SIDE_NEWS}{bot_id}");
+    let news = format!("{}{posted}", state.db.kv_get(&key).unwrap_or_default());
+    state.db.kv_set(&key, newest_lines(&news, MAX_SIDE_NEWS));
+}
+
+/// The end of `text`, at most `max` characters long, starting at the beginning of a line.
+fn newest_lines(text: &str, max: usize) -> &str {
+    let Some((cut, _)) = text.char_indices().rev().nth(max) else { return text };
+    text[cut..].split_once('\n').map(|x| x.1).unwrap_or("")
+}
+
+/// A note for the main conversation about what the Bot's routines posted since its last turn ("" =
+/// nothing). The user may be answering one of those posts, and the main conversation never saw them.
+fn take_side_news(state: &Shared, bot_id: &str) -> String {
+    let key = format!("{SIDE_NEWS}{bot_id}");
+    let news = state.db.kv_get(&key).unwrap_or_default();
+    if news.is_empty() {
+        return news;
+    }
+    state.db.kv_set(&key, "");
+    side_news_note(&news)
+}
+
+fn side_news_note(news: &str) -> String {
+    format!(
+        "[oBot: Routines posted since your last turn in this conversation. They run in their own conversation, so \
+         this is the first you see of it here. The user read these posts in this chat and may be answering one:\n{news}]\n"
+    )
+}
 
 async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<Job>) {
     let mut steered = false;
@@ -157,9 +254,10 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         while let Ok(more) = rx.try_recv() {
             jobs.push(more);
         }
-        // One chat per turn: the Bot's own chat or one group. The rest waits for the next turn.
-        let group = jobs[0].group.clone();
-        let (now, later): (Vec<Job>, Vec<Job>) = jobs.into_iter().partition(|j| j.group == group);
+        // One conversation per turn: the Bot's main one, its routines' or one group's. The rest
+        // waits for the next turn.
+        let (group, side) = (jobs[0].group.clone(), jobs[0].side);
+        let (now, later): (Vec<Job>, Vec<Job>) = jobs.into_iter().partition(|j| j.group == group && j.side == side);
         carry.extend(later);
         let jobs = now;
         if let Some(g) = &group {
@@ -173,7 +271,7 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
             };
             let stopped = Arc::new(AtomicBool::new(false));
             let steer = Arc::new(AtomicBool::new(false));
-            run_turn(&state, &bot_id, Some(g), &prompt, false, stopped.clone(), steer.clone()).await;
+            run_turn(&state, &bot_id, Some(g), false, &prompt, false, stopped.clone(), steer.clone()).await;
             steered = false;
             if stopped.load(Ordering::SeqCst) && !steer.load(Ordering::SeqCst) {
                 // Stop in the group also cancels this Bot's other waiting turns there.
@@ -187,12 +285,19 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         for id in jobs.iter().filter_map(|j| j.user_msg.as_deref()) {
             mark_queued(&state, id, false, false);
         }
-        let prompt = merge(&jobs, steered);
+        let mut prompt = merge(&jobs, steered);
+        if !side {
+            prompt = format!("{}{prompt}", take_side_news(&state, &bot_id));
+        }
         let from_user = jobs.iter().any(|j| j.user_msg.is_some());
         state.db.kv_set(&format!("{LAST_PROMPT}{bot_id}"), &prompt);
+        state.db.kv_set(&format!("{LAST_SIDE}{bot_id}"), if side { "1" } else { "" });
+        if side {
+            prompt = side_prompt(&state, &bot_id, &prompt);
+        }
         let stopped = Arc::new(AtomicBool::new(false));
         let steer = Arc::new(AtomicBool::new(false));
-        run_turn(&state, &bot_id, None, &prompt, from_user, stopped.clone(), steer.clone()).await;
+        run_turn(&state, &bot_id, None, side, &prompt, from_user, stopped.clone(), steer.clone()).await;
         steered = steer.load(Ordering::SeqCst);
         if stopped.load(Ordering::SeqCst) && !steered {
             // "Stop" also throws away the user's messages queued behind the current turn. oBot's
@@ -248,7 +353,8 @@ pub async fn retry(state: &Shared, bot_id: &str) -> Result<(), String> {
     }
     let prompt = state.db.kv_get(&format!("{LAST_PROMPT}{bot_id}")).ok_or("There's nothing to try again yet.")?;
     add_event(state, bot_id, "Trying again", json!({"kind": "retry"}));
-    enqueue(state, bot_id, retry_prompt(&prompt)).await;
+    let side = state.db.kv_get(&format!("{LAST_SIDE}{bot_id}")).is_some_and(|v| v == "1");
+    push(state, bot_id, retry_prompt(&prompt), None, None, false, side).await;
     Ok(())
 }
 
@@ -429,6 +535,7 @@ async fn run_turn(
     state: &Shared,
     bot_id: &str,
     group: Option<&str>,
+    side: bool,
     prompt: &str,
     from_user: bool,
     stopped: Arc<AtomicBool>,
@@ -437,6 +544,10 @@ async fn run_turn(
     // Where this turn's messages go.
     let chat = group.unwrap_or(bot_id);
     let started = now_ms();
+    if side {
+        // A routine starts a new conversation every time.
+        state.db.kv_set(&format!("{SIDE_SESSION}{bot_id}"), "");
+    }
     if let Some(g) = group {
         state.group_turns.lock().unwrap_or_else(|e| e.into_inner()).insert(bot_id.to_string(), g.to_string());
     }
@@ -453,12 +564,17 @@ async fn run_turn(
     let mut attempt = 0;
     let mut current = prompt.to_string();
     let failure = loop {
-        let outcome = match drive(state, bot_id, group, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
+        let outcome = match drive(state, bot_id, group, side, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
             Ok(o) => o,
             Err(e) => Outcome::Failed(Failure::from_text(&e.to_string(), true)),
         };
         match outcome {
             Outcome::Done => break None,
+            // A routine's own conversation only goes missing between two tries of the same turn.
+            Outcome::ResumeFailed if side => {
+                state.db.kv_set(&format!("{SIDE_SESSION}{bot_id}"), "");
+                resume = false;
+            }
             Outcome::ResumeFailed => {
                 // The saved conversation is gone (e.g. the bot moved to another computer): start a
                 // fresh one, and say so.
@@ -500,6 +616,9 @@ async fn run_turn(
             }
         }
     };
+    if side {
+        add_side_news(state, bot_id, started);
+    }
     if let Some(f) = failure {
         add_error(state, chat, group.map(|_| bot_id), &f, attempt, from_user);
         if let Some(g) = group {
@@ -759,8 +878,12 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          this timezone.\n",
         crate::util::timezone_label()
     ));
+    s.push_str(
+        "Each routine run is a short conversation of its own that doesn't see this one: it gets your instructions, your \
+         memory and the last few chat messages. You're told here what a routine posted. To change what a routine \
+         does, change its task with update_routine; saying so in this chat isn't enough.\n",
+    );
     if let Ok(mems) = state.db.memories_for(&bot.id) {
-        let who = |m: &crate::db::Memory| if m.bot_id.is_some() { "you" } else { "user" };
         let profile: Vec<_> = mems.iter().filter(|m| m.tier != crate::db::LOG).collect();
         let logs: Vec<_> = mems.iter().filter(|m| m.tier == crate::db::LOG).collect();
         if !profile.is_empty() {
@@ -771,17 +894,14 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
                 s.push_str("\nYour memory profile (standing instructions and core facts):\n");
             }
             for m in profile.iter().skip(skip) {
-                s.push_str(&format!("- [{}|{}] {}\n", m.id, who(m), m.text));
+                s.push_str(&memory_line(m));
             }
         }
         if !logs.is_empty() {
-            s.push_str(&format!(
-                "\nNewest entries in your memory log ({} of {}; use recall with a query to search all of them):\n",
-                logs.len().min(crate::tools::RECENT_LOG),
-                logs.len()
-            ));
+            // No count here: it would change with every new memory and be sent as a change note.
+            s.push_str("\nNewest entries in your memory log (use recall with a query to search all of them):\n");
             for m in logs.iter().rev().take(crate::tools::RECENT_LOG).rev() {
-                s.push_str(&format!("- [{}|{}] {}\n", m.id, who(m), m.text));
+                s.push_str(&memory_line(m));
             }
         }
     }
@@ -815,12 +935,43 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     s
 }
 
-fn persona_keys(bot: &str, group: Option<&str>) -> (String, String) {
+/// Where a conversation's instructions are kept: the copy it runs with, the copy the Bot has been
+/// told about, and when the conversation last ran.
+/// A memory as the instructions list it.
+fn memory_line(m: &crate::db::Memory) -> String {
+    format!("- [{}|{}] {}\n", m.id, if m.bot_id.is_some() { "you" } else { "user" }, m.text)
+}
+
+/// Every line of every memory this Bot has, as `memory_line` writes them.
+fn memory_lines(state: &Shared, bot: &str) -> HashSet<String> {
+    let mems = state.db.memories_for(bot).unwrap_or_default();
+    mems.iter().flat_map(|m| memory_line(m).lines().map(|l| l.trim().to_string()).collect::<Vec<_>>()).collect()
+}
+
+fn persona_keys(bot: &str, group: Option<&str>) -> (String, String, String) {
     let k = match group {
         Some(g) => format!("{g}:{bot}"),
         None => bot.to_string(),
     };
-    (format!("persona_snap:{k}"), format!("persona_seen:{k}"))
+    (format!("persona_snap:{k}"), format!("persona_seen:{k}"), format!("persona_used:{k}"))
+}
+
+/// How long Claude keeps a conversation's cache after its last request, in milliseconds: 5 minutes
+/// with an API key (1 hour if the user turned that on), 1 hour with a Claude subscription.
+fn cache_ms(cfg: &Config) -> i64 {
+    let short = uses_api_key(cfg) && std::env::var_os("ENABLE_PROMPT_CACHING_1H").is_none();
+    if short { 5 * 60_000 } else { 60 * 60_000 }
+}
+
+/// Runs are paid with the user's API key (not this computer's Claude subscription login). A locked
+/// key (still encrypted, see vault.rs) is useless, so it counts as not set.
+fn uses_api_key(cfg: &Config) -> bool {
+    cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() && !crate::vault::is_locked(&cfg.api_key)
+}
+
+/// Remember that this conversation ran just now (its cache is fresh from this moment).
+fn persona_used(state: &Shared, bot: &str, group: Option<&str>) {
+    state.db.kv_set(&persona_keys(bot, group).2, &now_ms().to_string());
 }
 
 /// Longest note about changed instructions; a bigger change starts from fresh instructions instead.
@@ -831,14 +982,17 @@ fn stdin_message(text: &str) -> String {
     format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": text } }))
 }
 /// Tokens a conversation may reach before Claude Code summarizes its older messages.
-const COMPACT_WINDOW: u32 = 200_000;
+const COMPACT_WINDOW: u32 = 100_000;
 
 /// What changed in a Bot's instructions, as a note for its next message ("" = nothing).
-fn persona_changes(old: &str, new: &str) -> String {
+///
+/// `saved` holds the Bot's memories (see `memory_lines`): the instructions list only the newest log
+/// entries, so one that dropped off the list is still true and isn't reported as gone.
+fn persona_changes(old: &str, new: &str, saved: &HashSet<String>) -> String {
     let clean = |s: &str| s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect::<Vec<_>>();
     let (o, n) = (clean(old), clean(new));
     let added: Vec<&String> = n.iter().filter(|l| !o.contains(l)).collect();
-    let removed: Vec<&String> = o.iter().filter(|l| !n.contains(l)).collect();
+    let removed: Vec<&String> = o.iter().filter(|l| !n.contains(l) && !saved.contains(*l)).collect();
     if added.is_empty() && removed.is_empty() {
         return String::new();
     }
@@ -868,33 +1022,60 @@ fn persona_changes(old: &str, new: &str) -> String {
 /// while the instructions at the top stay exactly the same: one changed line (a new memory, a
 /// renamed Bot) makes the whole conversation count again. So a conversation keeps the instructions
 /// it started with, and changes reach the Bot as a short note with its next message. They start
-/// over with a new conversation, or when Claude Code summarizes the old one (that resets the cache
-/// anyway; see `Turn::handle`).
-fn stable_persona(state: &Shared, bot: &Bot, group: Option<&str>, current: String, resuming: bool) -> (String, String) {
-    let (snap_key, seen_key) = persona_keys(&bot.id, group);
+/// over with a new conversation, when the cache has expired anyway (nothing ran for `cache_ms`),
+/// or when the changes are too long for a note.
+fn stable_persona(
+    state: &Shared,
+    bot: &Bot,
+    group: Option<&str>,
+    current: String,
+    resuming: bool,
+    cache_ms: i64,
+) -> (String, String) {
+    let (snap_key, seen_key, used_key) = persona_keys(&bot.id, group);
     let snap = state.db.kv_get(&snap_key).unwrap_or_default();
-    if resuming && !snap.is_empty() {
-        let seen = state.db.kv_get(&seen_key).filter(|s| !s.is_empty()).unwrap_or_else(|| snap.clone());
-        let note = persona_changes(&seen, &current);
-        if note.len() <= MAX_CHANGE_NOTE {
+    let seen = state.db.kv_get(&seen_key).filter(|s| !s.is_empty()).unwrap_or_else(|| snap.clone());
+    let used: i64 = state.db.kv_get(&used_key).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let cached = resuming && now_ms() - used < cache_ms;
+    persona_used(state, &bot.id, group);
+    match persona_plan(&snap, &seen, &current, cached, &memory_lines(state, &bot.id)) {
+        Some(note) => {
             if !note.is_empty() {
                 tracing::info!("bot {}: its setup changed; told it in a note ({} chars)", bot.id, note.len());
                 state.db.kv_set(&seen_key, &current);
             }
-            return (snap, note);
+            (snap, note)
+        }
+        None => {
+            if cached && !snap.is_empty() {
+                tracing::info!("bot {}: its setup changed too much for a note; it starts from fresh instructions", bot.id);
+            }
+            state.db.kv_set(&snap_key, &current);
+            state.db.kv_set(&seen_key, &current);
+            (current, String::new())
         }
     }
-    state.db.kv_set(&snap_key, &current);
-    state.db.kv_set(&seen_key, &current);
-    (current, String::new())
 }
 
-/// The instructions a Bot's conversation is up to date with become its instructions from the next
-/// run on (after Claude Code summarized the conversation, when the cache starts over anyway).
-fn refresh_persona(state: &Shared, bot: &str, group: Option<&str>) {
-    let (snap_key, seen_key) = persona_keys(bot, group);
-    if let Some(seen) = state.db.kv_get(&seen_key).filter(|s| !s.is_empty()) {
-        state.db.kv_set(&snap_key, &seen);
+/// Keep the instructions a conversation runs with (`snap`) and tell the Bot what changed since it
+/// last heard (`seen`) in the returned note ("" = nothing changed)? `None` = start from the
+/// current instructions instead: there's no copy yet, the cache is gone, or the note would be too long.
+fn persona_plan(snap: &str, seen: &str, current: &str, cached: bool, saved: &HashSet<String>) -> Option<String> {
+    if !cached || snap.is_empty() {
+        return None;
+    }
+    let note = persona_changes(seen, current, saved);
+    (note.len() <= MAX_CHANGE_NOTE).then_some(note)
+}
+
+/// After Claude Code summarized a conversation, the notes about changed instructions may be gone
+/// from it, so the next note repeats every change since the conversation's own copy. The copy
+/// itself stays: this run still uses it, and swapping it for the next run would make that run
+/// count everything written after the summary again.
+fn retell_persona(state: &Shared, bot: &str, group: Option<&str>) {
+    let (snap_key, seen_key, _) = persona_keys(bot, group);
+    if let Some(snap) = state.db.kv_get(&snap_key).filter(|s| !s.is_empty()) {
+        state.db.kv_set(&seen_key, &snap);
     }
 }
 
@@ -903,6 +1084,7 @@ fn build_command(
     state: &Shared,
     bot: &Bot,
     group: Option<&str>,
+    side: bool,
     cfg: &Config,
     claude: &PathBuf,
     resume: bool,
@@ -924,12 +1106,18 @@ fn build_command(
     if wsl {
         current = current.replace(&bot.workdir, &crate::util::to_wsl_path(std::path::Path::new(&bot.workdir)));
     }
-    // Each group chat is its own conversation for the Bot.
+    // Each group chat is its own conversation for the Bot, and so is each routine run.
     let session = match group {
         Some(g) => state.db.kv_get(&crate::group::session_key(g, &bot.id)).unwrap_or_default(),
+        None if side => state.db.kv_get(&format!("{SIDE_SESSION}{}", bot.id)).unwrap_or_default(),
         None => bot.session_id.clone(),
     };
-    let (persona_text, change_note) = stable_persona(state, bot, group, current, resume && !session.is_empty());
+    // A routine's conversation is new, so it gets the current instructions as they are.
+    let (persona_text, change_note) = if side {
+        (current, String::new())
+    } else {
+        stable_persona(state, bot, group, current, resume && !session.is_empty(), cache_ms(cfg))
+    };
     std::fs::write(&persona_path, persona_text)?;
 
     let mut args: Vec<String> = vec![
@@ -946,7 +1134,8 @@ fn build_command(
         "--include-partial-messages".into(),
         "--append-system-prompt-file".into(),
         p(&persona_path),
-        // Rebuild the system prompt each run so new memories, routines and the time are current.
+        // oBot decides when a conversation's instructions change (see `stable_persona`), so Claude
+        // Code reads the file above on every run instead of keeping its own first copy.
         "--system-prompt-snapshot".into(),
         "off".into(),
     ];
@@ -1108,16 +1297,14 @@ fn build_command(
         cmd.env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", COMPACT_WINDOW.to_string());
     }
 
-    // A locked key (still encrypted, see vault.rs) is useless, so it counts as not set.
-    let api_key_ok = cfg.auth_mode == "api_key" && !cfg.api_key.is_empty() && !crate::vault::is_locked(&cfg.api_key);
-    if api_key_ok {
+    if uses_api_key(cfg) {
         cmd.env("ANTHROPIC_API_KEY", &cfg.api_key);
     } else {
         // Use the Claude subscription login of this computer.
         cmd.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
     }
     let mut passed: Vec<String> = vec!["OBOT".into(), "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into()];
-    if api_key_ok {
+    if uses_api_key(cfg) {
         passed.push("ANTHROPIC_API_KEY".into());
     }
     // Only the secrets meant for this Bot (and never ones with a reserved name).
@@ -1161,6 +1348,7 @@ async fn drive(
     state: &Shared,
     bot_id: &str,
     group: Option<&str>,
+    side: bool,
     prompt: &str,
     stop: Arc<Notify>,
     stopped: Arc<AtomicBool>,
@@ -1177,7 +1365,7 @@ async fn drive(
         )
     })?;
 
-    let (mut cmd, change_note) = build_command(state, &bot, group, &cfg, &claude, resume)?;
+    let (mut cmd, change_note) = build_command(state, &bot, group, side, &cfg, &claude, resume)?;
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("Couldn't start Claude Code ({}): {e}", claude.display()))?;
@@ -1212,7 +1400,7 @@ async fn drive(
 
     let stdout = child.stdout.take().ok_or_else(|| anyhow!("no output from Claude Code"))?;
     let mut lines = BufReader::new(stdout).lines();
-    let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string));
+    let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string), side);
     let mut deadline: Option<tokio::time::Instant> = None;
 
     loop {
@@ -1248,6 +1436,9 @@ async fn drive(
         }
     };
     let stderr = stderr_buf.lock().await.clone();
+    if !side {
+        persona_used(state, bot_id, group);
+    }
 
     if resume && (turn.resume_failed || (!turn.got_result && resume_failed(&stderr))) {
         turn.cleanup();
@@ -1274,6 +1465,8 @@ struct Turn {
     /// Where messages go: the Bot's own chat, or the group it's answering in.
     chat: String,
     group: Option<String>,
+    /// A routine in its own conversation (see `enqueue_side`).
+    side: bool,
     cur_api_msg: String,
     /// content-block index -> message id (text blocks of the current model message)
     blocks: HashMap<u64, String>,
@@ -1403,11 +1596,12 @@ fn result_text(content: &Value) -> String {
 }
 
 impl Turn {
-    fn new(state: Shared, bot_id: String, group: Option<String>) -> Self {
+    fn new(state: Shared, bot_id: String, group: Option<String>, side: bool) -> Self {
         Self {
             state,
             chat: group.clone().unwrap_or_else(|| bot_id.clone()),
             group,
+            side,
             bot_id,
             cur_api_msg: String::new(),
             blocks: HashMap::new(),
@@ -1454,7 +1648,9 @@ impl Turn {
                     self.set_session(&v)
                 }
                 Some("compact_boundary") => {
-                    refresh_persona(&self.state, &self.bot_id, self.group.as_deref());
+                    if !self.side {
+                        retell_persona(&self.state, &self.bot_id, self.group.as_deref());
+                    }
                     add_event(
                         &self.state,
                         &self.chat,
@@ -1480,6 +1676,10 @@ impl Turn {
         let Some(sid) = v.get("session_id").and_then(Value::as_str) else { return };
         if let Some(g) = &self.group {
             self.state.db.kv_set(&crate::group::session_key(g, &self.bot_id), sid);
+            return;
+        }
+        if self.side {
+            self.state.db.kv_set(&format!("{SIDE_SESSION}{}", self.bot_id), sid);
             return;
         }
         if let Ok(Some(mut b)) = self.state.db.get_bot(&self.bot_id) {
@@ -1867,16 +2067,58 @@ mod tests {
 
     #[test]
     fn changed_instructions_become_a_note() {
-        assert_eq!(persona_changes("a\nb\n", "a\n\nb"), "");
-        let n = persona_changes("You are \"Food Bot\"\nLikes pasta\nSame", "You are \"Agenda Bot\"\nSame");
+        let none = HashSet::new();
+        assert_eq!(persona_changes("a\nb\n", "a\n\nb", &none), "");
+        let n = persona_changes("You are \"Food Bot\"\nLikes pasta\nSame", "You are \"Agenda Bot\"\nSame", &none);
         assert!(n.starts_with("[oBot: Your setup changed"));
         assert!(n.contains("You are \"Agenda Bot\"\n"));
         assert!(n.contains("These lines no longer apply:\n- You are \"Food Bot\"\n- Likes pasta\n"));
         assert!(!n.contains("- Same"));
+        // A memory that only dropped off the newest-entries list is still saved, so it isn't "gone".
+        let saved = HashSet::from(["- [m1|user] Likes pasta".to_string()]);
+        let n = persona_changes("- [m1|user] Likes pasta\n- [m2|user] Old", "- [m3|user] New", &saved);
+        assert!(n.contains("- [m3|user] New\n") && n.contains("- - [m2|user] Old\n") && !n.contains("m1"));
+        assert_eq!(persona_changes("- [m1|user] Likes pasta\nSame", "Same", &saved), "");
+    }
+
+    #[test]
+    fn instructions_only_start_over_when_the_cache_is_gone() {
+        let none = HashSet::new();
+        // Cache still there: keep the conversation's copy, tell the Bot what's new.
+        assert_eq!(persona_plan("a", "a", "a", true, &none), Some(String::new()));
+        assert!(persona_plan("a", "a", "a\nb", true, &none).unwrap().contains("b\n"));
+        // Already told about "b": nothing to say again.
+        assert_eq!(persona_plan("a", "a\nb", "a\nb", true, &none), Some(String::new()));
+        // Cache expired, first run, or too much changed: fresh instructions.
+        assert_eq!(persona_plan("a", "a", "a\nb", false, &none), None);
+        assert_eq!(persona_plan("", "", "a", true, &none), None);
+        assert_eq!(persona_plan("a", "a", &"x\n".repeat(MAX_CHANGE_NOTE), true, &none), None);
     }
 
     fn job(p: &str, user: bool, busy: bool) -> Job {
-        Job { prompt: p.into(), user_msg: user.then(|| "m".to_string()), while_busy: busy, group: None, winding_down: false }
+        Job { prompt: p.into(), user_msg: user.then(|| "m".to_string()), while_busy: busy, group: None, winding_down: false, side: false }
+    }
+
+    #[test]
+    fn routine_posts_reach_the_main_conversation_newest_first_kept() {
+        let msg = |role: &str, text: &str, meta: Value| Message {
+            id: "m".into(), bot_id: "b".into(), role: role.into(), text: text.into(), html: String::new(),
+            status: "done".into(), meta, created_at: 0,
+        };
+        // Replies and question cards count; tool rows and events don't.
+        assert_eq!(said(&msg("bot", " Two new emails. ", json!({}))), Some(("You", "Two new emails.".to_string())));
+        assert_eq!(said(&msg("widget", "", json!({"question": "Reply to Ana?"}))), Some(("You", "Reply to Ana?".to_string())));
+        assert_eq!(said(&msg("user", "yes", json!({}))), Some(("User", "yes".to_string())));
+        assert_eq!(said(&msg("tool", "Read a.txt", json!({}))), None);
+        assert_eq!(said(&msg("event", "Running routine: Mail", json!({}))), None);
+
+        // Too much news: whole lines are dropped from the old end.
+        assert_eq!(newest_lines("one\ntwo\nthree\n", 100), "one\ntwo\nthree\n");
+        assert_eq!(newest_lines("one\ntwo\nthree\n", 8), "three\n");
+        assert_eq!(newest_lines("ééé\nñññ\n", 5), "ñññ\n");
+
+        let note = side_news_note("[Mon 2026-11-09 08:00] You: Two new emails.\n");
+        assert!(note.starts_with("[oBot: Routines posted") && note.ends_with("Two new emails.\n]\n"));
     }
 
     #[test]

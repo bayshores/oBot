@@ -1534,7 +1534,7 @@ async fn patch_routine(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
 async fn run_routine_now(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let r = st.db.get_routine(&id)?.ok_or_else(|| not_found("No such routine"))?;
     runner::add_event(&st, &r.bot_id, &format!("Testing routine: {}", r.name), json!({"kind": "routine-run", "routine_id": r.id}));
-    runner::enqueue(&st, &r.bot_id, crate::routines::routine_prompt(&r, true)).await;
+    runner::enqueue_side(&st, &r.bot_id, crate::routines::routine_prompt(&r, true)).await;
     Ok(Json(json!({ "ok": true })))
 }
 

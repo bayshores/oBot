@@ -389,14 +389,23 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   system prompt, so the system prompt stays the same between messages and the cached conversation is reused.
 * For the same reason a conversation keeps the instructions it started with. When they change (a new memory, a rename,
   new routines, another Bot's tagline), the Bot gets the changed lines as a note at the start of its next message
-  (`[oBot: Your setup changed since this conversation started …]`). A new conversation, or Claude Code summarizing
-  the old one, starts from the current instructions.
+  (`[oBot: Your setup changed since this conversation started …]`). The current instructions take over with a new
+  conversation, when the changes are too long for a note, or when nothing ran for longer than Claude keeps the cache
+  (5 minutes with an API key, 1 hour with a Claude subscription), because then nothing cached is lost. After Claude Code
+  summarizes a conversation, the next note repeats every change since the conversation's own copy.
 * The message goes to Claude Code as one JSON line on stdin (`--input-format stream-json`). With plain text, Claude Code
   sometimes wrote a different number into its own tool descriptions from one run to the next, and any change there
   makes the model re-read the whole conversation at full price.
-* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000` (unless obot-server was started with its own value), so Claude
-  Code summarizes older messages once a conversation reaches about 200k tokens instead of near the model's 1M limit.
+* Runs set `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` (unless obot-server was started with its own value), so Claude
+  Code summarizes older messages once a conversation reaches about 100k tokens instead of near the model's 1M limit.
   Every message re-reads the whole conversation, so a long one makes every message cost more.
+* A routine (and "Test routine") runs in a new, short conversation of its own instead of the Bot's main one, with the
+  Bot's current instructions. A routine starts hours after the Bot last ran, when nothing of the main conversation is
+  cached any more, so running it there meant re-reading that whole conversation at full price. Its message ends with
+  the last 8 messages of the Bot's chat (`<recent_chat>`), and its replies go to the Bot's chat as before. The main
+  conversation is told what routines posted at the start of its next message (`[oBot: Routines posted since your last
+  turn in this conversation …]`). A check-in the Bot set for itself with `check_back_later` continues its work, so it
+  still runs in the main conversation.
   Their settings also set `autoCompactEnabled: true`, so turning summarizing off for your own Claude Code on the PC
   (`/config`, saved in `~/.claude.json`) doesn't turn it off for Bots.
 * Bots don't load any Claude Code settings files: runs use `--strict-mcp-config` and `--setting-sources=` (none). So the

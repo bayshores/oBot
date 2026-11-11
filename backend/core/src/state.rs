@@ -23,6 +23,9 @@ pub struct Job {
     pub group: Option<String>,
     /// Group turn started by another Bot's reply rather than the user: answer only if needed.
     pub winding_down: bool,
+    /// A routine: it runs in a new, short conversation of its own instead of the Bot's main one
+    /// (see `runner::enqueue_side`). Its messages still go to the Bot's own chat.
+    pub side: bool,
 }
 
 /// A permission request waiting for the user to click Allow / Deny.
