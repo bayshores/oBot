@@ -105,6 +105,8 @@ fn local_path(p: &str, distro: Option<&str>) -> PathBuf {
 struct Turn {
     text: String,
     tools: Vec<String>,
+    /// The turn is a scheduled routine (its message holds oBot's `<obot_routine>` block).
+    routine: bool,
 }
 
 /// What the user (or oBot for them) wrote in a transcript entry. Not Claude Code's own entries:
@@ -132,8 +134,10 @@ fn user_text(entry: &Value) -> Option<String> {
 
 fn last_turn(transcript: &str) -> Turn {
     let entries: Vec<Value> = transcript.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
-    let start = entries.iter().rposition(|e| user_text(e).is_some()).map_or(0, |i| i + 1);
-    let mut t = Turn::default();
+    let asked = entries.iter().rposition(|e| user_text(e).is_some());
+    let start = asked.map_or(0, |i| i + 1);
+    let routine = asked.and_then(|i| user_text(&entries[i])).is_some_and(|u| u.contains("<obot_routine>"));
+    let mut t = Turn { routine, ..Turn::default() };
     for e in &entries[start..] {
         if e.get("type").and_then(Value::as_str) != Some("assistant") {
             continue;
@@ -163,7 +167,8 @@ const SCHEDULERS: [&str; 4] = ["check_back_later", "create_routine", "update_rou
 fn stop_check(t: &Turn) -> Option<String> {
     let text = t.text.to_lowercase().replace('’', "'");
     let promised = PROMISES.iter().any(|p| text.contains(p));
-    let scheduled = t.tools.iter().any(|n| SCHEDULERS.iter().any(|s| n.ends_with(s)));
+    // A routine runs again by itself, so "I'll keep checking" is already true there.
+    let scheduled = t.routine || t.tools.iter().any(|n| SCHEDULERS.iter().any(|s| n.ends_with(s)));
     (promised && !scheduled).then(|| {
         "[oBot] Your reply promises to follow up later, but nothing is scheduled, so you'd never be woken up. \
          Call check_back_later now with a note of what to do (or create_routine for something recurring). \
@@ -267,6 +272,13 @@ mod tests {
     fn scheduled_promise_passes() {
         let t = last_turn(&transcript("I'll check back tomorrow.", &["mcp__obot__check_back_later"]));
         assert!(stop_check(&t).is_none());
+    }
+
+    #[test]
+    fn a_routine_may_say_it_keeps_checking() {
+        let routine = transcript("No new slot. I'll keep checking.", &[]).replace("track my package", "<obot_routine>{}</obot_routine> Watch for the slot");
+        assert!(last_turn(&routine).routine);
+        assert!(stop_check(&last_turn(&routine)).is_none());
     }
 
     #[test]

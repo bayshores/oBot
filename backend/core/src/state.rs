@@ -26,6 +26,9 @@ pub struct Job {
     /// A routine: it runs in a new, short conversation of its own instead of the Bot's main one
     /// (see `runner::enqueue_side`). Its messages still go to the Bot's own chat.
     pub side: bool,
+    /// The scheduled routine this run is (not for "Test routine"). When the Bot posts nothing, the
+    /// run isn't counted as a result the user hasn't read.
+    pub routine: Option<String>,
 }
 
 /// A permission request waiting for the user to click Allow / Deny.

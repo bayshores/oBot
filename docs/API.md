@@ -416,7 +416,9 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 * A routine (and "Test routine") runs in a new, short conversation of its own instead of the Bot's main one, with the
   Bot's current instructions. A routine starts hours after the Bot last ran, when nothing of the main conversation is
   cached any more, so running it there meant re-reading that whole conversation at full price. Its message ends with
-  the last 8 messages of the Bot's chat (`<recent_chat>`), and its replies go to the Bot's chat as before. The main
+  the last 8 messages of the Bot's chat (`<recent_chat>`), and its replies go to the Bot's chat as before. A scheduled
+  routine with nothing worth the user's attention replies with only the word `PASS`: nothing is posted, nobody is
+  notified, and the run doesn't count towards pausing the routine for unread results (a test run always replies). The main
   conversation is told what routines posted at the start of its next message (`[oBot: Routines posted since your last
   turn in this conversation …]`). A check-in the Bot set for itself with `check_back_later` continues its work, so it
   still runs in the main conversation.
@@ -434,7 +436,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   skill folder is limited to 200 files and 5 MB.
 * Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with Claude Code hooks that start the oBot program as
   `<obot> hook stop|precompact|after-ask --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
-  * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself.
+  * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself. Not in a routine's own conversation: a routine runs again by itself.
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event. This also runs before an idle summary (see above).
   * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block

@@ -683,6 +683,11 @@ impl Db {
         Ok(())
     }
 
+    /// A routine's run posted nothing, so there's no result waiting to be read.
+    pub fn routine_run_was_quiet(&self, id: &str) {
+        let _ = self.c().execute("UPDATE routines SET unread_runs = MAX(unread_runs - 1, 0) WHERE id = ?1", [id]);
+    }
+
     /// The user opened the bot: routine results were seen.
     pub fn mark_routines_read(&self, bot_id: &str) {
         let _ = self.c().execute("UPDATE routines SET unread_runs = 0 WHERE bot_id = ?1", [bot_id]);

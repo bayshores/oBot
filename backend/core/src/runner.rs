@@ -29,7 +29,7 @@ use crate::util::{hide_console, new_id, now_ms, preview, truncate_chars};
 /// Queue a turn oBot starts itself (routine, wake-up, background job...). Runs after anything
 /// already waiting.
 pub async fn enqueue(state: &Shared, bot_id: &str, prompt: String) {
-    push(state, bot_id, prompt, None, None, false, false).await;
+    push(state, bot_id, prompt, None, None, false, false, None).await;
 }
 
 /// Queue a routine. It runs in a new, short conversation of its own, not the Bot's main one.
@@ -39,28 +39,31 @@ pub async fn enqueue(state: &Shared, bot_id: &str, prompt: String) {
 /// `COMPACT_WINDOW` tokens) for a task that doesn't need it. On its own it reads only the Bot's
 /// instructions, the task and the last few chat messages (`side_prompt`). The main conversation
 /// is told what the routine posted with its next message (`take_side_news`).
-pub async fn enqueue_side(state: &Shared, bot_id: &str, prompt: String) {
-    push(state, bot_id, prompt, None, None, false, true).await;
+///
+/// `routine`: the scheduled routine this is, so a run that posts nothing (the Bot replied PASS)
+/// doesn't count as a result the user hasn't read.
+pub async fn enqueue_side(state: &Shared, bot_id: &str, prompt: String, routine: Option<&str>) {
+    push(state, bot_id, prompt, None, None, false, true, routine.map(str::to_string)).await;
 }
 
 /// An automatic note about something the Bot posted (a form it sent, say): goes to the Bot that
 /// posted it, in the chat it's in (its own, or a group).
 pub async fn enqueue_reply(state: &Shared, m: &Message, prompt: String) {
     match m.meta.get("speaker").and_then(Value::as_str) {
-        Some(bot) => push(state, bot, prompt, None, Some(m.bot_id.clone()), false, false).await,
-        None => push(state, &m.bot_id, prompt, None, None, false, false).await,
+        Some(bot) => push(state, bot, prompt, None, Some(m.bot_id.clone()), false, false, None).await,
+        None => push(state, &m.bot_id, prompt, None, None, false, false, None).await,
     };
 }
 
 /// Give a Bot a turn in a group chat (see group.rs). It waits behind the Bot's other work.
 pub async fn enqueue_group(state: &Shared, bot_id: &str, group_id: &str, winding_down: bool) {
-    push(state, bot_id, String::new(), None, Some(group_id.to_string()), winding_down, false).await;
+    push(state, bot_id, String::new(), None, Some(group_id.to_string()), winding_down, false, None).await;
 }
 
 /// Queue the user's chat message. Returns true when the bot is busy, so the message waits (it's
 /// marked "Queued" in the chat and can be sent right away with `steer`).
 pub async fn enqueue_user(state: &Shared, bot_id: &str, prompt: String, msg_id: &str) -> bool {
-    push(state, bot_id, prompt, Some(msg_id.to_string()), None, false, false).await
+    push(state, bot_id, prompt, Some(msg_id.to_string()), None, false, false, None).await
 }
 
 type WorkerStart = (Shared, String, mpsc::UnboundedReceiver<Job>);
@@ -88,6 +91,7 @@ async fn push(
     group: Option<String>,
     winding_down: bool,
     side: bool,
+    routine: Option<String>,
 ) -> bool {
     if state.db.get_bot(bot_id).ok().flatten().is_some_and(|b| b.is_group()) {
         // A group chat isn't a Bot; its Bots take turns (group.rs).
@@ -114,7 +118,7 @@ async fn push(
         if let (true, Some(id)) = (busy, user_msg.as_deref()) {
             mark_queued(state, id, true, false);
         }
-        let _ = tx.send(Job { prompt, user_msg, while_busy: busy, group, winding_down, side });
+        let _ = tx.send(Job { prompt, user_msg, while_busy: busy, group, winding_down, side, routine });
     }
     busy
 }
@@ -203,15 +207,17 @@ fn side_prompt(state: &Shared, bot_id: &str, prompt: &str) -> String {
 }
 
 /// After a routine's turn: keep what it posted in the chat, for the main conversation's next turn.
-fn add_side_news(state: &Shared, bot_id: &str, since: i64) {
+/// Returns false when it posted nothing.
+fn add_side_news(state: &Shared, bot_id: &str, since: i64) -> bool {
     let recent = state.db.list_messages(bot_id, None, 80).unwrap_or_default();
     let posted: String = recent.iter().filter(|m| m.created_at >= since && m.role != "user").filter_map(|m| said_line(m, 1500)).collect();
     if posted.is_empty() {
-        return;
+        return false;
     }
     let key = format!("{SIDE_NEWS}{bot_id}");
     let news = format!("{}{posted}", state.db.kv_get(&key).unwrap_or_default());
     state.db.kv_set(&key, newest_lines(&news, MAX_SIDE_NEWS));
+    true
 }
 
 /// The end of `text`, at most `max` characters long, starting at the beginning of a line.
@@ -385,6 +391,7 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         for id in jobs.iter().filter_map(|j| j.user_msg.as_deref()) {
             mark_queued(&state, id, false, false);
         }
+        let routines: Vec<String> = jobs.iter().filter_map(|j| j.routine.clone()).collect();
         let mut prompt = merge(&jobs, steered);
         if !side {
             prompt = format!("{}{prompt}", take_side_news(&state, &bot_id));
@@ -397,7 +404,13 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         }
         let stopped = Arc::new(AtomicBool::new(false));
         let steer = Arc::new(AtomicBool::new(false));
-        run_turn(&state, &bot_id, None, side, &prompt, from_user, stopped.clone(), steer.clone()).await;
+        let quiet = run_turn(&state, &bot_id, None, side, &prompt, from_user, stopped.clone(), steer.clone()).await;
+        if quiet && !routines.is_empty() {
+            for id in &routines {
+                state.db.routine_run_was_quiet(id);
+            }
+            state.emit("routines.updated", json!({ "bot_id": bot_id }));
+        }
         steered = steer.load(Ordering::SeqCst);
         if stopped.load(Ordering::SeqCst) && !steered {
             // "Stop" also throws away the user's messages queued behind the current turn. oBot's
@@ -454,7 +467,7 @@ pub async fn retry(state: &Shared, bot_id: &str) -> Result<(), String> {
     let prompt = state.db.kv_get(&format!("{LAST_PROMPT}{bot_id}")).ok_or("There's nothing to try again yet.")?;
     add_event(state, bot_id, "Trying again", json!({"kind": "retry"}));
     let side = state.db.kv_get(&format!("{LAST_SIDE}{bot_id}")).is_some_and(|v| v == "1");
-    push(state, bot_id, retry_prompt(&prompt), None, None, false, side).await;
+    push(state, bot_id, retry_prompt(&prompt), None, None, false, side, None).await;
     Ok(())
 }
 
@@ -631,6 +644,7 @@ pub fn add_simple(state: &Shared, bot_id: &str, role: &str, text: &str) -> Messa
 /// Waits before each automatic retry of a temporary failure.
 const RETRY_WAITS: [u64; 3] = [5, 20, 60];
 
+/// Returns true when this was a routine that worked and posted nothing (the Bot replied PASS).
 async fn run_turn(
     state: &Shared,
     bot_id: &str,
@@ -640,7 +654,7 @@ async fn run_turn(
     from_user: bool,
     stopped: Arc<AtomicBool>,
     steer: Arc<AtomicBool>,
-) {
+) -> bool {
     // Where this turn's messages go.
     let chat = group.unwrap_or(bot_id);
     let started = now_ms();
@@ -716,9 +730,8 @@ async fn run_turn(
             }
         }
     };
-    if side {
-        add_side_news(state, bot_id, started);
-    }
+    // A routine that worked and posted nothing: the Bot replied PASS.
+    let quiet = side && !add_side_news(state, bot_id, started) && failure.is_none() && !stopped.load(Ordering::SeqCst);
     if let Some(f) = failure {
         add_error(state, chat, group.map(|_| bot_id), &f, attempt, from_user);
         if let Some(g) = group {
@@ -738,6 +751,7 @@ async fn run_turn(
         state.emit_bot(g).await;
         crate::group::after_turn(state, g, bot_id, started).await;
     }
+    quiet
 }
 
 enum Outcome {
@@ -1904,6 +1918,12 @@ impl Turn {
         }
     }
 
+    /// Where a reply of only the word PASS means "post nothing": a group chat (it's another Bot's
+    /// job) and a routine (nothing is worth the user's attention).
+    fn may_pass(&self) -> bool {
+        self.group.is_some() || self.side
+    }
+
     /// Show the held replies as chat messages.
     async fn flush_held(&mut self) {
         for id in std::mem::take(&mut self.held) {
@@ -1935,7 +1955,7 @@ impl Turn {
 
     async fn finalize(&mut self, id: &str) {
         let Some(mut m) = self.live.remove(id) else { return };
-        if m.text.trim().is_empty() || (self.group.is_some() && crate::group::is_pass(&m.text)) {
+        if m.text.trim().is_empty() || (self.may_pass() && crate::group::is_pass(&m.text)) {
             return;
         }
         m.text = crate::media::save_pictures(&self.state, &self.bot_id, m.text.trim()).await;
@@ -1969,7 +1989,7 @@ impl Turn {
 
     /// Show a finished Bot reply that wasn't streamed live.
     fn add_bot_text(&mut self, text: &str) {
-        if self.group.is_some() && crate::group::is_pass(text) {
+        if self.may_pass() && crate::group::is_pass(text) {
             return;
         }
         let m = self.new_msg("bot", text, "done", json!({}));
@@ -2292,7 +2312,7 @@ mod tests {
     }
 
     fn job(p: &str, user: bool, busy: bool) -> Job {
-        Job { prompt: p.into(), user_msg: user.then(|| "m".to_string()), while_busy: busy, group: None, winding_down: false, side: false }
+        Job { prompt: p.into(), user_msg: user.then(|| "m".to_string()), while_busy: busy, group: None, winding_down: false, side: false, routine: None }
     }
 
     #[test]
