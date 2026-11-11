@@ -1253,13 +1253,18 @@
     try {
       const b = await api('/api/bootstrap');
       applyBootstrap(b);
-      const keep = S.current;
-      S.msgs.clear();
-      S.hasMore.clear();
+      const keep = S.current && S.bots.has(S.current) ? S.current : null;
+      // Other chats load again when opened. The open one stays on screen while its newest page
+      // loads, so the transcript never empties and the reader keeps their place.
+      for (const id of [...S.msgs.keys()]) {
+        if (id === keep) continue;
+        S.msgs.delete(id);
+        S.hasMore.delete(id);
+      }
       renderSidebar();
-      if (keep && S.bots.has(keep)) {
+      if (keep) {
         await loadMessages(keep);
-        if (S.current === keep) renderMessages(true);
+        if (S.current === keep) keepPlace(() => renderMessages(false));
       } else renderChat();
       if (S.panelOpen) renderPanel();
     } catch (e) {
@@ -1328,7 +1333,7 @@
       case 'messages.deleted': {
         const gone = new Set(e.ids || []);
         if (S.msgs.has(e.bot_id)) S.msgs.set(e.bot_id, S.msgs.get(e.bot_id).filter((x) => !gone.has(x.id)));
-        if (e.bot_id === S.current) renderMessages(false);
+        if (e.bot_id === S.current) keepPlace(() => renderMessages(false));
         break;
       }
       case 'messages.cleared':
@@ -1614,11 +1619,14 @@
       parts.dot.setAttribute('aria-label', waiting ? 'Needs attention' : 'Unread activity');
     }
   }
+  // Make `parent` hold exactly `want`, in order. Nodes that are leaving go first, so one stale
+  // node never makes every node after it get taken out and put back (which replays animations).
   function reconcile(parent, want) {
+    const keep = new Set(want);
+    for (const el of Array.from(parent.children)) if (!keep.has(el)) el.remove();
     want.forEach((el, i) => {
       if (parent.children[i] !== el) parent.insertBefore(el, parent.children[i] || null);
     });
-    while (parent.children.length > want.length) parent.lastElementChild.remove();
   }
   let tilesEl = null;
   let pinDivider = null;
@@ -2008,26 +2016,54 @@
     }
     markReadSoon();
   }
+  // Loads one page of a chat (200 messages). With `before`: the page older than that time, and
+  // the answer is true when it was added. Without: the newest page, joined onto what is shown.
+  const newestSeq = new Map();
   async function loadMessages(id, before) {
-    if (S.loading.has(id)) return;
-    S.loading.add(id);
-    try {
-      const limit = 200;
-      const list = (await api(`/api/bots/${id}/messages?limit=${limit}${before ? '&before=' + before : ''}`)) || [];
-      const cur = S.msgs.get(id);
-      if (before && cur) {
+    const limit = 200;
+    const url = `/api/bots/${id}/messages?limit=${limit}${before ? '&before=' + before : ''}`;
+    if (before) {
+      if (S.loading.has(id)) return false;
+      S.loading.add(id);
+      try {
+        const list = (await api(url)) || [];
+        const cur = S.msgs.get(id);
+        const oldest = cur && cur.find((m) => !m._tmp);
+        // The chat was loaded again meanwhile: this page no longer joins onto it.
+        if (!oldest || oldest.created_at !== before) return false;
         const ids = new Set(cur.map((m) => m.id));
         S.msgs.set(id, [...list.filter((m) => !ids.has(m.id)), ...cur]);
-      } else if (cur && cur.length) {
-        const ids = new Set(list.map((m) => m.id));
-        S.msgs.set(id, [...list, ...cur.filter((m) => !ids.has(m.id) && !m._tmp)]);
-      } else S.msgs.set(id, list);
-      S.hasMore.set(id, list.length >= limit);
+        S.hasMore.set(id, list.length >= limit);
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
+      } finally {
+        S.loading.delete(id);
+      }
+    }
+    const seq = (newestSeq.get(id) || 0) + 1;
+    newestSeq.set(id, seq);
+    const had = new Set((S.msgs.get(id) || []).map((m) => m.id));
+    try {
+      const list = (await api(url)) || [];
+      if (newestSeq.get(id) !== seq) return; // a later load of the same chat decides
+      const cur = S.msgs.get(id) || [];
+      const real = cur.filter((m) => !m._tmp);
+      const ids = new Set(list.map((m) => m.id));
+      const first = list.length ? list[0].created_at : 0;
+      // Older pages already loaded stay when the new page reaches back to them.
+      const joins = list.length >= limit && real.length > 0 && real[real.length - 1].created_at >= first;
+      const older = joins ? real.filter((m) => m.created_at < first && !ids.has(m.id)) : [];
+      // Messages that arrived while this was loading, and ones still being sent.
+      const arrived = real.filter((m) => !ids.has(m.id) && !had.has(m.id));
+      const sent = new Set(list.filter((m) => m.role === 'user').map((m) => m.text));
+      const sending = cur.filter((m) => m._tmp && !sent.has(m.text));
+      S.msgs.set(id, [...older, ...list, ...arrived, ...sending]);
+      if (!older.length) S.hasMore.set(id, list.length >= limit);
     } catch (e) {
       if (!S.msgs.has(id)) S.msgs.set(id, []);
       fail(e);
-    } finally {
-      S.loading.delete(id);
     }
   }
 
@@ -2114,19 +2150,39 @@
     updateJump();
     maybeLoadOlder();
   });
+  // Redraw without moving what the reader is looking at: at the bottom they stay at the bottom,
+  // anywhere else the first message on screen stays exactly where it was.
+  function keepPlace(draw) {
+    let anchor = null;
+    let y = 0;
+    if (!S.pinned && distFromBottom() >= 8) {
+      const top = msgsEl.getBoundingClientRect().top;
+      for (const el of colEl.children) {
+        // Message rows only: time labels come and go as older pages join on.
+        if (!el.classList.contains('row')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.bottom > top) {
+          anchor = el;
+          y = r.top;
+          break;
+        }
+      }
+    }
+    draw();
+    if (anchor && anchor.isConnected) msgsEl.scrollTop += anchor.getBoundingClientRect().top - y;
+  }
   const maybeLoadOlder = debounce(async () => {
     const b = curBot();
     if (!b || msgsEl.scrollTop > 120 || !S.hasMore.get(b.id) || S.loading.has(b.id)) return;
-    const list = S.msgs.get(b.id) || [];
-    const oldest = list.find((m) => !m._tmp);
+    const oldest = (S.msgs.get(b.id) || []).find((m) => !m._tmp);
     if (!oldest) return;
-    const prevH = msgsEl.scrollHeight;
-    const prevTop = msgsEl.scrollTop;
+    const load = loadMessages(b.id, oldest.created_at);
     renderMessages(false);
-    await loadMessages(b.id, oldest.created_at);
+    const added = await load;
     if (S.current !== b.id) return;
-    renderMessages(false);
-    msgsEl.scrollTop = msgsEl.scrollHeight - prevH + prevTop;
+    keepPlace(() => renderMessages(false));
+    // A page of only hidden tool lines adds nothing to see: look again for the next one.
+    if (added) maybeLoadOlder();
   }, 120);
 
   const isShown = (m) => {
@@ -2160,6 +2216,17 @@
   }
 
   let emptyEl = null;
+  // The "older messages" row at the top of a long chat: one node, reused on every redraw.
+  let olderEl = null;
+  function olderRow(loading) {
+    if (!olderEl) olderEl = h('div', { class: 'load-older' });
+    if (olderEl._loading !== loading) {
+      olderEl._loading = loading;
+      olderEl.textContent = '';
+      if (loading) olderEl.append(spinner('lg'));
+    }
+    return olderEl;
+  }
   function renderMessages(toBottom) {
     const b = curBot();
     const wasPinned = S.pinned || distFromBottom() < 8;
@@ -2172,14 +2239,15 @@
     }
     const list = S.msgs.get(b.id);
     if (!list) {
-      reconcile(colEl, [h('div', { class: 'tx-spacer' }), h('div', { class: 'load-older' }, spinner('lg'))]);
+      reconcile(colEl, [h('div', { class: 'tx-spacer' }), olderRow(true)]);
       return;
     }
     const shown = list.filter(isShown);
     const want = [h('div', { class: 'tx-spacer' })];
     want[0] = colEl.firstElementChild && colEl.firstElementChild.classList.contains('tx-spacer') ? colEl.firstElementChild : want[0];
     const act = activityFor(b, list);
-    if (!shown.length && !act) {
+    // Nothing to show and nothing older to load: the empty-chat welcome.
+    if (!shown.length && !act && !S.hasMore.get(b.id)) {
       if (!emptyEl || emptyEl._bot !== b.id) emptyEl = emptyChat(b);
       reconcile(colEl, [emptyEl]);
       S.nodes.clear();
@@ -2187,9 +2255,7 @@
       sweepAvatars();
       return;
     }
-    if (S.hasMore.get(b.id)) {
-      want.push(h('div', { class: 'load-older' }, S.loading.has(b.id) ? spinner('lg') : ''));
-    }
+    if (S.hasMore.get(b.id)) want.push(olderRow(S.loading.has(b.id)));
     // NEW divider: before the first unread message (counted from the end)
     if (S.newDiv && S.newDiv.botId === b.id && !S.newDiv.msgId && S.newDiv.unread > 0) {
       let n = 0;
@@ -2239,6 +2305,9 @@
     }
     updateJump();
     sweepAvatars();
+    // A chat whose newest page is mostly hidden tool lines doesn't fill the screen, so nothing
+    // scrolls: look for older messages from here too.
+    if (S.hasMore.get(b.id) && msgsEl.scrollTop <= 120) maybeLoadOlder();
   }
   function rowFor(m) {
     const sig = sigOf(m);
@@ -2256,7 +2325,16 @@
       }
     }
     const el = msgNode(m);
-    if (!c && !S.initialRender) el.classList.add('enter');
+    if (!c && !S.initialRender) {
+      // The slide-in plays once: without the class, putting the row back later can't replay it.
+      el.classList.add('enter');
+      const done = (e) => {
+        if (e.target !== el || e.animationName !== 'row-in') return;
+        el.classList.remove('enter');
+        el.removeEventListener('animationend', done);
+      };
+      el.addEventListener('animationend', done);
+    }
     if (c) el.className = el.className + (c.el.classList.contains('gs') ? ' gs' : '');
     S.nodes.set(m.id, { el, sig, role: m.role });
     return el;
