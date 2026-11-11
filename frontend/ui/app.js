@@ -354,6 +354,9 @@
           el._av && el._av.destroy();
         } catch {}
         el._av = null;
+        // The picture is gone now, so forget the look: an element that is shown again (the
+        // working row is reused for every turn) gets painted again instead of staying empty.
+        el._look = null;
         liveAvatars.delete(el);
       }
     }
