@@ -93,13 +93,15 @@ pub async fn quick_answer(cfg: &Config, data_dir: &std::path::Path, prompt: &str
         "--setting-sources=",
         "--permission-mode",
         "dontAsk",
-        "--disallowedTools",
-        "Bash",
-        "Edit",
-        "Write",
-        "WebFetch",
-        "WebSearch",
-        "Task",
+        // No tools and a one-line system prompt in place of Claude Code's own: a check is about 800
+        // tokens instead of 15,000 (Claude Code's instructions and tool descriptions), and a Bot
+        // can ask for hundreds of checks a day. Both are single arguments without quotes or line
+        // breaks, which also pass through a claude.cmd on Windows.
+        "--tools=",
+        "--system-prompt",
+        "Answer the message exactly in the format it asks for.",
+        // Nothing reads these one-answer conversations again, so they aren't saved to disk.
+        "--no-session-persistence",
     ])
     .current_dir(data_dir)
     .stdin(Stdio::piped())

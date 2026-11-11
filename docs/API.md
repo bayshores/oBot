@@ -426,7 +426,8 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   only MCP servers are `oBot` plus Settings › Computer › Plugins, and the computer's personal setup (`~/.claude`: plugins,
   skills, hooks, permission rules, CLAUDE.md, output style) is skipped. The bot folder's own `.claude/settings*.json` and
   `.claude/agents` are skipped too, because a bot can write those itself to give itself permissions. Only oBot's
-  `--settings` file below applies. The auto-review check uses the same `--setting-sources=`.
+  `--settings` file below applies. The auto-review check uses the same `--setting-sources=`, and runs with no tools
+  (`--tools=`), a one-line `--system-prompt` and `--no-session-persistence`, so one check is about 800 tokens.
 * Skills in the bot folder (`.claude/skills/<name>/SKILL.md`, see `/api/bots/:id/skills`) are copied before each run into
   `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
   `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
