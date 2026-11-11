@@ -1491,7 +1491,6 @@
   }
   function renderMe() {
     const name = (S.prefs.userName || 'You').trim() || 'You';
-    $('#meCircle').textContent = name[0].toUpperCase();
     $('#meName').textContent = name;
   }
   function isWaiting(b) {
@@ -5284,9 +5283,11 @@
   }
 
   // ───────────────────────────── account menu + shortcuts sheet ─────────────────────────────
-  function accountMenu() {
+  // Opens above the name in the sidebar, or above the Settings button when the sidebar is narrow
+  // (the name is hidden there).
+  function accountMenu(anchor = $('#meBtn')) {
     menuAt(
-      $('#meBtn'),
+      anchor,
       [
         { label: 'Settings', icon: 'gear', kbd: MOD + ',', action: () => openSettings('general') },
         { label: 'Computer', icon: 'monitor', action: () => openSettings('computer') },
@@ -5720,8 +5721,7 @@
     const accountCard = card(
       h(
         'div',
-        { class: 'set-row account-row' },
-        h('span', { class: 'acct-circle' }, ((name || claude.email || 'You')[0] || 'Y').toUpperCase()),
+        { class: 'set-row' },
         h(
           'div',
           { class: 'set-row-text' },
@@ -8578,7 +8578,7 @@
   $('#newBotBtn').addEventListener('click', (e) => S.booted && newMenu(e.currentTarget));
   $('#railNewBtn').addEventListener('click', (e) => S.booted && newMenu(e.currentTarget));
   $('#templatesBtn').addEventListener('click', () => S.booted && openTemplates());
-  $('#settingsBtn').addEventListener('click', () => openSettings('general'));
+  $('#settingsBtn').addEventListener('click', () => (app.classList.contains('rail') ? accountMenu($('#settingsBtn')) : openSettings('general')));
   $('#meBtn').addEventListener('click', () => accountMenu());
   $('#island').addEventListener('click', () => setPanel(!S.panelOpen));
   $('#menuBtn').addEventListener('click', () => app.classList.toggle('sidebar-open'));
