@@ -732,7 +732,7 @@ pub fn tool_definitions() -> Vec<Value> {
         json!({"name": "email_send", "description": "Send an email, or reply to one (give reply_to = the email's id; the reply stays in the same conversation). The user sees the whole email on an Allow / Deny card and it's only sent if they allow it; this waits for their answer. Set draft:true to only save a draft in their mailbox (no card).",
                "inputSchema": {"type": "object", "properties": {"account": account, "to": to, "cc": to, "bcc": to,
                    "subject": {"type": "string", "description": "Can be left out when replying"},
-                   "body": {"type": "string", "description": "Plain text"},
+                   "body": {"type": "string", "description": "Plain text, laid out the way a person writes an email, with real line breaks: the greeting on its own line, a blank line between paragraphs, and the sign-off and the name each on their own line. Never one long line."},
                    "reply_to": {"type": "string", "description": "Id of the email you're replying to"},
                    "attachments": {"type": "array", "items": {"type": "string"}, "description": "File paths (absolute or in your working folder)"},
                    "draft": {"type": "boolean"}}, "required": ["body"]}}),
