@@ -258,6 +258,9 @@ fn main() {
                 // oBot is always dark (no light mode), so the window frame and loading background match.
                 .theme(Some(tauri::Theme::Dark))
                 .background_color(tauri::window::Color(11, 11, 12, 255))
+                // Files dragged onto the window go to the page, which attaches them to the open chat.
+                // Without this the app's own drop handling takes them and the page never sees the drop.
+                .disable_drag_drop_handler()
                 // A link that asks for a new window opens in the normal web browser, never in a bare
                 // oBot window.
                 .on_new_window(|url, _| {

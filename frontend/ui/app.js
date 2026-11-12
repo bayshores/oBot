@@ -4026,34 +4026,42 @@
     row.hidden = !S.pending.length;
   }
 
-  // drag & drop onto the chat
+  // Drag & drop: files dropped anywhere on the window are attached to the open chat.
   let dragDepth = 0;
   const chatEl = $('#chat');
   const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
-  chatEl.addEventListener('dragenter', (e) => {
-    if (!hasFiles(e) || !curBot()) return;
+  const canDrop = () => !!curBot() && !modalStack.length;
+  const endDrag = () => {
+    dragDepth = 0;
+    chatEl.classList.remove('dragging');
+    composerEl.classList.remove('dragover');
+  };
+  window.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
     e.preventDefault();
+    if (!canDrop()) return;
     dragDepth++;
     chatEl.classList.add('dragging');
     composerEl.classList.add('dragover');
   });
-  chatEl.addEventListener('dragover', (e) => {
-    if (hasFiles(e)) e.preventDefault();
+  window.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    // Always handled, also where a file can't be dropped: otherwise the window would open the
+    // dropped file in place of oBot.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = canDrop() ? 'copy' : 'none';
   });
-  chatEl.addEventListener('dragleave', () => {
+  window.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
     dragDepth = Math.max(0, dragDepth - 1);
-    if (!dragDepth) {
-      chatEl.classList.remove('dragging');
-      composerEl.classList.remove('dragover');
-    }
+    if (!dragDepth) endDrag();
   });
-  chatEl.addEventListener('drop', (e) => {
+  window.addEventListener('drop', (e) => {
     if (!hasFiles(e)) return;
     e.preventDefault();
-    dragDepth = 0;
-    chatEl.classList.remove('dragging');
-    composerEl.classList.remove('dragover');
-    uploadFiles(Array.from(e.dataTransfer.files || []));
+    const ok = canDrop();
+    endDrag();
+    if (ok) uploadFiles(Array.from(e.dataTransfer.files || []));
   });
   // paste files anywhere (when focus isn't in another field)
   document.addEventListener('paste', (e) => {
