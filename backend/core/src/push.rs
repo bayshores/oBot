@@ -254,7 +254,8 @@ fn worth_telling(created: bool, m: &Message) -> Option<(String, bool, String)> {
     let meta = |k: &str| m.meta.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let or = |a: String, b: &str| if a.trim().is_empty() { b.to_string() } else { a };
     match m.role.as_str() {
-        "bot" if m.status == "done" && !m.text.trim().is_empty() => Some((format!("d:{}", m.id), false, m.text.clone())),
+        // Not a message the Bot sent while it kept working (meta.update): its reply at the end is the news.
+        "bot" if m.status == "done" && !m.text.trim().is_empty() && m.meta.get("update") != Some(&Value::Bool(true)) => Some((format!("d:{}", m.id), false, m.text.clone())),
         "attachment" if created => Some((format!("d:{}", m.id), false, or(m.text.clone(), &format!("Sent {}", or(meta("name"), "a file"))))),
         "visualization" if created => Some((format!("d:{}", m.id), false, or(meta("title"), "Made a page"))),
         "approval" if m.status == "pending" => Some((format!("a:{}", m.id), true, or(meta("summary"), &m.text))),
@@ -328,6 +329,8 @@ mod tests {
     fn tells_about_the_same_things_as_the_desktop_app() {
         assert_eq!(worth_telling(false, &msg("bot", "done", json!({}))).map(|x| x.1), Some(false));
         assert!(worth_telling(false, &msg("bot", "streaming", json!({}))).is_none());
+        // A message sent while the Bot kept working: the reply at the end is the one to tell about.
+        assert!(worth_telling(true, &msg("bot", "done", json!({"update": true}))).is_none());
         assert!(worth_telling(true, &msg("tool", "ok", json!({}))).is_none());
         assert_eq!(worth_telling(true, &msg("approval", "pending", json!({"summary": "Run npm test"}))).unwrap().2, "Run npm test");
         assert!(worth_telling(false, &msg("approval", "allowed", json!({}))).is_none());

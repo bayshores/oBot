@@ -1,5 +1,5 @@
 //! oBot's own tools for bots (served to Claude Code through the `oBot` MCP server in mcp.rs).
-//! They give bots extra abilities: quick-reply buttons, sending files, showing pages,
+//! They give bots extra abilities: quick-reply buttons, messages while they work, sending files, showing pages,
 //! memory, routines, check-ins, a status line, setting up or retiring the user's other Bots, and
 //! email + calendar of connected accounts (accounts.rs).
 
@@ -43,6 +43,16 @@ pub fn definitions() -> Value {
                 "path": {"type": "string", "description": "File path, absolute or relative to your working folder"},
                 "caption": {"type": "string"}
             }, "required": ["path"]}
+        },
+        {
+            "name": "send_message",
+            "description": "Send the user a chat message right now, while you keep working. Call it in the same step as your next tool calls. For what they'd want to hear before you finish: that you understood a new request or a correction, a finding or decision that matters, or what's blocking you or taking long. Not for routine steps, and not for your final answer: that is your reply at the end of the turn.",
+            "inputSchema": {"type": "object", "properties": {
+                "text": {"type": "string", "description": "A sentence or three, written to the user. Markdown works."}
+            }, "required": ["text"]},
+            // Claude Code loads oBot's other tools only when the Bot looks them up. This one is ready
+            // from the start, so messaging the user never costs an extra step.
+            "_meta": {"anthropic/alwaysLoad": true}
         },
         {
             "name": "show_page",
@@ -490,6 +500,15 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                        "url": format!("/api/bots/{bot_id}/files/{}", crate::util::url_path(&rel))}),
             );
             Ok(format!("Sent {fname} to the user."))
+        }
+
+        // The runner posts the message when it sees this call (runner.rs `assistant`): it knows
+        // whether the turn is a routine, whose messages wait until it ends.
+        "send_message" => {
+            if s(args, "text").trim().is_empty() {
+                return Err("send_message needs text".into());
+            }
+            Ok("Sent. Keep working. Your reply at the end still has to hold everything the user needs.".into())
         }
 
         "show_page" => {

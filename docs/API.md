@@ -131,8 +131,12 @@ Message = {
 //            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
-//  note:     {}   a short line the Bot wrote right before a tool call ("Checking the syllabus."); hidden like tool rows,
-//            and shown as bot.activity.label while it works. Longer text (lists, paragraphs, questions) stays a "bot" message.
+//  note:     {}   a short line of narration the Bot wrote right before a tool call ("Checking the syllabus."); hidden like tool rows,
+//            and shown as bot.activity.label while it works. Text that speaks to the user (it says "you" or "your"), a
+//            question, a list or anything long is a "bot" message instead.
+//  bot:      { update?: true }   update = a message the Bot sent while it kept working: its acknowledgement of the user's
+//            message (the first text before its first tool call), the send_message tool, or text before a tool call that
+//            isn't a status note. It is shown like any reply, but sends no notification; the reply at the end does.
 //  speaker:  (any role a Bot posts, in a group chat) the id of the Bot that posted it
 //  reactions: (any message) [{ emoji, by: "user" | bot id }]   tapback reactions (the user's, or a Bot's via `react`)
 //  reply_to: (user) { id, who ("You" or the Bot's name), bot (null = the user's own), quote }   the message being replied to
@@ -348,6 +352,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 | Tool | What it does |
 |---|---|
 | `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message) |
+| `send_message {text}` | a chat message while the Bot keeps working (a `bot` message with `meta.update`; no notification) |
 | `send_file {path, caption?}` · `show_page {title, html \| path}` | file in the chat · sandboxed HTML page. To show pictures inside a reply, bots write markdown images instead (see `html` above) |
 | `remember {fact, tier: "profile"\|"log", about?: "user"\|"me", bot?}` | save a fact. `profile` (standing instructions and rules like "never ask me to sign in to X", core identity) is in the bot's prompt every turn; `log` (everything else) is searched with `recall`, and only its newest 15 entries are in the prompt. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
 | `recall {query?, bot?}` · `update_memory {id, fact?, tier?}` · `forget {id}` | search facts by words (no query: profile + newest log) · fix one or move it between tiers · delete one |

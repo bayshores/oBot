@@ -310,7 +310,7 @@ async fn summarize_idle(state: &Shared, bot_id: &str, rx: &mut mpsc::UnboundedRe
     state.runs.lock().await.insert(bot_id.to_string(), RunHandle { stop: stop.clone(), steer: steer.clone() });
     let mut arrived = vec![];
     {
-        let run = drive(state, bot_id, None, false, true, "/compact", stop.clone(), Arc::new(AtomicBool::new(false)), steer, true);
+        let run = drive(state, bot_id, None, false, true, false, "/compact", stop.clone(), Arc::new(AtomicBool::new(false)), steer, true);
         tokio::pin!(run);
         loop {
             tokio::select! {
@@ -440,7 +440,9 @@ fn with_time(prompt: &str) -> String {
     format!("[oBot: It's {} now.]\n{prompt}", crate::util::now_local().format("%A %Y-%m-%d %H:%M"))
 }
 
-/// A short bit of narration ("Checking the syllabus now.") rather than something the user needs to read.
+/// A status line ("Checking the syllabus now."): a short bit of narration about what the Bot is
+/// doing. Text that speaks to the user ("Got it, I'll skip the baggy ones you disliked."), a question,
+/// a list or anything long is a message for them instead, posted in the chat right away.
 fn is_note(t: &str) -> bool {
     !t.is_empty()
         && t.chars().count() <= 280
@@ -450,6 +452,12 @@ fn is_note(t: &str) -> bool {
             l.starts_with("- ") || l.starts_with("* ") || l.starts_with('|') || l.starts_with("```") || l.starts_with('#') || l.chars().next().is_some_and(|c| c.is_ascii_digit()) && l.contains(". ")
         })
         && !t.trim_end().ends_with('?')
+        && !speaks_to_user(t)
+}
+
+/// True when the text addresses the user: it says "you" or "your" ("you're" and "you'll" count).
+fn speaks_to_user(t: &str) -> bool {
+    t.split(|c: char| !c.is_alphanumeric()).any(|w| ["you", "your", "yours", "yourself"].iter().any(|y| w.eq_ignore_ascii_case(y)))
 }
 
 /// The prompt for another try: the failed attempt may already be in the conversation.
@@ -590,6 +598,7 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         n if n.starts_with("mcp__obot__computer_") => ("on_its_computer", "On its computer".into()),
         "mcp__obot__show_page" => ("working", "Making a page".into()),
         "mcp__obot__send_file" => ("working", "Sending a file".into()),
+        "mcp__obot__send_message" => ("working", "Writing to you".into()),
         "mcp__obot__remember" | "mcp__obot__recall" | "mcp__obot__forget" | "mcp__obot__update_memory" => ("thinking", "Remembering".into()),
         "mcp__obot__list_bots" | "mcp__obot__get_bot" => ("reading_file", "Looking at your Bots".into()),
         "mcp__obot__create_bot" => ("working", "Setting up a Bot".into()),
@@ -678,7 +687,7 @@ async fn run_turn(
     let mut attempt = 0;
     let mut current = prompt.to_string();
     let failure = loop {
-        let outcome = match drive(state, bot_id, group, side, false, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
+        let outcome = match drive(state, bot_id, group, side, false, from_user, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
             Ok(o) => o,
             Err(e) => Outcome::Failed(Failure::from_text(&e.to_string(), true)),
         };
@@ -905,8 +914,14 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
         "You are \"{name}\", a personal AI assistant that lives in the oBot app.\n\
          The user chats with you like in a messaging app, so reply like a helpful friend texting: \
          warm, clear and to the point, in short paragraphs. Use Markdown only when it helps (lists, code, tables).\n\
-         While you work, a short line before a tool call (like \"Checking the syllabus.\") shows as your status, not \
-         as a message, so don't narrate every step. Put everything the user needs in your reply at the end.\n\
+         When a request will take you more than a moment, start with one short acknowledgement before your \
+         first tool call (like \"On it, checking all four now.\"): it's sent to the user as a chat message right \
+         away. After that, a short line of text before a tool call (like \"Checking the syllabus.\") only shows \
+         as your status line and isn't kept in the chat. To tell the user something more while you keep working, \
+         call the send_message tool in the same step as your next tool calls. Use it when they'd want to hear it \
+         now: a finding or a decision that matters, or what's blocking you or taking long. Keep it to a sentence \
+         or three, and don't send one for routine steps (opening a page, clicking, typing, trying again). The \
+         user is only notified about your reply at the end, so it still has to hold everything they need.\n\
          Make what you write (replies, drafts, files) only as long as the task needs; a draft should be about the \
          length the user or the assignment expects.\n\
          Your instructions and memory profile are the user's standing rules. If they ask for something that goes \
@@ -937,7 +952,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     );
     s.push_str(
         "\noBot gives you extra tools (mcp__obot__*): ask_user (tap-to-answer buttons), send_file \
-         (deliver files into the chat to keep or download), show_page (interactive HTML in the chat), remember/recall/update_memory/forget \
+         (deliver files into the chat to keep or download), send_message (a chat message while you keep working), show_page (interactive HTML in the chat), remember/recall/update_memory/forget \
          (long-term memory), check_back_later (wake yourself up later and message the user), run_in_background \
          (long commands that keep running after your turn; you're woken with the result. Prefer it over your \
          shell's own background option for anything over a few minutes: that one keeps you busy, so the user's \
@@ -1486,6 +1501,8 @@ async fn drive(
     side: bool,
     // An idle summary (see `summarize_idle`): `prompt` is the Claude Code command, sent as it is.
     tidy: bool,
+    // The turn answers a message the user just sent in the Bot's own chat.
+    from_user: bool,
     prompt: &str,
     stop: Arc<Notify>,
     stopped: Arc<AtomicBool>,
@@ -1539,6 +1556,7 @@ async fn drive(
     let stdout = child.stdout.take().ok_or_else(|| anyhow!("no output from Claude Code"))?;
     let mut lines = BufReader::new(stdout).lines();
     let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string), side, tidy);
+    turn.ack_due = from_user && group.is_none() && !side;
     let (old_size, _, old_start) = saved_context(state, bot_id);
     // The first request of a new or just summarized conversation shows the size it starts with.
     turn.fresh = old_size == 0 || !resume || bot.session_id.is_empty();
@@ -1647,6 +1665,9 @@ struct Turn {
     waiting: Vec<Message>,
     /// The routine's newest reply was PASS.
     passed: bool,
+    /// The user's message hasn't been answered yet: what the Bot writes before its first tool call
+    /// is its acknowledgement ("On it."), shown as a chat message instead of a status note.
+    ack_due: bool,
     streamed_api_msgs: HashSet<String>,
     /// Text Claude Code made up itself (model "<synthetic>"), e.g. "You've hit your weekly limit".
     /// Held back until the run's result: an error result shows the same text as an error, so
@@ -1786,6 +1807,7 @@ impl Turn {
             held: Vec::new(),
             waiting: Vec::new(),
             passed: false,
+            ack_due: false,
             streamed_api_msgs: HashSet::new(),
             synthetic: Vec::new(),
             tools: HashMap::new(),
@@ -1932,14 +1954,17 @@ impl Turn {
         }
     }
 
-    /// A tool call follows the held replies: short ones become status notes (hidden in the chat like
-    /// tool rows; the last one is the status line), longer ones stay messages. Returns the last note.
+    /// A tool call follows the held replies: short narration becomes a status note (hidden in the
+    /// chat like tool rows; the last one is the status line). The acknowledgement of the user's
+    /// message and anything else is a message for the user, posted now (meta.update). Returns the
+    /// last note.
     async fn notes_before_tool(&mut self) -> Option<String> {
         let mut last = None;
-        for id in std::mem::take(&mut self.held) {
+        let ack = std::mem::take(&mut self.ack_due);
+        for (i, id) in std::mem::take(&mut self.held).into_iter().enumerate() {
             let Some(m) = self.live.get(&id) else { continue };
             let t = m.text.trim().to_string();
-            if is_note(&t) {
+            if is_note(&t) && !(ack && i == 0) {
                 let mut m = self.live.remove(&id).unwrap_or_else(|| self.new_msg("note", "", "done", json!({})));
                 m.role = "note".into();
                 m.text = t.clone();
@@ -1948,6 +1973,10 @@ impl Turn {
                 self.state.emit_message(true, &m);
                 last = Some(t);
             } else {
+                // A message sent while the work goes on: shown like any reply, but nobody is notified.
+                if let Some(m) = self.live.get_mut(&id) {
+                    m.meta["update"] = json!(true);
+                }
                 self.finalize(&id).await;
             }
         }
@@ -2020,12 +2049,13 @@ impl Turn {
         }
     }
 
-    /// Show a finished Bot reply that wasn't streamed live.
-    fn add_bot_text(&mut self, text: &str) {
+    /// Show a Bot reply that wasn't streamed live. `update`: sent with send_message while the work
+    /// goes on (meta.update: shown like any reply, but nobody is notified).
+    fn add_bot_text(&mut self, text: &str, update: bool) {
         if self.passes(text) {
             return;
         }
-        let m = self.new_msg("bot", text, "done", json!({}));
+        let m = self.new_msg("bot", text, "done", if update { json!({"update": true}) } else { json!({}) });
         if self.side {
             self.waiting.push(m);
             return;
@@ -2072,7 +2102,7 @@ impl Turn {
                         self.synthetic.push(text.to_string());
                         continue;
                     }
-                    self.add_bot_text(text);
+                    self.add_bot_text(text, false);
                 }
                 "tool_use" => {
                     let id = b.get("id").and_then(Value::as_str).unwrap_or("").to_string();
@@ -2081,6 +2111,16 @@ impl Turn {
                         continue;
                     }
                     let input = b.get("input").cloned().unwrap_or(json!({}));
+                    // A message for the user: shown as the Bot's reply, not as a tool line.
+                    if name == "mcp__obot__send_message" {
+                        if self.tool_inputs.insert(id, json!({})).is_none() {
+                            let text = input.get("text").and_then(Value::as_str).unwrap_or("").trim().to_string();
+                            if !text.is_empty() {
+                                self.add_bot_text(&text, true);
+                            }
+                        }
+                        continue;
+                    }
                     let summary = tool_summary(&name, &input, true);
                     let m = self.new_msg(
                         "tool",
@@ -2165,7 +2205,7 @@ impl Turn {
         // On an error the same text is shown once, as the error below.
         for t in std::mem::take(&mut self.synthetic) {
             if !is_error {
-                self.add_bot_text(&t);
+                self.add_bot_text(&t, false);
             }
         }
         if is_error {
@@ -2207,7 +2247,7 @@ impl Turn {
     async fn finish(&mut self, end: End, success: bool, stderr: &str) -> Option<Failure> {
         if !self.got_result {
             for t in std::mem::take(&mut self.synthetic) {
-                self.add_bot_text(&t);
+                self.add_bot_text(&t, false);
             }
         }
         self.flush_held().await;
@@ -2385,6 +2425,32 @@ mod tests {
         assert!(merge(&[job("now", true, true)], true).contains("Send now"));
         // oBot's own turns (routines...) aren't labelled as user messages.
         assert_eq!(merge(&[job("<obot_routine>", false, true)], false), "<obot_routine>");
+    }
+
+    #[test]
+    fn narration_is_status_and_text_for_the_user_is_a_message() {
+        for status in [
+            "Checking the Vault for a Discord login.",
+            "The open didn't navigate; trying again via the address bar.",
+            "Four files. Opening them one at a time, starting with the first.",
+            "Fresh page, empty field. Typing the email and pressing Next once more.",
+            "YouTube loads. Opening the search box.",
+        ] {
+            assert!(is_note(status), "{status}");
+        }
+        for message in [
+            "Re-reading each file one at a time with your new rules: 100% cotton, under $100, heavyweight.",
+            "Yep, you can watch my screen live in the app. I'll try a different way in.",
+            "Everything matches what you approved, just $8 cheaper. Placing the order.",
+            "Got it, you'll get only items that check out.",
+            "Which size should I pick?",
+            "- Found two tees",
+            "Found it.\n\nOpening it.",
+            "",
+        ] {
+            assert!(!is_note(message), "{message}");
+        }
+        assert!(!is_note(&"a".repeat(281)));
     }
 
     #[test]

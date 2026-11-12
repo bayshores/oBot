@@ -3724,7 +3724,8 @@
       const orig = m;
       m = Object.assign({}, orig, { text: `${who.name}: ${orig.text || ''}`, meta: Object.assign({}, orig.meta, orig.meta && orig.meta.summary ? { summary: `${who.name}: ${orig.meta.summary}` } : {}) });
     }
-    if (m.role === 'bot' && m.status === 'done' && (m.text || '').trim()) maybeNotify(b, 'done', noPictures(m.text), 'd:' + m.id);
+    // not for a message the Bot sent while it kept working (meta.update): its reply at the end is the news
+    if (m.role === 'bot' && m.status === 'done' && (m.text || '').trim() && !(m.meta && m.meta.update)) maybeNotify(b, 'done', noPictures(m.text), 'd:' + m.id);
     else if (m.role === 'attachment' && created) maybeNotify(b, 'done', m.text || `Sent ${(m.meta && m.meta.name) || 'a file'}`, 'd:' + m.id);
     else if (m.role === 'visualization' && created) maybeNotify(b, 'done', (m.meta && m.meta.title) || 'Made a page', 'd:' + m.id);
     else if (m.role === 'approval' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.summary) || m.text, 'a:' + m.id);
