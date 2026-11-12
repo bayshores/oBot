@@ -193,10 +193,22 @@ pub fn routine_prompt(r: &Routine, test: bool) -> String {
         } else {
             "If nothing changed or nothing needs their attention, or you skip the task (for example because it's \
              outside the hours the user wants to hear from you), reply with only the word PASS: then nothing is \
-             posted and nobody is notified. Never post a line only to say that there's nothing new or that you \
-             aren't messaging them, unless the task asks for a report every time."
+             posted and nobody is notified. Write nothing else in this run then: no note about what you checked \
+             before the PASS, and no line saying that there's nothing new or that you aren't messaging them. \
+             The exception is a task that asks for a report every time."
         },
     )
+}
+
+/// A routine's reply that means "nothing for the user": the word PASS alone, or PASS as the last
+/// word after a note about what was checked (Bots often add one). Then the run posts nothing.
+pub fn stays_quiet(reply: &str) -> bool {
+    let t = reply.trim_end_matches(|c: char| !c.is_alphanumeric());
+    if crate::group::is_pass(t) {
+        return true;
+    }
+    // After other text only the capital-letter word counts: "I'll give it a pass" is a sentence.
+    t.strip_suffix("PASS").is_some_and(|before| before.ends_with(|c: char| !c.is_alphanumeric()))
 }
 
 /// What the Bot is told when a check-in it scheduled with check_back_later comes due.
@@ -294,6 +306,18 @@ mod tests {
         assert!(routine_prompt(&r, false).contains("reply with only the word PASS"));
         let test = routine_prompt(&r, true);
         assert!(!test.contains("PASS") && test.contains("say so in one line"));
+    }
+
+    #[test]
+    fn a_reply_that_ends_with_pass_stays_quiet() {
+        assert!(stays_quiet("PASS"));
+        assert!(stays_quiet("**pass.**"));
+        assert!(stays_quiet("Still checking: no CSE 29 entry. I'm closing out the check now.\n\nPASS"));
+        assert!(stays_quiet("Nothing new. PASS."));
+        assert!(!stays_quiet("The exam slot has opened. Book it by Friday."));
+        assert!(!stays_quiet("I'll give this one a pass"));
+        assert!(!stays_quiet("Bring your COMPASS"));
+        assert!(!stays_quiet("PASS is what I'd reply if nothing had changed, but the slot opened."));
     }
 
     #[test]

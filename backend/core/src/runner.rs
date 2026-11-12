@@ -1642,6 +1642,11 @@ struct Turn {
     /// Finished replies of the current API message, held until we know whether a tool call follows
     /// (then a short one is a status note, not a chat bubble).
     held: Vec<String>,
+    /// A routine's finished replies wait here until its turn ends: if its last reply is PASS
+    /// (nothing for the user), none of them is posted, also not a note it wrote on the way.
+    waiting: Vec<Message>,
+    /// The routine's newest reply was PASS.
+    passed: bool,
     streamed_api_msgs: HashSet<String>,
     /// Text Claude Code made up itself (model "<synthetic>"), e.g. "You've hit your weekly limit".
     /// Held back until the run's result: an error result shows the same text as an error, so
@@ -1779,6 +1784,8 @@ impl Turn {
             blocks: HashMap::new(),
             live: HashMap::new(),
             held: Vec::new(),
+            waiting: Vec::new(),
+            passed: false,
             streamed_api_msgs: HashSet::new(),
             synthetic: Vec::new(),
             tools: HashMap::new(),
@@ -1918,12 +1925,6 @@ impl Turn {
         }
     }
 
-    /// Where a reply of only the word PASS means "post nothing": a group chat (it's another Bot's
-    /// job) and a routine (nothing is worth the user's attention).
-    fn may_pass(&self) -> bool {
-        self.group.is_some() || self.side
-    }
-
     /// Show the held replies as chat messages.
     async fn flush_held(&mut self) {
         for id in std::mem::take(&mut self.held) {
@@ -1954,15 +1955,47 @@ impl Turn {
     }
 
     async fn finalize(&mut self, id: &str) {
-        let Some(mut m) = self.live.remove(id) else { return };
-        if m.text.trim().is_empty() || (self.may_pass() && crate::group::is_pass(&m.text)) {
+        let Some(m) = self.live.remove(id) else { return };
+        if m.text.trim().is_empty() || self.passes(&m.text) {
             return;
         }
+        if self.side {
+            self.waiting.push(m);
+            return;
+        }
+        self.post(m).await;
+    }
+
+    /// True when this reply means "post nothing": in a group chat the word PASS (it's another Bot's
+    /// job), in a routine a reply that ends with PASS (nothing is worth the user's attention).
+    fn passes(&mut self, text: &str) -> bool {
+        if self.side {
+            self.passed = crate::routines::stays_quiet(text);
+            return self.passed;
+        }
+        self.group.is_some() && crate::group::is_pass(text)
+    }
+
+    /// Show a finished reply as a chat message.
+    async fn post(&mut self, mut m: Message) {
         m.text = crate::media::save_pictures(&self.state, &self.bot_id, m.text.trim()).await;
         m.html = markdown::render(&m.text);
         let _ = self.state.db.upsert_message(&m);
         self.state.emit_message(true, &m);
         self.bump_bot(&m.text, 1).await;
+    }
+
+    /// A routine's turn is over: post the replies that waited, unless it ended with PASS.
+    async fn post_waiting(&mut self) {
+        let waiting = std::mem::take(&mut self.waiting);
+        if std::mem::take(&mut self.passed) {
+            return;
+        }
+        for mut m in waiting {
+            // Posted now, so it goes below the tool lines that ran after it was written.
+            m.created_at = now_ms();
+            self.post(m).await;
+        }
     }
 
     /// The sidebar preview: in a group it starts with who wrote it ("School Bot: …").
@@ -1989,10 +2022,14 @@ impl Turn {
 
     /// Show a finished Bot reply that wasn't streamed live.
     fn add_bot_text(&mut self, text: &str) {
-        if self.may_pass() && crate::group::is_pass(text) {
+        if self.passes(text) {
             return;
         }
         let m = self.new_msg("bot", text, "done", json!({}));
+        if self.side {
+            self.waiting.push(m);
+            return;
+        }
         let _ = self.state.db.upsert_message(&m);
         self.state.emit_message(true, &m);
         let st = self.state.clone();
@@ -2155,6 +2192,7 @@ impl Turn {
             // The reply is done; Claude Code still runs its end-of-turn hooks and exits. Show the
             // Bot as done now, so the "working" line doesn't stay under the reply.
             self.flush_held().await;
+            self.post_waiting().await;
             self.state.finishing.lock().unwrap_or_else(|e| e.into_inner()).insert(self.bot_id.clone());
             self.state.emit_bot(&self.bot_id).await;
         }
@@ -2177,6 +2215,7 @@ impl Turn {
         for id in ids {
             self.finalize(&id).await;
         }
+        self.post_waiting().await;
         // Tools still running when the turn ends: cut off by Stop or by a new message ("stopped"),
         // or the run broke ("failed").
         let cut_off = if matches!(end, End::Stopped | End::Steered) { "stopped" } else { "failed" };

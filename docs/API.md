@@ -418,7 +418,9 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   cached any more, so running it there meant re-reading that whole conversation at full price. Its message ends with
   the last 8 messages of the Bot's chat (`<recent_chat>`), and its replies go to the Bot's chat as before. A scheduled
   routine with nothing worth the user's attention replies with only the word `PASS`: nothing is posted, nobody is
-  notified, and the run doesn't count towards pausing the routine for unread results (a test run always replies). The main
+  notified, and the run doesn't count towards pausing the routine for unread results (a test run always replies). A
+  reply that ends with `PASS` after a note counts too, and a routine's replies are posted when its turn ends, so a note
+  written before a `PASS` isn't posted either. The main
   conversation is told what routines posted at the start of its next message (`[oBot: Routines posted since your last
   turn in this conversation …]`). A check-in the Bot set for itself with `check_back_later` continues its work, so it
   still runs in the main conversation.
