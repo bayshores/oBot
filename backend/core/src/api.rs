@@ -92,6 +92,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         screens: Default::default(),
         group_turns: Default::default(),
         finishing: Default::default(),
+        helpers: Default::default(),
     });
 
     // Look up Claude Code in the background so the first screen loads fast.
@@ -1254,6 +1255,10 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
     let b = InternalApprove { bot_id: bot_id.to_string(), tool_name: tool_name.to_string(), input: input.clone() };
     let summary = runner::tool_summary(&b.tool_name, &b.input, false);
 
+    // What the status line says now (for example "2 helpers working"), to put back once the
+    // action may run: nothing else would change it while a helper carries on.
+    let before = st.activity.lock().unwrap_or_else(|e| e.into_inner()).get(bot_id).cloned();
+
     // Auto-review: let a fast model wave through routine actions so the user isn't pestered.
     let cfg = st.config.read().await.clone();
     let mut verdict = None;
@@ -1265,6 +1270,7 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
             if let Some(v) = &verdict {
                 if v.allow {
                     tracing::info!("auto-review allowed {} for {}: {}", b.tool_name, bot.name, v.reason);
+                    runner::restore_activity(st, bot_id, before, "Checking the action").await;
                     return Ok(true);
                 }
             }
@@ -1276,7 +1282,11 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| crate::review::fallback_rule(&b.tool_name, &b.input));
     let reason = verdict.as_ref().map(|v| v.reason.clone()).unwrap_or_default();
-    ask_approval(st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason).await
+    let allowed = ask_approval(st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason).await?;
+    if allowed {
+        runner::restore_activity(st, bot_id, before, "Working").await;
+    }
+    Ok(allowed)
 }
 
 /// Show an Allow / Deny card in the bot's chat and wait for the user's answer.

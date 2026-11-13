@@ -718,6 +718,15 @@ b, strong { font-weight: var(--w-semibold); }
 .act-phrase.swap { animation: phrase-in .18s var(--ease); }
 @keyframes phrase-in { from { opacity: 0; transform: translateY(4px); } }
 .act-elapsed { font-size: 12px; color: var(--text-3); flex: none; }
+/* the Bot's helpers, one line each under the activity line (lined up with its text) */
+.act-helpers { display: flex; flex-direction: column; gap: 2px; padding: 0 0 4px 44.5px; min-width: 0; max-width: 100%; }
+.act-helpers[hidden] { display: none; }
+.act-helper { display: flex; align-items: center; gap: 8px; height: 24px; font-size: 13px; color: var(--text-2); min-width: 0; animation: phrase-in .18s var(--ease); }
+.act-helper .ico, .act-helper .spinner { flex: none; color: var(--icon-3); }
+.act-helper-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-helper-step { flex: none; font-size: 12px; color: var(--text-3); }
+.act-helper.failed .ico { color: var(--danger-text); }
+.act-helper.stopped { opacity: .65; }
 .shimmer {
   background-image: linear-gradient(90deg,
     color-mix(in srgb, var(--text) 40%, transparent) 0%,

@@ -77,6 +77,9 @@ pub struct AppState {
     /// Bots whose reply is done while Claude Code wraps up (end-of-turn hooks, exit). They show as
     /// not working, so the "working" line doesn't linger under the reply.
     pub finishing: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Each working Bot's helpers (sub-agents) of the current run, as the app lists them under the
+    /// status line: Bot id -> `[{name, step, state}]` (see `Turn::show_helpers` in runner.rs).
+    pub helpers: std::sync::Mutex<HashMap<String, Value>>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -135,6 +138,10 @@ impl AppState {
                 .ok()
                 .and_then(|a| a.get(&b.id).cloned())
                 .unwrap_or(Value::Null);
+            let helpers = self.helpers.lock().ok().and_then(|h| h.get(&b.id).cloned());
+            if let (Some(h), true) = (helpers, b.activity.is_object()) {
+                b.activity["helpers"] = h;
+            }
         }
         b
     }

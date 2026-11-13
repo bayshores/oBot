@@ -74,6 +74,11 @@ Bot = {
                           // {kind:"searching_web", label:"Searching the web"}. kinds: thinking, searching_web,
                           // reading_web, reading_file, writing_file, running_commands, browsing, on_its_computer,
                           // connecting, waiting_for_you, working, status (bot-set text)
+                          // Also `helpers: [{name, step, state}]` once the Bot has started helpers (sub-agents)
+                          // in this run: what each was asked to do, what it's doing now ("Searching the
+                          // web") and state "working" | "done" | "failed" | "stopped". A Bot that has
+                          // replied and waits for its helpers stays running, with the label "2 helpers
+                          // working"; their reports wake it up and it replies again.
   workdir: string,        // folder on the computer
   label: string,          // short tagline under the name
   pinned: boolean,        // pinned tile above the list

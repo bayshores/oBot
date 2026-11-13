@@ -110,11 +110,13 @@ struct Turn {
 }
 
 /// What the user (or oBot for them) wrote in a transcript entry. Not Claude Code's own entries:
-/// its notes to the model (`isMeta`), the summary it writes in place of older messages, and what
-/// it records about a command of its own (oBot's idle summary is "/compact", see runner.rs).
+/// its notes to the model (`isMeta`), the summary it writes in place of older messages, what it
+/// records about a command of its own (oBot's idle summary is "/compact", see runner.rs), and a
+/// helper's report (it wakes the Bot up in the middle of the same request).
 fn user_text(entry: &Value) -> Option<String> {
     let flag = |name: &str| entry.get(name).and_then(Value::as_bool) == Some(true);
-    if entry.get("type").and_then(Value::as_str) != Some("user") || flag("isMeta") || flag("isCompactSummary") {
+    let report = entry.pointer("/origin/kind").and_then(Value::as_str) == Some("task-notification");
+    if entry.get("type").and_then(Value::as_str) != Some("user") || flag("isMeta") || flag("isCompactSummary") || report {
         return None;
     }
     match entry.pointer("/message/content") {
@@ -161,7 +163,9 @@ const PROMISES: [&str; 14] = [
     "i'll let you know when", "i'll get back to you", "i'll remind you", "i will remind you", "i'll keep an eye",
     "i'll keep checking", "i'll monitor", "i'll ping you",
 ];
-const SCHEDULERS: [&str; 4] = ["check_back_later", "create_routine", "update_routine", "run_in_background"];
+/// Tools that get the Bot woken up later. "Agent": a helper's report does (see `Turn::helper_ended`
+/// in runner.rs), so "I'll let you know when they're done" is true.
+const SCHEDULERS: [&str; 5] = ["check_back_later", "create_routine", "update_routine", "run_in_background", "Agent"];
 
 /// Why the Bot should keep going, if it promised a follow-up it didn't schedule.
 fn stop_check(t: &Turn) -> Option<String> {
@@ -311,6 +315,18 @@ mod tests {
         assert_eq!(user_text(&command), None);
         let printed = json!({"type": "user", "message": {"content": "<local-command-stdout>Compacted </local-command-stdout>"}});
         assert_eq!(user_text(&printed), None);
+    }
+
+    #[test]
+    fn waiting_for_a_helper_is_not_an_unscheduled_promise() {
+        let t = last_turn(&transcript("Two helpers are searching. I'll come back with the comparison.", &["Agent"]));
+        assert!(stop_check(&t).is_none());
+    }
+
+    #[test]
+    fn a_helpers_report_is_not_a_request() {
+        let report = json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"content": "<task-notification>done</task-notification>"}});
+        assert_eq!(user_text(&report), None);
     }
 
     #[test]

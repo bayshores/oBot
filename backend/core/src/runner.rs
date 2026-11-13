@@ -583,6 +583,25 @@ pub async fn set_activity(state: &Shared, bot_id: &str, a: Option<(&str, &str)>)
     }
 }
 
+/// Put a Bot's status line back to `before` after a short interruption (the safety check, an
+/// Allow / Deny card), but only while the line still shows that interruption (`shown`).
+pub async fn restore_activity(state: &Shared, bot_id: &str, before: Option<Value>, shown: &str) {
+    let Some(before) = before else { return };
+    let changed = {
+        let mut map = state.activity.lock().unwrap_or_else(|e| e.into_inner());
+        match map.get(bot_id) {
+            Some(now) if now["label"] == shown && *now != before => {
+                map.insert(bot_id.to_string(), before);
+                true
+            }
+            _ => false,
+        }
+    };
+    if changed {
+        state.emit_bot(bot_id).await;
+    }
+}
+
 /// Map a Claude Code tool name to the activity text shown under the bot's name.
 pub fn activity_for(name: &str) -> (&'static str, String) {
     match name {
@@ -1446,6 +1465,12 @@ fn build_command(
     if std::env::var_os("CLAUDE_CODE_AUTO_COMPACT_WINDOW").is_none() {
         cmd.env("CLAUDE_CODE_AUTO_COMPACT_WINDOW", COMPACT_WINDOW.to_string());
     }
+    // A Bot's helpers keep working after its reply, and Claude Code stays open for their reports.
+    // By default it stops them after 10 minutes of that and drops what they found, so the Bot
+    // never comes back with the answer it promised. 0 lets them finish (Stop still ends them).
+    if std::env::var_os(HELPER_WAIT).is_none() {
+        cmd.env(HELPER_WAIT, "0");
+    }
 
     if uses_api_key(cfg) {
         cmd.env("ANTHROPIC_API_KEY", &cfg.api_key);
@@ -1453,7 +1478,7 @@ fn build_command(
         // Use the Claude subscription login of this computer.
         cmd.env_remove("ANTHROPIC_API_KEY").env_remove("ANTHROPIC_AUTH_TOKEN");
     }
-    let mut passed: Vec<String> = vec!["OBOT".into(), "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into()];
+    let mut passed: Vec<String> = vec!["OBOT".into(), "CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), HELPER_WAIT.into()];
     if uses_api_key(cfg) {
         passed.push("ANTHROPIC_API_KEY".into());
     }
@@ -1476,6 +1501,9 @@ fn build_command(
     hide_console(&mut cmd);
     Ok((cmd, change_note))
 }
+
+/// Claude Code's setting for how long a finished run waits for background work (see `build_command`).
+const HELPER_WAIT: &str = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS";
 
 fn interrupt(pid: Option<u32>) {
     let Some(pid) = pid else { return };
@@ -1595,6 +1623,8 @@ async fn drive(
         }
     };
     let stderr = stderr_buf.lock().await.clone();
+    // Claude Code is gone, and its helpers with it.
+    state.helpers.lock().unwrap_or_else(|e| e.into_inner()).remove(bot_id);
     if !side {
         persona_used(state, bot_id, group);
     }
@@ -1685,6 +1715,30 @@ struct Turn {
     cutting: bool,
     /// The run's error result, if any (shown by run_turn after any retries).
     error: Option<String>,
+    /// The helpers (sub-agents) this run started, in the order they started.
+    helpers: Vec<Helper>,
+    /// Other background work Claude Code is waiting for (a command the Bot left running).
+    other_work: usize,
+    /// The Bot's reply is written and it's waiting for its helpers: the status line says so.
+    resting: bool,
+    /// The Bot shows as done (see `AppState::finishing`).
+    shown_done: bool,
+}
+
+/// A helper (sub-agent) a Bot started with the Agent tool.
+struct Helper {
+    /// Claude Code's id for it. A helper that is woken up again keeps it.
+    task: String,
+    /// The tool row of the Agent call that started it ("" when that call isn't from this run).
+    tool: String,
+    /// What it was asked to do, in a few words.
+    name: String,
+    /// What it's doing right now ("Searching the web").
+    step: String,
+    /// "working", "done", "failed" or "stopped".
+    state: &'static str,
+    /// It works on after the Agent call returned; its report reaches the Bot later.
+    background: bool,
 }
 
 /// Claude Code couldn't reopen the Bot's saved conversation (its wording differs by version).
@@ -1817,6 +1871,10 @@ impl Turn {
             resume_failed: false,
             cutting: false,
             error: None,
+            helpers: Vec::new(),
+            other_work: 0,
+            resting: false,
+            shown_done: false,
         }
     }
 
@@ -1846,8 +1904,14 @@ impl Turn {
             "system" => match v.get("subtype").and_then(Value::as_str) {
                 Some("init") => {
                     self.saw_init = true;
-                    self.set_session(&v)
+                    self.set_session(&v);
+                    // Sent again each time a helper's report wakes the Bot up.
+                    self.working_again().await;
                 }
+                Some("task_started") => self.helper_started(&v).await,
+                Some("task_progress") => self.helper_step(&v).await,
+                Some("task_notification") => self.helper_ended(&v).await,
+                Some("background_tasks_changed") => self.background_changed(&v).await,
                 Some("compact_boundary") => {
                     if !self.side {
                         retell_persona(&self.state, &self.bot_id, self.group.as_deref());
@@ -1872,6 +1936,7 @@ impl Turn {
             "user" => {
                 self.tool_results(&v["message"]);
                 set_activity(&self.state, &self.bot_id, Some(("thinking", "Thinking"))).await;
+                self.show_helpers().await;
             }
             "rate_limit_event" => self.rate_limit(&v["rate_limit_info"]),
             "result" => self.result(&v).await,
@@ -1901,12 +1966,21 @@ impl Turn {
         let idx = ev.get("index").and_then(Value::as_u64).unwrap_or(0);
         match ev.get("type").and_then(Value::as_str).unwrap_or("") {
             "message_start" => {
+                self.working_again().await;
                 self.asked = now_ms();
                 self.flush_held().await;
                 self.cur_api_msg = ev.pointer("/message/id").and_then(Value::as_str).unwrap_or("").to_string();
                 self.blocks.clear();
             }
             "message_stop" => self.flush_held().await,
+            "message_delta" => {
+                // The reply is written. Claude Code only sends the run's result once every helper
+                // is done, so this is when the Bot starts waiting for them.
+                if ev.pointer("/delta/stop_reason").and_then(Value::as_str) == Some("end_turn") {
+                    self.resting = true;
+                    self.show_helpers().await;
+                }
+            }
             "content_block_start" => {
                 let bt = ev.pointer("/content_block/type").and_then(Value::as_str).unwrap_or("");
                 if bt == "thinking" {
@@ -2145,8 +2219,14 @@ impl Turn {
                 continue;
             }
             let id = b.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
-            let Some(m) = self.tools.get_mut(id) else { continue };
             let is_error = b.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+            let helper = self.helpers.iter_mut().find(|h| h.tool == id && h.state == "working");
+            // A helper in the background: this result only says it started. Its row keeps running
+            // until its report arrives (`helper_ended`).
+            if helper.as_ref().is_some_and(|h| h.background) && !is_error {
+                continue;
+            }
+            let Some(m) = self.tools.get_mut(id) else { continue };
             let out = result_text(b.get("content").unwrap_or(&Value::Null));
             m.status = match (is_error, self.cutting) {
                 _ if was_declined(&out) => "declined",
@@ -2164,6 +2244,154 @@ impl Turn {
             m.meta["output"] = json!(truncate_chars(&out, 4000));
             let _ = self.state.db.upsert_message(m);
             self.state.emit_message(false, m);
+            // A helper the Bot waited for ends with its Agent call.
+            if let Some(h) = helper {
+                h.step.clear();
+                h.state = match m.status.as_str() {
+                    "ok" => "done",
+                    "failed" => "failed",
+                    _ => "stopped",
+                };
+            }
+        }
+    }
+
+    /// The Bot is writing or using tools again after waiting for its helpers (one of them
+    /// reported, so Claude Code started the next turn of the same run).
+    async fn working_again(&mut self) {
+        let rested = std::mem::take(&mut self.resting);
+        let done = std::mem::take(&mut self.shown_done);
+        if !rested && !done {
+            return;
+        }
+        if done {
+            self.state.finishing.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.bot_id);
+        }
+        set_activity(&self.state, &self.bot_id, Some(("thinking", "Thinking"))).await;
+        self.state.emit_bot(&self.bot_id).await;
+    }
+
+    /// Claude Code started a helper, or woke one up again (its own background command finished,
+    /// or the Bot sent it a message).
+    async fn helper_started(&mut self, v: &Value) {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("");
+        // Only the Bot's own helpers: not a helper's helper, and not a command (those are tasks too).
+        let nested = v.get("parent_task_id").is_some_and(|p| !p.is_null()) || v.get("spawn_depth").and_then(Value::as_u64).unwrap_or(1) > 1;
+        if s("task_type") != "local_agent" || s("task_id").is_empty() || nested {
+            return;
+        }
+        let background = v.get("is_backgrounded").and_then(Value::as_bool).unwrap_or(false);
+        let tool = match self.helpers.iter_mut().find(|h| h.task == s("task_id")) {
+            Some(h) => {
+                h.state = "working";
+                h.step.clear();
+                h.background |= background;
+                h.tool.clone()
+            }
+            None => {
+                let tool = if self.tools.contains_key(s("tool_use_id")) { s("tool_use_id").to_string() } else { String::new() };
+                let name = truncate_chars(s("description"), 60);
+                self.helpers.push(Helper { task: s("task_id").into(), tool: tool.clone(), name, step: String::new(), state: "working", background });
+                tool
+            }
+        };
+        if let Some(m) = self.tools.get_mut(&tool).filter(|m| m.status != "running") {
+            m.status = "running".into();
+            let _ = self.state.db.upsert_message(m);
+            self.state.emit_message(false, m);
+        }
+        self.show_helpers().await;
+    }
+
+    /// A helper used a tool: say what it's doing.
+    async fn helper_step(&mut self, v: &Value) {
+        let task = v.get("task_id").and_then(Value::as_str).unwrap_or("");
+        let Some(h) = self.helpers.iter_mut().find(|h| h.task == task) else { return };
+        h.state = "working";
+        h.step = activity_for(v.get("last_tool_name").and_then(Value::as_str).unwrap_or("")).1;
+        self.show_helpers().await;
+    }
+
+    /// A background helper finished, failed or was stopped. Its report goes to the Bot, which
+    /// then writes to the user; the helper's tool row keeps the report.
+    async fn helper_ended(&mut self, v: &Value) {
+        let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("");
+        // A helper the Bot waited for ends with its Agent call instead (`tool_results`).
+        let Some(h) = self.helpers.iter_mut().find(|h| h.task == s("task_id") && h.background) else { return };
+        h.step.clear();
+        h.state = match s("status") {
+            "completed" => "done",
+            "failed" => "failed",
+            _ => "stopped",
+        };
+        if let Some(m) = self.tools.get_mut(&h.tool) {
+            m.status = match h.state {
+                "done" => "ok",
+                other => other,
+            }
+            .into();
+            m.meta["output"] = json!(truncate_chars(s("summary"), 4000));
+            let _ = self.state.db.upsert_message(m);
+            self.state.emit_message(false, m);
+        }
+        self.show_helpers().await;
+    }
+
+    /// Claude Code's list of the background work it's still waiting for.
+    async fn background_changed(&mut self, v: &Value) {
+        let tasks: Vec<&Value> = v
+            .get("tasks")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter(|t| t.get("parent_task_id").map_or(true, Value::is_null)).collect())
+            .unwrap_or_default();
+        let is_helper = |t: &Value| t.get("task_type").and_then(Value::as_str) == Some("local_agent");
+        self.other_work = tasks.iter().filter(|t| !is_helper(t)).count();
+        // A background helper that left the list without a report was stopped.
+        for h in self.helpers.iter_mut().filter(|h| h.background && h.state == "working") {
+            if !tasks.iter().any(|t| t.get("task_id").and_then(Value::as_str) == Some(h.task.as_str())) {
+                h.state = "stopped";
+                h.step.clear();
+            }
+        }
+        self.show_helpers().await;
+    }
+
+    /// What the status line says while the Bot waits for background work, if it does.
+    fn waiting_for(&self) -> Option<String> {
+        match self.helpers.iter().filter(|h| h.state == "working").count() {
+            0 if self.other_work > 0 => Some("Waiting for a background command".into()),
+            0 => None,
+            1 => Some("A helper is working".into()),
+            n => Some(format!("{n} helpers working")),
+        }
+    }
+
+    /// Give the app the list of helpers (shown under the Bot's status line as
+    /// `bot.activity.helpers`). While the Bot only waits for them, the status line says so.
+    async fn show_helpers(&mut self) {
+        let list: Vec<Value> = self
+            .helpers
+            .iter()
+            .map(|h| json!({ "name": crate::vault::redact(&h.name), "step": h.step, "state": h.state }))
+            .collect();
+        let changed = {
+            let mut map = self.state.helpers.lock().unwrap_or_else(|e| e.into_inner());
+            let list = json!(list);
+            if self.helpers.is_empty() || map.get(&self.bot_id) == Some(&list) {
+                false
+            } else {
+                map.insert(self.bot_id.clone(), list);
+                true
+            }
+        };
+        if self.resting {
+            // With nothing left to wait for, the Bot reads the last report next.
+            let label = self.waiting_for();
+            let a = label.as_deref().map_or(("thinking", "Thinking"), |l| ("working", l));
+            set_activity(&self.state, &self.bot_id, Some(a)).await;
+        }
+        if changed {
+            self.state.emit_bot(&self.bot_id).await;
         }
     }
 
@@ -2233,6 +2461,13 @@ impl Turn {
             // Bot as done now, so the "working" line doesn't stay under the reply.
             self.flush_held().await;
             self.post_waiting().await;
+            if self.waiting_for().is_some() {
+                // Background work goes on: the Bot still shows as working, on that.
+                self.resting = true;
+                self.show_helpers().await;
+                return;
+            }
+            self.shown_done = true;
             self.state.finishing.lock().unwrap_or_else(|e| e.into_inner()).insert(self.bot_id.clone());
             self.state.emit_bot(&self.bot_id).await;
         }

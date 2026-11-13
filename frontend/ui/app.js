@@ -2369,8 +2369,10 @@
   function activityFor(b, list) {
     if (!b.running) return null;
     const last = list[list.length - 1];
-    if (last && last.role === 'approval' && last.status === 'pending') return null;
-    if (last && (last.role === 'widget' || last.role === 'form') && openWidget(list)) return null;
+    // A card waiting for an answer says enough by itself, unless helpers are working too.
+    const helping = !!(b.activity && b.activity.helpers && b.activity.helpers.length);
+    if (!helping && last && last.role === 'approval' && last.status === 'pending') return null;
+    if (!helping && last && (last.role === 'widget' || last.role === 'form') && openWidget(list)) return null;
     if (!actEl) {
       const av = h('span', { class: 'av', style: { width: '28px', height: '28px' } });
       av._size = 28;
@@ -2384,10 +2386,13 @@
       );
       const watch = h('button', { class: 'act-watch', hidden: true, 'data-tip': 'Watch its screen', onclick: () => openScreen(actEl._bot) }, icon('monitor', 13, '', 2), 'Watch');
       $('.activity', actEl).append(watch);
-      actEl._parts = { av, phrase, elapsed, watch };
+      const helpers = h('div', { class: 'act-helpers', hidden: true });
+      actEl.append(helpers);
+      actEl._parts = { av, phrase, elapsed, watch, helpers };
     }
     const { av, phrase, watch } = actEl._parts;
     actEl._bot = b.id;
+    syncHelpers(actEl._parts.helpers, (b.activity && b.activity.helpers) || []);
     watch.hidden = !(b.activity && b.activity.kind === 'on_its_computer');
     if (av._bot !== b.id) {
       av._bot = b.id;
@@ -2403,6 +2408,27 @@
     setPhrase(phrase, text);
     tickActivity();
     return actEl;
+  }
+  // The Bot's helpers (bot.activity.helpers), one line each under the activity line: what the
+  // helper was asked to do, and what it's doing right now.
+  function syncHelpers(box, list) {
+    const key = JSON.stringify(list);
+    if (box._key === key) return;
+    box._key = key;
+    box.hidden = !list.length;
+    box.replaceChildren(
+      ...list.map((x) => {
+        const working = x.state === 'working';
+        const note = working ? x.step || 'Working' : x.state === 'done' ? 'Finished' : x.state === 'failed' ? 'Failed' : 'Stopped';
+        return h(
+          'div',
+          { class: 'act-helper ' + x.state },
+          working ? spinner('xs') : icon(x.state === 'done' ? 'check' : 'x', 12, '', 2.2),
+          h('span', { class: 'act-helper-name' }, x.name || 'Helper'),
+          h('span', { class: 'act-helper-step' }, note)
+        );
+      })
+    );
   }
   function setPhrase(phrase, text) {
     phrase._want = text;
