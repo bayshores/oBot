@@ -960,6 +960,8 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          web address (computer_images lists the pictures on the page on your screen), a screenshot file, or an \
          image you made. oBot saves each picture and shows it in the chat. Pick the few that matter, not every \
          picture you saw.\n\
+         When a diagram, chart, timeline, comparison or visual summary would help, make it with show_page. Never \
+         draw one in a message with emoji or text art.\n\
          Your skills are the folders in .claude/skills inside your working folder (each has a SKILL.md); they show \
          up as \"skills:<name>\". The user's own Claude Code skills and plugins aren't loaded for you. If they ask \
          you to use one you don't have, look for its SKILL.md in their skills folder ({skills}, sometimes a few \

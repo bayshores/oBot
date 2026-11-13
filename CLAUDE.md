@@ -6,7 +6,7 @@ These rules keep the repo clean. They apply to people and to AI coding assistant
 
 | Folder | Put here | Never put here |
 |---|---|---|
-| `frontend/ui/` | The web interface the app shows: `index.html`, `app.js`, `app.css`, `avatar.js`. Third-party code it loads goes in `frontend/ui/vendor/<name>/` with its license file. | Test pages, mockups, screenshots. |
+| `frontend/ui/` | The web interface the app shows: `index.html`, `app.js`, `app.css`, `avatar.js`, and the look of the pages a Bot shows in the chat (`page.css`, `page.js`). Third-party code it loads goes in `frontend/ui/vendor/<name>/` with its license file. | Test pages, mockups, screenshots. |
 | `frontend/desktop/` | The Tauri desktop app (window, menus, OS notifications). | Server logic; it belongs in `backend/core`. |
 | `frontend/assets/` | Source art (the app icon SVG/PNG). | Generated icon sizes; those live in `frontend/desktop/icons/`. |
 | `backend/core/` | All server logic: API, Claude Code runner, storage, security. | UI code. |

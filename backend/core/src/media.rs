@@ -123,18 +123,7 @@ async fn save_one(workdir: &Path, bot_id: &str, src: &str) -> Result<String, Str
         std::fs::write(dir.join(&name), bytes).map_err(|e| e.to_string())?;
         format!("shown/{name}")
     } else {
-        let p = src.strip_prefix("file://").unwrap_or(src);
-        // "file:///C:/Users/…" -> "C:/Users/…"
-        let p = if p.len() > 2 && p.starts_with('/') && p.as_bytes()[2] == b':' { &p[1..] } else { p };
-        let mut path = crate::util::from_wsl_path(p);
-        if path.is_relative() {
-            path = root.join(path);
-        }
-        let real = std::fs::canonicalize(&path).map_err(|_| "no such file".to_string())?;
-        let meta = std::fs::metadata(&real).map_err(|e| e.to_string())?;
-        if !meta.is_file() || meta.len() > MAX_BYTES || picture_ext(&mime_of(&real), "").is_none() {
-            return Err("not a picture file (or bigger than 15 MB)".into());
-        }
+        let real = local_picture(&root, src)?;
         if real.starts_with(&root) {
             real.strip_prefix(&root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/")
         } else {
@@ -148,6 +137,36 @@ async fn save_one(workdir: &Path, bot_id: &str, src: &str) -> Result<String, Str
         }
     };
     Ok(format!("/api/bots/{bot_id}/files/{}", crate::util::url_path(&rel)))
+}
+
+/// The picture file a Bot named by its path (a relative path starts in `root`).
+fn local_picture(root: &Path, src: &str) -> Result<PathBuf, String> {
+    let p = src.strip_prefix("file://").unwrap_or(src);
+    // "file:///C:/Users/…" -> "C:/Users/…"
+    let p = if p.len() > 2 && p.starts_with('/') && p.as_bytes()[2] == b':' { &p[1..] } else { p };
+    let mut path = crate::util::from_wsl_path(p);
+    if path.is_relative() {
+        path = root.join(path);
+    }
+    let real = std::fs::canonicalize(&path).map_err(|_| "no such file".to_string())?;
+    let meta = std::fs::metadata(&real).map_err(|e| e.to_string())?;
+    if !meta.is_file() || meta.len() > MAX_BYTES || picture_ext(&mime_of(&real), "").is_none() {
+        return Err("not a picture file (or bigger than 15 MB)".into());
+    }
+    Ok(real)
+}
+
+/// A picture's bytes and file extension, from a web address (downloaded) or a file path (a relative
+/// path starts in `root`). Used for the pictures in a page (pages.rs).
+pub(crate) async fn load(root: &Path, src: &str) -> Result<(Vec<u8>, &'static str), String> {
+    if is_web(src) {
+        let (bytes, mime) = download(src.to_string()).await?;
+        let ext = picture_ext(&mime, src).ok_or_else(|| format!("it isn't a picture ({mime})"))?;
+        return Ok((bytes, ext));
+    }
+    let real = local_picture(root, src)?;
+    let ext = picture_ext(&mime_of(&real), "").ok_or("not a picture file")?;
+    Ok((std::fs::read(&real).map_err(|e| e.to_string())?, ext))
 }
 
 fn mime_of(p: &Path) -> String {
@@ -215,7 +234,7 @@ fn fetch(url: &str) -> Result<(Vec<u8>, String), (bool, String)> {
     Ok((bytes, mime))
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 

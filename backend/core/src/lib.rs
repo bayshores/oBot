@@ -26,6 +26,7 @@ pub mod memory_tidy;
 pub mod mcp;
 pub mod migrate;
 pub mod github;
+pub mod pages;
 pub mod push;
 pub mod reactions;
 pub mod relay;

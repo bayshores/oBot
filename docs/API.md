@@ -290,7 +290,8 @@ Usage = {
 | POST | /api/routines/:id/run | – | `{ok}` ("Test routine": run once now) |
 | GET | /api/bots/:id/memories | – | `[{id, bot_id (null = about the user), text, created_at}]` |
 | DELETE | /api/memories/:id | – | `{ok}` |
-| GET | /pages/:id | – | HTML made by a bot (sandboxed by CSP). The server appends a script that posts `{type:'obot:height', height}` to the parent. |
+| GET | /pages/:id | – | A page made by a bot (sandboxed by CSP). A bot gives only the content; the server adds oBot's look (`frontend/ui/page.css`, in a CSS layer so the page's own styles win), the icons (`<i data-icon="name">`) and a script that posts `{type:'obot:height', height}` to the parent. A page that is a whole HTML document (an existing .html file) is sent as it is, plus the icons and the script. See `backend/core/src/pages.rs`. |
+| GET | /pages/:id/:file | – | A picture saved with that page. When a page is made, each `<img src>` (a web address or a file path) is saved in `<data>/pages/<id>/` and pointed here, so pictures load on every device without the outside website. |
 | PUT | /api/settings | also `{auto_review, auto_update, review_ask, review_allow}` | `Settings` |
 | POST | /api/vault | `{name, value, description, bots}`: adds or edits a secret. Empty `value` = keep the saved one. `bots`: null = every Bot, else a non-empty list of Bot ids. 400 for reserved names (see `vault_reserved`), values over 4 KiB, or an empty `bots` list. Saved values are replaced with `••••` in chats and memories from then on, including older ones. | `Settings` |
 | POST | /api/bots/:id/make-main | – | `{ok}` ("Replace with different Bot") |
@@ -358,7 +359,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 |---|---|
 | `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message) |
 | `send_message {text}` | a chat message while the Bot keeps working (a `bot` message with `meta.update`; no notification) |
-| `send_file {path, caption?}` · `show_page {title, html \| path}` | file in the chat · sandboxed HTML page. To show pictures inside a reply, bots write markdown images instead (see `html` above) |
+| `send_file {path, caption?}` · `show_page {title, html \| path, emoji_ok?}` | file in the chat · sandboxed page (a summary, diagram, chart, table or small app). `html` is content only and gets oBot's look. Pictures (`<img src>` with a web address or a file path) are saved with the page. The call is refused, with a message telling the bot what to fix, when the page has emoji (unless `emoji_ok`, for when the user asked for them), an icon name that doesn't exist, a picture that can't be loaded (or more than 40 pictures), or `html` that is a whole document. To show pictures inside a reply, bots write markdown images instead (see `html` above) |
 | `remember {fact, tier: "profile"\|"log", about?: "user"\|"me", bot?}` | save a fact. `profile` (standing instructions and rules like "never ask me to sign in to X", core identity) is in the bot's prompt every turn; `log` (everything else) is searched with `recall`, and only its newest 15 entries are in the prompt. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
 | `recall {query?, bot?}` · `update_memory {id, fact?, tier?}` · `forget {id}` | search facts by words (no query: profile + newest log) · fix one or move it between tiers · delete one |
 | `check_back_later {note, in_minutes \| at}` | one-time wake-up |

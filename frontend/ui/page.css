@@ -1,0 +1,171 @@
+/* The look of the pages a Bot shows in the chat (show_page). A Bot gives only the content; the server
+   adds this file inside "@layer obot" (backend/core/src/pages.rs), so anything a page styles itself
+   wins. A page that is a whole document of its own (an existing .html file) doesn't get this file.
+   Bots are told these class names in the show_page tool: when a class changes here, change it there too. */
+
+/* ───────────── tokens (the same values as app.css) ───────────── */
+:root {
+  --bg: #0b0b0c;
+  --surface: #161617;
+  --surface-2: #f5f5f50a;
+  --surface-3: #f5f5f514;
+  --text: #f5f5f5;
+  --text-2: #f5f5f5a8;
+  --text-3: #f5f5f58a;
+  --line: #f5f5f51a;
+  --line-2: #f5f5f50f;
+  --accent: #4d9bff;
+  --ok: #00ba69;
+  --warn: #e28600;
+  --bad: #ff6463;
+  /* chart series: white first, color only when there is more than one series */
+  --c1: #f5f5f5;
+  --c2: #4d9bff;
+  --c3: #00ba69;
+  --c4: #e28600;
+  --c5: #ff6463;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro", "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  color-scheme: dark;
+}
+
+/* ───────────── base ───────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html {
+  background: var(--bg);
+  color: var(--text);
+  font: 425 14px/20px var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+body { margin: 0; padding: 16px; overflow-wrap: break-word; }
+h1, h2, h3, h4, p, ul, ol, figure, blockquote, pre, table { margin: 0; }
+h1 { font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -.01em; }
+h2 { font-size: 15px; line-height: 22px; font-weight: 600; }
+h3, h4 { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-3); }
+b, strong { font-weight: 600; }
+small, .sub { font-size: 12.5px; line-height: 17px; font-weight: 425; color: var(--text-2); }
+.muted { color: var(--text-2); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+hr { border: 0; border-top: .5px solid var(--line); margin: 0; }
+ul, ol { padding-left: 20px; }
+li + li { margin-top: 2px; }
+img { max-width: 100%; height: auto; border-radius: 12px; }
+code, pre { font-family: var(--mono); font-size: 12.5px; }
+:not(pre) > code { background: var(--surface-3); padding: .12em .35em; border-radius: 5px; }
+pre { background: var(--surface-2); padding: 12px; border-radius: 10px; overflow: auto; }
+svg { max-width: 100%; }
+svg text { font: 12px var(--font); fill: var(--text-2); }
+
+/* even spacing between the parts of the page */
+body > :not(style, script, link, meta, title) ~ :not(style, script, link, meta, title) { margin-top: 16px; }
+body > h1 + .sub, body > h2 + .sub { margin-top: 2px; }
+body > h2 + *, body > h3 + * { margin-top: 8px; }
+body > .row + .row, body > .bar + .bar { margin-top: 0; }
+
+/* ───────────── meaning colors (text, tags, bars) ───────────── */
+.ok { color: var(--ok); --bar: var(--ok); }
+.warn { color: var(--warn); --bar: var(--warn); }
+.bad { color: var(--bad); --bar: var(--bad); }
+.info { color: var(--accent); --bar: var(--accent); }
+
+/* ───────────── tables ───────────── */
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--text-3); padding: 0 12px 8px 0; vertical-align: bottom; }
+td { padding: 10px 12px 10px 0; border-top: .5px solid var(--line); vertical-align: top; }
+th:last-child, td:last-child { padding-right: 0; }
+tfoot td { font-weight: 600; }
+.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scroll { overflow-x: auto; }
+
+/* ───────────── layout: grid of cards ───────────── */
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); align-items: start; }
+.card { background: var(--surface); border-radius: 16px; padding: 16px; box-shadow: inset 0 0 0 .5px var(--line-2); min-width: 0; }
+.card .card { background: var(--surface-2); border-radius: 12px; padding: 12px; }
+.card > * + * { margin-top: 10px; }
+.card > h2 + .sub { margin-top: 2px; }
+.card > h3 + * { margin-top: 6px; }
+.card > * + h3 { margin-top: 16px; }
+.card > .row + .row, .card > .bar + .bar { margin-top: 0; }
+
+/* a title line with a square mark (an icon or initials) in front */
+.head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.head small, .row small, .steps small, .stat small { display: block; }
+.mark { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--surface-3); color: var(--text-2); display: grid; place-items: center; font-size: 13px; line-height: 1; font-weight: 600; }
+.mark i[data-icon] { width: 18px; height: 18px; vertical-align: 0; }
+
+/* ───────────── numbers at a glance ───────────── */
+.stats { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }
+.stat { background: var(--surface); border-radius: 14px; padding: 12px 14px; box-shadow: inset 0 0 0 .5px var(--line-2); min-width: 0; }
+.stat b { display: block; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+
+/* ───────────── a line: name on the left, value on the right ───────────── */
+.row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: .5px solid var(--line); }
+.row:first-child { border-top: 0; padding-top: 0; }
+.row:last-child { padding-bottom: 0; }
+.row > * { min-width: 0; }
+.row > :last-child:not(:first-child) { margin-left: auto; flex: none; text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row.total { font-weight: 600; }
+.row.total > :last-child:not(:first-child) { font-weight: 600; }
+.thumb { flex: none; width: 44px; height: 44px; border-radius: 10px; object-fit: cover; background: var(--surface-3); }
+.thumb.lg { width: 72px; height: 72px; border-radius: 12px; }
+
+/* ───────────── gallery: bigger pictures side by side, each with a caption ───────────── */
+.gallery { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); align-items: start; }
+.gallery.wide { grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); }
+.gallery figure { margin: 0; min-width: 0; }
+.gallery img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 12px; background: var(--surface-3); }
+.gallery figcaption { margin-top: 8px; font-weight: 500; }
+.gallery small { display: block; }
+
+/* ───────────── small labels ───────────── */
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px; border-radius: 10px; background: var(--surface-3); color: var(--text-2); font-size: 11.5px; line-height: 20px; font-weight: 500; white-space: nowrap; vertical-align: 1px; }
+.tag.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 13%, transparent); }
+.tag.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.tag.bad { color: var(--bad); background: color-mix(in srgb, var(--bad) 13%, transparent); }
+.tag.info { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
+.tag i[data-icon] { width: 12px; height: 12px; vertical-align: 0; }
+
+/* ───────────── steps: a numbered timeline or how-to ───────────── */
+.steps { list-style: none; padding: 0; counter-reset: step; }
+.steps > li { position: relative; margin: 0; padding: 2px 0 18px 36px; counter-increment: step; color: var(--text-2); }
+.steps > li:last-child { padding-bottom: 0; }
+.steps > li > b { display: block; color: var(--text); font-weight: 500; }
+.steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 12px; background: var(--surface-3); color: var(--text-2); font-size: 12px; line-height: 1; font-weight: 600; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.steps > li::after { content: ""; position: absolute; left: 11.5px; top: 28px; bottom: 4px; width: 1px; background: var(--line); }
+.steps > li:last-child::after { display: none; }
+.steps > li.done::before { background: var(--text); color: var(--bg); }
+
+/* ───────────── flow: boxes joined by arrows (a process) ───────────── */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px 30px; }
+.flow > * { position: relative; flex: 1 1 120px; min-width: 0; background: var(--surface); border-radius: 12px; padding: 10px 12px; box-shadow: inset 0 0 0 .5px var(--line-2); }
+.flow > * + *::before { content: ""; position: absolute; left: -22px; top: 50%; width: 13px; height: 1px; background: var(--text-3); }
+.flow > * + *::after { content: ""; position: absolute; left: -15px; top: calc(50% - 3px); width: 6px; height: 6px; border-top: 1px solid var(--text-3); border-right: 1px solid var(--text-3); transform: rotate(45deg); }
+.flow small { display: block; }
+
+/* ───────────── bars and meters: style="--v:72" means 72% ───────────── */
+.bar { display: grid; grid-template-columns: minmax(110px, 30%) 1fr auto; align-items: center; column-gap: 12px; padding: 6px 0; }
+.bar::before { content: ""; grid-column: 2; grid-row: 1; height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--bar, var(--text)) calc(var(--v, 0) * 1%), var(--surface-3) 0); }
+.bar > :first-child { grid-column: 1; grid-row: 1; min-width: 0; }
+.bar > :last-child:not(:first-child) { grid-column: 3; grid-row: 1; text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.meter { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--bar, var(--text)) calc(var(--v, 0) * 1%), var(--surface-3) 0); }
+
+/* ───────────── a side note ───────────── */
+.note { position: relative; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; color: var(--text-2); font-size: 13px; line-height: 19px; }
+.note:has(> i[data-icon]:first-child) { padding-left: 36px; }
+.note > i[data-icon]:first-child { position: absolute; left: 12px; top: 11.5px; }
+
+/* ───────────── icons: <i data-icon="name"></i> (drawn by page.js) ───────────── */
+i[data-icon] { display: inline-flex; flex: none; width: 16px; height: 16px; vertical-align: -3px; }
+i[data-icon] svg { width: 100%; height: 100%; }
+
+/* ───────────── controls (for small apps) ───────────── */
+button, .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--surface-3); box-shadow: inset 0 0 0 .5px var(--line-2); color: var(--text); font: 500 13px/18px var(--font); white-space: nowrap; cursor: pointer; }
+button:hover, .btn:hover { background: #f5f5f51f; text-decoration: none; }
+button.primary, .btn.primary { background: var(--text); color: var(--bg); box-shadow: none; }
+button:disabled { opacity: .5; cursor: default; }
+input, select, textarea { background: #0e0e0f; color: var(--text); border: 0; box-shadow: inset 0 0 0 .5px var(--line); border-radius: 10px; padding: 7px 10px; font: inherit; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 1.5px solid #1884fc; outline-offset: 1px; }
+input[type="checkbox"], input[type="radio"], input[type="range"] { padding: 0; box-shadow: none; background: none; accent-color: var(--text); }

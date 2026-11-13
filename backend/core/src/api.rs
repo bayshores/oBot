@@ -218,6 +218,7 @@ fn router(state: Shared) -> Router {
         .route("/sw.js", get(|| async { ui_response("sw.js") }))
         .route("/icons/{name}", get(|UrlPath(n): UrlPath<String>| async move { ui_response(&format!("icons/{n}")) }))
         .route("/pages/{id}", get(get_page))
+        .route("/pages/{id}/{file}", get(get_page_picture))
         // No token needed: a new device trades a pairing code for its own token here.
         .route("/api/pair", post(pair_device))
         // No token needed: lets the setup screen recognize an oBot computer (name + version only).
@@ -411,21 +412,21 @@ mod ui_assets {
 }
 
 /// Serve a UI file. OBOT_UI_DIR=/path/to/ui reads from disk instead (handy while editing the UI).
+/// One file of the web interface (frontend/ui): from the OBOT_UI_DIR folder when that is set (handy
+/// while working on the interface), else the copy built into the program.
+pub(crate) fn ui_file(name: &str) -> Option<Vec<u8>> {
+    std::env::var("OBOT_UI_DIR")
+        .ok()
+        .and_then(|dir| std::fs::read(Path::new(&dir).join(name)).ok())
+        .or_else(|| ui_assets::UI_FILES.iter().find(|(n, _)| *n == name).map(|(_, b)| b.to_vec()))
+}
+
 fn ui_response(name: &str) -> Response {
     // Subfolders are allowed (vendor/novnc/core/rfb.js); climbing out isn't.
     if name.is_empty() || name.contains("..") || name.contains('\\') || name.starts_with('/') || name.contains("//") {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let bytes: Option<Vec<u8>> = std::env::var("OBOT_UI_DIR")
-        .ok()
-        .and_then(|dir| std::fs::read(Path::new(&dir).join(name)).ok())
-        .or_else(|| {
-            ui_assets::UI_FILES
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map(|(_, b)| b.to_vec())
-        });
-    match bytes {
+    match ui_file(name) {
         Some(b) => {
             let mime = mime_guess::from_path(name).first_or_octet_stream();
             let ct = if mime.type_() == "text" || mime.subtype() == "javascript" {
@@ -1572,25 +1573,42 @@ async fn get_page(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> Res
         return StatusCode::NOT_FOUND.into_response();
     }
     match tokio::fs::read(st.data_dir.join("pages").join(format!("{id}.html"))).await {
-        Ok(mut bytes) => {
-            // Tell the chat how tall the page is, so the frame fits it (the UI listens for this).
-            bytes.extend_from_slice(PAGE_HEIGHT_SCRIPT.as_bytes());
-            (
+        // oBot's look, the icons, and the script that tells the chat how tall the page is (pages.rs).
+        Ok(bytes) => (
             [
                 (header::CONTENT_TYPE, "text/html; charset=utf-8"),
                 (header::CONTENT_SECURITY_POLICY, "sandbox allow-scripts allow-popups allow-forms"),
                 (header::CACHE_CONTROL, "private, max-age=3600"),
             ],
-            bytes,
+            crate::pages::wrap(&String::from_utf8_lossy(&bytes)),
         )
-            .into_response()
-        }
+            .into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
-// `:where(html)` has no weight, so a page that sets its own colors keeps them.
-const PAGE_HEIGHT_SCRIPT: &str = "\n<style>:where(html){color-scheme:dark;background:#0b0b0c;color:#ececec}</style><script>(function(){function s(){try{parent.postMessage({type:'obot:height',height:document.documentElement.scrollHeight},'*')}catch(e){}}addEventListener('load',s);addEventListener('resize',s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}setTimeout(s,0)})();</script>\n";
+/// A picture saved with a page (pages.rs). Like the page, the random id in the address is the key.
+async fn get_page_picture(State(st): State<Shared>, UrlPath((id, file)): UrlPath<(String, String)>) -> Response {
+    let hex = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit());
+    let ok = id.len() == 32 && hex(&id) && file.split_once('.').is_some_and(|(name, ext)| hex(name) && ext.chars().all(|c| c.is_ascii_alphanumeric()));
+    if !ok {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match tokio::fs::read(st.data_dir.join("pages").join(&id).join(&file)).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime_guess::from_path(&file).first_or_octet_stream().to_string()),
+                // Opened on its own, a picture (an SVG can hold a script) gets no access to oBot.
+                (header::CONTENT_SECURITY_POLICY, "sandbox".to_string()),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+                (header::CACHE_CONTROL, "private, max-age=86400".to_string()),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
+}
 
 async fn make_main(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let bot = get_bot(&st, &id).await?;

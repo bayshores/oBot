@@ -56,11 +56,12 @@ pub fn definitions() -> Value {
         },
         {
             "name": "show_page",
-            "description": "Show an interactive HTML page inside the chat (charts, tables, small apps, visual summaries). Give either full HTML or a path to an .html file. oBot is dark-themed: use a dark background (#0b0b0c) with light text unless the user asks otherwise. Scripts run in a sandbox without network access to the user's data.",
+            "description": crate::pages::guide(),
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"},
                 "html": {"type": "string"},
-                "path": {"type": "string"}
+                "path": {"type": "string"},
+                "emoji_ok": {"type": "boolean", "description": "Only when the user asked for emoji on this page"}
             }, "required": ["title"]}
         },
         {
@@ -514,7 +515,10 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
 
         "show_page" => {
             let title = s(args, "title");
-            let html = if let Some(h) = args.get("html").and_then(Value::as_str).filter(|h| !h.trim().is_empty()) {
+            let written = args.get("html").and_then(Value::as_str).filter(|h| !h.trim().is_empty());
+            // Picture file paths in the page start in the Bot's folder, or next to the .html file.
+            let mut pictures_from = workdir.clone();
+            let html = if let Some(h) = written {
                 h.to_string()
             } else {
                 let p = s(args, "path");
@@ -525,14 +529,19 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 if src.is_relative() {
                     src = workdir.join(src);
                 }
+                if let Some(folder) = src.parent() {
+                    pictures_from = folder.to_path_buf();
+                }
                 std::fs::read_to_string(&src).map_err(|e| format!("Couldn't read {}: {e}", src.display()))?
             };
             if html.len() > 2_000_000 {
                 return Err("That page is too big (2 MB max)".into());
             }
+            crate::pages::check(title, &html, written.is_some(), args.get("emoji_ok").and_then(Value::as_bool).unwrap_or(false))?;
             let id = new_id();
             let dir = state.data_dir.join("pages");
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let html = crate::pages::save_pictures(&dir, &id, &pictures_from, &html).await?;
             std::fs::write(dir.join(format!("{id}.html")), html).map_err(|e| e.to_string())?;
             post(state, bot_id, "visualization", title, json!({"title": title, "url": format!("/pages/{id}")}));
             Ok("The page is showing in the chat.".into())
