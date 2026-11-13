@@ -3,7 +3,7 @@ resolver = "2"
 members = ["backend/core", "backend/server", "frontend/desktop"]
 
 [workspace.package]
-version = "0.2.16"
+version = "0.2.17"
 edition = "2021"
 license = "AGPL-3.0-only"
 
