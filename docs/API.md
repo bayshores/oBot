@@ -447,6 +447,8 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
   `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
   skill folder is limited to 200 files and 5 MB.
+* Claude Code's built-in `dataviz` skill is turned off for Bots (`skillOverrides` in the run settings file): Bots make
+  charts with `show_page`, which has its own instructions. Measured: about 500 fewer tokens on every message.
 * Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with Claude Code hooks that start the oBot program as
   `<obot> hook stop|precompact|after-ask --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself. Not in a routine's own conversation: a routine runs again by itself.

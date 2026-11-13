@@ -1417,8 +1417,12 @@ fn build_command(
     // After a question card (or a secure form, or "take over my screen") the turn ends: see hooks.rs.
     let mut after_ask = hook("after-ask");
     after_ask[0]["matcher"] = json!("mcp__obot__ask_user|mcp__obot__request_form|mcp__obot__request_control");
+    // skillOverrides: Claude Code's built-in "dataviz" skill is its own guide to making charts. A Bot
+    // makes charts with show_page, which has oBot's guide, so the skill only cost tokens (measured:
+    // about 500 on every message for its listing, about 2,600 more each time a Bot opened it).
     let mut settings = json!({
         "autoCompactEnabled": true,
+        "skillOverrides": { "dataviz": "off" },
         "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact"), "PostToolUse": after_ask }
     });
     if wsl {
