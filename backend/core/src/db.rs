@@ -265,8 +265,8 @@ impl Db {
     }
 }
 
-/// Saved Bot messages keep the HTML they were shown with. When the markdown renderer changes
-/// (markdown::VERSION), render them again once so old messages look like new ones.
+/// Saved Bot messages and questions keep the HTML they were shown with. When the markdown renderer
+/// changes (markdown::VERSION), render them again once so old messages look like new ones.
 fn rerender_messages(conn: &Connection) -> anyhow::Result<()> {
     let done: Option<String> = conn.query_row("SELECT v FROM kv WHERE k = 'markdown_version'", [], |r| r.get(0)).optional()?;
     if done.as_deref() == Some(crate::markdown::VERSION) {
@@ -274,7 +274,7 @@ fn rerender_messages(conn: &Connection) -> anyhow::Result<()> {
     }
     let tx = conn.unchecked_transaction()?;
     {
-        let mut read = tx.prepare("SELECT id, text FROM messages WHERE html != ''")?;
+        let mut read = tx.prepare("SELECT id, text FROM messages WHERE html != '' OR role = 'widget'")?;
         let rows = read.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
         let mut write = tx.prepare("UPDATE messages SET html = ?2 WHERE id = ?1")?;
         for (id, text) in rows {

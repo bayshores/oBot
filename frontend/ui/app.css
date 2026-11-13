@@ -846,6 +846,7 @@ b, strong { font-weight: var(--w-semibold); }
 
 .card.widget { max-width: min(80%, 560px, calc(100% - 82px)); padding: 14px 10px 10px; }
 .card.widget .card-title { padding: 0 6px 8px; }
+.card.widget .card-title.long { font-weight: var(--w-regular); }
 
 /* calendar card (an event a Bot added, changed or wants to send) */
 .cal-body { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 19px; }

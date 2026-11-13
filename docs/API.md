@@ -104,7 +104,7 @@ Message = {
   role: "user" | "bot" | "tool" | "approval" | "error" | "system"
       | "widget" | "form" | "attachment" | "visualization" | "calendar" | "relay" | "note" | "event",
   text: string,           // raw text / markdown
-  html: string,           // server-rendered safe HTML for role "bot" (markdown; plain web addresses become links). "" for others.
+  html: string,           // server-rendered safe HTML for roles "bot" and "widget" (markdown; plain web addresses become links). "" for others.
                           // Pictures in a bot reply (![alt](web address or file path)) are saved in the bot's
                           // folder under shown/ when the reply finishes, and `text` then points at
                           // /api/bots/{id}/files/shown/… (pictures that can't be saved become a link).

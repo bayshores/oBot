@@ -3,7 +3,7 @@
 use pulldown_cmark::{html, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd, TextMergeStream};
 
 /// Change this when `render` makes different HTML, so saved messages are rendered again (db.rs).
-pub const VERSION: &str = "2";
+pub const VERSION: &str = "3";
 
 fn safe_url(url: &str) -> bool {
     let u = url.trim().to_ascii_lowercase();

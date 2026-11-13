@@ -2721,11 +2721,8 @@
   }
   // "Here ![Blue jeans](/api/…) look" -> "Here 🖼️ Blue jeans look" (notifications, reply quotes).
   const noPictures = (t) => String(t || '').replace(/!\[([^\]]*)\]\([^)]*\)/g, (_, alt) => '🖼️ ' + (alt.trim() || 'Picture'));
-  function fillBotBubble(bubble, m) {
-    if (bubble.classList.contains('emoji')) {
-      bubble.textContent = m.text;
-      return;
-    }
+  // What a Bot wrote, formatted (bold, lists, line breaks, links, pictures): chat bubbles and question cards.
+  function mdBlock(m) {
     const md = h('div', { class: 'md' });
     if (m.html) md.innerHTML = m.html;
     else md.append(h('p', null, m.text || ''));
@@ -2766,8 +2763,15 @@
       fig.append(pre, copyBtn);
     }
     mentionify(md);
+    return md;
+  }
+  function fillBotBubble(bubble, m) {
+    if (bubble.classList.contains('emoji')) {
+      bubble.textContent = m.text;
+      return;
+    }
     bubble.textContent = '';
-    bubble.append(md);
+    bubble.append(mdBlock(m));
   }
   function isImage(a) {
     return (a.mime && a.mime.startsWith('image/')) || /\.(png|jpe?g|gif|webp|bmp|svg|heic|avif)$/i.test(a.name || a.path || '');
@@ -2889,7 +2893,9 @@
     const opts = Array.isArray(meta.options) ? meta.options : [];
     const answered = meta.answer != null;
     const card = h('div', { class: 'card widget' + (answered ? ' answered' : ''), role: 'group', 'aria-label': meta.question || 'Question' });
-    card.append(h('div', { class: 'card-title' }, meta.question || m.text || 'Question'));
+    const ask = mdBlock({ html: m.html, text: meta.question || m.text || 'Question' });
+    // A one-line question reads as a title; a longer one reads like a message, so its bold parts stand out.
+    card.append(h('div', { class: 'card-title' + (ask.children.length > 1 ? ' long' : '') }, ask));
     if (meta.screen) {
       card.classList.add('bs-ask');
       card.append(

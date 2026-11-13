@@ -314,7 +314,8 @@ fn post(state: &Shared, bot_id: &str, role: &str, text: &str, meta: Value) -> Me
         bot_id: bot_id.into(),
         role: role.into(),
         text: text.into(),
-        html: String::new(),
+        // A question is written like a reply (bold, lists, line breaks), so it is formatted like one.
+        html: if role == "widget" { crate::markdown::render(text) } else { String::new() },
         status: "done".into(),
         meta,
         created_at: now_ms(),
