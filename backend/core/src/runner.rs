@@ -1135,6 +1135,14 @@ fn persona_used(state: &Shared, bot: &str, group: Option<&str>) {
 /// Longest note about changed instructions; a bigger change starts from fresh instructions instead.
 const MAX_CHANGE_NOTE: usize = 6000;
 
+/// The user's "Always allow" rules (Settings › Permissions) as the `permissions` part of the run's
+/// settings file. They go in the file, not on the command line: on Windows Claude Code is started
+/// through a batch file, whose command line can be at most 8,191 characters, and thirty saved
+/// commands were enough to stop every Bot from starting ("The command line is too long.").
+fn allow_rules_setting(rules: &[String]) -> Value {
+    json!({ "allow": rules.iter().filter(|r| crate::config::usable_rule(r)).collect::<Vec<_>>() })
+}
+
 /// The user message as Claude Code's `--input-format stream-json` expects it: one JSON line.
 fn stdin_message(text: &str) -> String {
     format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": text } }))
@@ -1423,7 +1431,8 @@ fn build_command(
     let mut settings = json!({
         "autoCompactEnabled": true,
         "skillOverrides": { "dataviz": "off" },
-        "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact"), "PostToolUse": after_ask }
+        "hooks": { "Stop": hook("stop"), "PreCompact": hook("precompact"), "PostToolUse": after_ask },
+        "permissions": allow_rules_setting(&cfg.allow_rules)
     });
     if wsl {
         // Claude Code's sandbox (bubblewrap) works in WSL2: commands can only write inside the bot's folder.
@@ -1445,7 +1454,6 @@ fn build_command(
     // oBot's own tools never need approval.
     args.push("--allowedTools".into());
     args.push("mcp__obot".into());
-    args.extend(cfg.allow_rules.iter().filter(|r| crate::config::usable_rule(r)).cloned());
 
     let mut cmd = if wsl {
         // wsl.exe -d <distro> --cd <workdir> --exec sh -c 'exec "$HOME/.local/bin/claude" "$@"' claude <args>
@@ -2551,6 +2559,13 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allow_rules_go_in_the_settings_file() {
+        let rules = vec!["Bash(npm test)".to_string(), "Bash(cat <<EOF\nx\nEOF)".to_string(), "WebFetch".to_string()];
+        assert_eq!(allow_rules_setting(&rules), json!({ "allow": ["Bash(npm test)", "WebFetch"] }));
+        assert_eq!(allow_rules_setting(&[]), json!({ "allow": [] }));
+    }
 
     #[test]
     fn message_goes_in_as_one_json_line() {

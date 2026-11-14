@@ -455,6 +455,8 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event. This also runs before an idle summary (see above).
   * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
+* The saved "Always allow" rules (`allow_rules`) reach Claude Code as `permissions.allow` in the run settings file, not on
+  its command line: on Windows that line can be at most 8,191 characters, and about thirty saved commands filled it.
   (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.
 * Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn
   (`backend/core/src/memory_tidy.rs`): merge duplicates, fix stale facts, keep the profile small. One bot per hour; a copy of

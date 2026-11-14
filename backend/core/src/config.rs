@@ -140,9 +140,8 @@ impl Default for Config {
     }
 }
 
-/// Can this Settings › Permissions rule be passed to Claude Code? A line break in one (an "Always
-/// allow" on a command of several lines) would stop every Bot from starting on Windows, where
-/// Claude Code is started through a batch file that can't take one.
+/// Can this Settings › Permissions rule be saved and passed to Claude Code? A rule is one line: an
+/// "Always allow" on a command of several lines is allowed that once and not saved as a rule.
 pub fn usable_rule(rule: &str) -> bool {
     !rule.trim().is_empty() && !rule.contains(['\n', '\r', '\0'])
 }
