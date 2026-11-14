@@ -571,19 +571,20 @@ impl Db {
         self.jobs_where("WHERE status = 'running'", &[])
     }
 
-    // ---------- memories ----------
-
-    pub fn last_user_text(&self, bot_id: &str) -> Option<String> {
-        self.c()
-            .query_row(
-                "SELECT text FROM messages WHERE bot_id = ?1 AND role = 'user' ORDER BY created_at DESC, seq DESC LIMIT 1",
-                [bot_id],
-                |r| r.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
+    /// The user's newest messages in a chat (a Bot's own, or a group's), oldest first.
+    pub fn recent_user_texts(&self, chat_id: &str, limit: usize) -> Vec<String> {
+        let c = self.c();
+        let Ok(mut st) = c.prepare("SELECT text FROM messages WHERE bot_id = ?1 AND role = 'user' ORDER BY created_at DESC, seq DESC LIMIT ?2")
+        else {
+            return vec![];
+        };
+        let rows = st.query_map(params![chat_id, limit as i64], |r| r.get::<_, String>(0));
+        let mut texts: Vec<String> = rows.map(|rows| rows.flatten().collect()).unwrap_or_default();
+        texts.reverse();
+        texts
     }
+
+    // ---------- memories ----------
 
     pub fn add_memory(&self, m: &Memory) -> anyhow::Result<()> {
         self.c().execute(

@@ -1266,8 +1266,9 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
     if cfg.auto_review {
         if let Ok(Some(bot)) = st.db.get_bot(&b.bot_id) {
             runner::set_activity(&st, &b.bot_id, Some(("thinking", "Checking the action"))).await;
-            let last = st.db.last_user_text(&b.bot_id).unwrap_or_default();
-            verdict = crate::review::review(&cfg, &st.data_dir, &bot.name, &bot.workdir, &last, &b.tool_name, &b.input).await;
+            // What the user said in the chat this turn is in: the group's when the Bot answers there.
+            let recent = st.db.recent_user_texts(&st.chat_of(&b.bot_id).0, crate::review::RECENT_MESSAGES);
+            verdict = crate::review::review(&cfg, &st.data_dir, &bot.name, &bot.workdir, &recent, &b.tool_name, &b.input).await;
             if let Some(v) = &verdict {
                 if v.allow {
                     tracing::info!("auto-review allowed {} for {}: {}", b.tool_name, bot.name, v.reason);

@@ -116,8 +116,9 @@ Data lives in `%APPDATA%\oBot` (settings, chats), and Bot folders in `%USERPROFI
 * GitHub access is saved encrypted on the PC like the other connections, and only the Bots you pick can
   use it. Bots run `git` with the key passed in memory, so it's never written into a repository's settings.
 * **Permissions:** Settings › Computer › **Running actions on this computer** is *Ask every time* (default), *Always allow* or
-  *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves routine actions
-  using your rules and asks you about the rest with an **Allow / Always allow / Deny** card. Sending
+  *Never allow*. With *Ask every time*, **Auto-Review** (Settings › Permissions) approves low-risk actions by itself. It
+  judges how risky an action is, using your rules and your recent messages, and asks you about the risky ones (deleting
+  outside the Bot's folder, logging in, passwords, payments, system changes) with an **Allow / Always allow / Deny** card. Sending
   email, inviting people, sharing Drive files and deleting always ask.
 * **Vault** passwords, secrets and the API key are encrypted with a key the system keeps (Windows DPAPI,
   the macOS Keychain, or a private file on Linux). Saved values are shown as `••••` if they ever appear

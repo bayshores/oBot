@@ -442,21 +442,27 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
   skills, hooks, permission rules, CLAUDE.md, output style) is skipped. The bot folder's own `.claude/settings*.json` and
   `.claude/agents` are skipped too, because a bot can write those itself to give itself permissions. Only oBot's
   `--settings` file below applies. The auto-review check uses the same `--setting-sources=`, and runs with no tools
-  (`--tools=`), a one-line `--system-prompt` and `--no-session-persistence`, so one check is about 800 tokens.
+  (`--tools=`), a one-line `--system-prompt` and `--no-session-persistence`.
+* What the auto-review check is sent (`backend/core/src/review.rs`): its guide, the user's "Ask first" and "Auto-approve"
+  rules, the user's six newest messages in the chat the Bot is answering in (a group's when it answers there), and the
+  action. It judges how risky the action is; an action that doesn't match the newest message is not a reason to ask.
+  Measured by replaying 56 real approval cards and 34 dangerous test actions: 49 of the 56 cards are now allowed without
+  asking, all 34 dangerous actions still ask, and one check is about 1,400 to 1,800 input tokens (about 400 more than
+  with only the newest message).
 * Skills in the bot folder (`.claude/skills/<name>/SKILL.md`, see `/api/bots/:id/skills`) are copied before each run into
   `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
   `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
   skill folder is limited to 200 files and 5 MB.
 * Claude Code's built-in `dataviz` skill is turned off for Bots (`skillOverrides` in the run settings file): Bots make
   charts with `show_page`, which has its own instructions. Measured: about 500 fewer tokens on every message.
+* The saved "Always allow" rules (`allow_rules`) reach Claude Code as `permissions.allow` in the run settings file, not on
+  its command line: on Windows that line can be at most 8,191 characters, and about thirty saved commands filled it.
 * Each run gets a settings file (`<data>/bots/<id>/run-settings.json`) with Claude Code hooks that start the oBot program as
   `<obot> hook stop|precompact|after-ask --config <bot's mcp.json>` (`backend/core/src/hooks.rs`):
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself. Not in a routine's own conversation: a routine runs again by itself.
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event. This also runs before an idle summary (see above).
   * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
-* The saved "Always allow" rules (`allow_rules`) reach Claude Code as `permissions.allow` in the run settings file, not on
-  its command line: on Windows that line can be at most 8,191 characters, and about thirty saved commands filled it.
   (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.
 * Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn
   (`backend/core/src/memory_tidy.rs`): merge duplicates, fix stale facts, keep the profile small. One bot per hour; a copy of
