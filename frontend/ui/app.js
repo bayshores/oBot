@@ -862,6 +862,8 @@
     const remote = S.conn && S.conn.mode === 'remote' && S.conn.url;
     showScreen(h('div', { class: 'screen-card plain' }, spinner('lg'), h('div', { class: 'screen-sub' }, remote ? `Connecting to ${computerName()}…` : 'Starting oBot…')));
   }
+  // The desktop app tells the computer it's a Mac or a PC, so Bots can be told where you are writing from.
+  const bootstrapPath = () => '/api/bootstrap' + (TAURI ? '?platform=' + encodeURIComponent(PLATFORM === 'mac' ? 'Mac' : PLATFORM === 'win' ? 'Windows PC' : 'Linux PC') : '');
   const onThisComputer = () => /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
   // What a newly paired browser calls itself in Settings › Paired devices.
   function browserDeviceName() {
@@ -1049,7 +1051,7 @@
     }
     let b;
     try {
-      b = await api('/api/bootstrap');
+      b = await api(bootstrapPath());
     } catch (e) {
       S.booted = false;
       return offlineScreen(e);
@@ -1254,7 +1256,7 @@
   }
   async function resync() {
     try {
-      const b = await api('/api/bootstrap');
+      const b = await api(bootstrapPath());
       applyBootstrap(b);
       const keep = S.current && S.bots.has(S.current) ? S.current : null;
       // Other chats load again when opened. The open one stays on screen while its newest page

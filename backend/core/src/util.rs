@@ -92,6 +92,17 @@ pub fn hint(secret: &str) -> String {
     format!("••••{tail}")
 }
 
+/// What kind of computer this program runs on, as people say it.
+pub fn platform_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Mac"
+    } else if cfg!(windows) {
+        "Windows PC"
+    } else {
+        "Linux PC"
+    }
+}
+
 /// On Windows, stop child processes from flashing a console window.
 #[cfg(windows)]
 pub fn hide_console(cmd: &mut tokio::process::Command) {

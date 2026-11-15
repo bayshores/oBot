@@ -229,16 +229,16 @@ Usage = {
 | PUT | /api/connection | `{mode,url,token}` | same (home only). 403 for a paired device: only the computer's own app changes this |
 | POST | /api/connection/test | `{url,token}` | `{ok:bool, error?:string, computer?:Computer}` (home only) |
 | POST | /api/connection/pair | `{url, code}` | `{ok, token?, computer?, error?}` (home only, not from a paired device): sends the code to `{url}/api/pair` with this computer's name. Then PUT /api/connection `{mode:"remote", url, token}` |
-| POST | /api/pair | `{code, device_name}` (**no token**) | `{token, device_id, computer}`; 401 `{error}` for a wrong/expired code ("Wrong code. N tries left.") |
+| POST | /api/pair | `{code, device_name, platform?}` (**no token**; `platform` = "Mac" / "Windows PC" / "Linux PC" when the device is a computer running the oBot app) | `{token, device_id, computer}`; 401 `{error}` for a wrong/expired code ("Wrong code. N tries left.") |
 | POST | /api/pair/code | – | `{code:"123456", expires_at, link, qr}`: new pairing code (10 minutes, single use, 5 tries). Replaces the previous code. When Tailscale runs here, `link` is `https://<this computer>.ts.net/#pair=<code>` and `qr` an SVG QR code of it (else both `""`) |
 | GET | /api/push/key | – | `{key}`: this computer's VAPID public key (base64url) for `pushManager.subscribe` |
 | POST | /api/push/subscribe | the browser's `PushSubscription` JSON `{endpoint, keys:{p256dh, auth}}` | `{ok}`. Saved with the device that sent it (at most 20); removing the device removes it |
 | POST | /api/push/unsubscribe | `{endpoint}` | `{ok}` |
 | POST | /api/push/test | `{endpoint}` | `{ok}` after a test notification went out to that one device; 502 `{error}` with the push service's answer |
-| GET | /api/devices | – | `[{id, name, created_at, last_seen, current}]` (`current` = the device making this request) |
+| GET | /api/devices | – | `[{id, name, platform, created_at, last_seen, current}]` (`current` = the device making this request) |
 | DELETE | /api/devices/:id | – | `{ok}` revokes that device's token right away |
 | GET/PUT | /api/prefs | object | object (home only) |
-| GET | /api/bootstrap | – | see above |
+| GET | /api/bootstrap | `?platform=` (optional; the desktop app sends "Mac" / "Windows PC" / "Linux PC", saved on its paired device) | see above |
 | GET | /api/bots | – | `[Bot]` |
 | POST | /api/bots | `{name,color,shape,instructions,model}` | `Bot` |
 | PATCH | /api/bots/:id | any of `{name,color,shape,instructions,model,hidden}`; group chats: `{name, members, pinned, notifications}` | `Bot` |
@@ -400,6 +400,10 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 * Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`).
 * The current time is sent at the start of each message (`[oBot: It's Friday 2026-11-06 20:01 now.]`), not in the
   system prompt, so the system prompt stays the same between messages and the cached conversation is reused.
+* The same goes for where the user is writing from. A conversation assumes they are at the computer the Bots run on.
+  When a message comes from a paired device, the Bot's next message starts with
+  `[oBot: The user is writing from their Mac "proled", not from this computer.]`, once, and again only when the device
+  changes (`[oBot: The user is at this computer now.]`) or after Claude Code summarized the conversation.
 * For the same reason a conversation keeps the instructions it started with. When they change (a new memory, a rename,
   new routines, another Bot's tagline), the Bot gets the changed lines as a note at the start of its next message
   (`[oBot: Your setup changed since this conversation started …]`). The current instructions take over with a new

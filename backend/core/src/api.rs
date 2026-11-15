@@ -510,6 +510,9 @@ struct PairBody {
     code: String,
     #[serde(default)]
     device_name: String,
+    /// "Mac", "Windows PC"... when the device is a computer running the oBot app.
+    #[serde(default)]
+    platform: String,
 }
 
 /// A new device trades a 6-digit pairing code for its own token. No token needed.
@@ -552,6 +555,7 @@ async fn pair_device(
         token_hash: sha256_hex(&token),
         created_at: now_ms(),
         last_seen: now_ms(),
+        platform: truncate_chars(b.platform.trim(), 30),
     };
     st.config.write().await.devices.push(device.clone());
     if let Err(e) = st.save_config().await {
@@ -608,7 +612,7 @@ async fn list_devices(State(st): State<Shared>, axum::Extension(who): axum::Exte
             .iter()
             .map(|d| {
                 json!({
-                    "id": d.id, "name": d.name, "created_at": d.created_at,
+                    "id": d.id, "name": d.name, "platform": d.platform, "created_at": d.created_at,
                     "last_seen": seen.get(&d.id).copied().unwrap_or(d.last_seen).max(d.last_seen),
                     "current": who.0.as_deref() == Some(d.id.as_str()),
                 })
@@ -705,7 +709,7 @@ async fn pair_with_computer(axum::Extension(who): axum::Extension<AuthDevice>, J
     let name = sysinfo::System::host_name().unwrap_or_else(|| "oBot app".into());
     let res = tokio::task::spawn_blocking(move || {
         let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build();
-        agent.post(&format!("{url}/api/pair")).send_json(json!({ "code": code, "device_name": name }))
+        agent.post(&format!("{url}/api/pair")).send_json(json!({ "code": code, "device_name": name, "platform": crate::util::platform_name() }))
     })
     .await;
     Json(match res {
@@ -770,7 +774,27 @@ pub fn usage_json(st: &AppState) -> Value {
     })
 }
 
-async fn bootstrap(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>) -> ApiResult<Json<Value>> {
+async fn bootstrap(
+    State(st): State<Shared>,
+    axum::Extension(who): axum::Extension<AuthDevice>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Json<Value>> {
+    // The desktop app says what kind of computer it is ("Mac"), for devices paired before that was saved.
+    if let (Some(id), Some(platform)) = (&who.0, q.get("platform").map(|p| truncate_chars(p.trim(), 30)).filter(|p| !p.is_empty())) {
+        let changed = {
+            let mut cfg = st.config.write().await;
+            match cfg.devices.iter_mut().find(|d| &d.id == id && d.platform != platform) {
+                Some(d) => {
+                    d.platform = platform;
+                    true
+                }
+                None => false,
+            }
+        };
+        if changed {
+            st.save_config().await?;
+        }
+    }
     let bots = all_bots(&st).await?;
     let (settings, fk) = {
         let cfg = st.config.read().await;
@@ -951,7 +975,14 @@ async fn react_message(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
     Ok(Json(crate::reactions::user_react(&st, &id, &b.emoji, b.on).await.map_err(|e| bad(&e))?))
 }
 
-async fn send_message(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(b): Json<SendBody>) -> ApiResult<Json<Message>> {
+async fn send_message(
+    State(st): State<Shared>,
+    UrlPath(id): UrlPath<String>,
+    axum::Extension(who): axum::Extension<AuthDevice>,
+    Json(b): Json<SendBody>,
+) -> ApiResult<Json<Message>> {
+    // Which device the user wrote from ("" = this computer's own app), for `runner::device_note`.
+    st.db.kv_set(&runner::from_device_key(&id), who.0.as_deref().unwrap_or(""));
     Ok(Json(post_user_message(&st, &id, b, None).await?))
 }
 

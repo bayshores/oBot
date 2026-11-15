@@ -434,6 +434,51 @@ pub fn recover_queued(state: &Shared) {
     }
 }
 
+/// kv key: the device the user's newest message in a chat came from ("" = this computer's own app).
+pub fn from_device_key(chat: &str) -> String {
+    format!("from_device:{chat}")
+}
+
+/// kv key: what a Bot was last told about where the user is, in its own chat or in one group.
+fn told_device_key(bot: &str, group: Option<&str>) -> String {
+    match group {
+        Some(g) => format!("told_device:{g}:{bot}"),
+        None => format!("told_device:{bot}"),
+    }
+}
+
+/// Where the user is writing from, as a sentence for the Bot. "" = at this computer.
+fn where_user_is(state: &Shared, cfg: &Config, chat: &str) -> String {
+    let id = state.db.kv_get(&from_device_key(chat)).unwrap_or_default();
+    match cfg.devices.iter().find(|d| !id.is_empty() && d.id == id) {
+        Some(d) => format!("The user is writing from {}, not from this computer.", crate::security::device_label(d)),
+        None => String::new(),
+    }
+}
+
+/// A note for the Bot's next message about where the user is, "" when it already knows. A
+/// conversation starts out assuming the user is at this computer, so the Bot only hears about
+/// another device, once, and again when that changes.
+fn device_note(state: &Shared, cfg: &Config, bot: &str, group: Option<&str>, resuming: bool) -> String {
+    let key = told_device_key(bot, group);
+    let now = where_user_is(state, cfg, group.unwrap_or(bot));
+    let told = if resuming { state.db.kv_get(&key).unwrap_or_default() } else { String::new() };
+    if now != told {
+        state.db.kv_set(&key, &now);
+    }
+    device_note_text(&now, &told)
+}
+
+fn device_note_text(now: &str, told: &str) -> String {
+    if now == told {
+        String::new()
+    } else if now.is_empty() {
+        "[oBot: The user is at this computer now.]\n".into()
+    } else {
+        format!("[oBot: {now}]\n")
+    }
+}
+
 /// The message for Claude Code, starting with the current time (kept out of the system prompt so the
 /// cached conversation stays valid between messages).
 fn with_time(prompt: &str) -> String {
@@ -951,6 +996,8 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          You run on the user's computer \"{host}\" ({os}) and can use its tools (shell, files, web) to actually get \
          things done instead of only giving advice. Your own working folder is: {workdir}\n\
          Files the user attaches are saved in the \"uploads\" folder inside your working folder.\n\
+         The user may write from another device (oBot tells you which). Paths and files they mention may be on \
+         that device, not on this computer: if you can't tell which, ask.\n\
          You can't reach the user's other devices (their laptop or phone) directly. Never ask them to turn on SSH or \
          Remote Login, open ports, install keys or remote-access apps so you can get in. To get files to them, send \
          them with send_file, or put them in their Google Drive when it's connected (it syncs to their computer).\n\
@@ -1251,6 +1298,8 @@ fn retell_persona(state: &Shared, bot: &str, group: Option<&str>) {
     if let Some(snap) = state.db.kv_get(&snap_key).filter(|s| !s.is_empty()) {
         state.db.kv_set(&seen_key, &snap);
     }
+    // The same goes for the note about which device the user is on.
+    state.db.kv_set(&told_device_key(bot, group), "");
 }
 
 /// Returns the command and a note to put before the message (changed instructions, or "").
@@ -1295,7 +1344,9 @@ fn build_command(
         let snap = state.db.kv_get(&persona_keys(&bot.id, group).0).filter(|s| !s.is_empty());
         (snap.ok_or_else(|| anyhow!("the conversation's instructions weren't saved"))?, String::new())
     } else {
-        stable_persona(state, bot, group, current, resume && !session.is_empty(), cache_ms(cfg))
+        let resuming = resume && !session.is_empty();
+        let (text, note) = stable_persona(state, bot, group, current, resuming, cache_ms(cfg));
+        (text, format!("{note}{}", device_note(state, cfg, &bot.id, group, resuming)))
     };
     std::fs::write(&persona_path, persona_text)?;
 
@@ -2565,6 +2616,16 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_bot_hears_about_the_users_device_only_when_it_changes() {
+        let mac = "The user is writing from their Mac \"proled\", not from this computer.";
+        // A conversation starts out assuming the user is at this computer.
+        assert_eq!(device_note_text("", ""), "");
+        assert_eq!(device_note_text(mac, ""), format!("[oBot: {mac}]\n"));
+        assert_eq!(device_note_text(mac, mac), "");
+        assert_eq!(device_note_text("", mac), "[oBot: The user is at this computer now.]\n");
+    }
 
     #[test]
     fn allow_rules_go_in_the_settings_file() {
