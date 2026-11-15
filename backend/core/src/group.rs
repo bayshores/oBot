@@ -3,8 +3,10 @@
 //! A group is stored like a Bot (`kind = "group"`, with `members`), so it has its own chat, preview
 //! and unread count. When the user writes, a fast model picks who answers (usually one Bot, see
 //! [`pick`]); the Bots they @name answer instead when they name some. A Bot reads what was said
-//! since its last turn there and answers, or replies PASS to stay quiet. A Bot can bring in another
-//! member with @Name; those follow-up turns are capped so Bots can't keep talking to each other.
+//! since its last turn there and answers, or replies PASS to stay quiet. When every Bot picked for
+//! a message passes, another member gets it and the last one left has to answer (see [`hand_over`]),
+//! so a message never goes unanswered. A Bot can bring in another member with @Name; those
+//! follow-up turns are capped so Bots can't keep talking to each other.
 //!
 //! Each Bot keeps a separate Claude Code conversation for each group, and works in its own folder
 //! with its own tools. While it takes a group turn, everything it posts goes to the group
@@ -33,6 +35,22 @@ fn bot_turns_key(group: &str) -> String {
 /// The Bots picked to answer the user's latest message (a JSON list of ids).
 fn picked_key(group: &str) -> String {
     format!("group_picked:{group}")
+}
+/// The Bots that replied PASS to the user's latest message (a JSON list of ids).
+fn passed_key(group: &str) -> String {
+    format!("group_passed:{group}")
+}
+/// "1" while a Bot's turn in the group has ended with PASS and [`after_turn`] hasn't read it yet.
+fn pass_now_key(group: &str, bot: &str) -> String {
+    format!("group_pass_now:{group}:{bot}")
+}
+fn id_list(st: &Shared, key: &str) -> Vec<String> {
+    st.db.kv_get(key).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+}
+
+/// The Bot's reply in this group was PASS (the runner posts nothing for it).
+pub fn note_pass(st: &Shared, group: &str, bot: &str) {
+    st.db.kv_set(&pass_now_key(group, bot), "1");
 }
 
 /// The Bot chose to stay quiet.
@@ -209,6 +227,7 @@ fn mentioned(st: &Shared, members: &[String], text: &str) -> Vec<String> {
 /// question they answered), or otherwise the Bots [`pick`] chooses (usually one).
 pub async fn user_posted(st: &Shared, group: &Bot, text: &str, only: Option<&str>) {
     st.db.kv_set(&bot_turns_key(&group.id), "0");
+    st.db.kv_set(&passed_key(&group.id), "[]");
     let chosen = match only.filter(|o| group.members.iter().any(|m| m == o)) {
         Some(o) => vec![o.to_string()],
         None => mentioned(st, &group.members, text),
@@ -234,7 +253,7 @@ pub async fn user_posted(st: &Shared, group: &Bot, text: &str, only: Option<&str
             group.members.clone()
         } else {
             crate::runner::set_activity(&st, &group.id, Some(("thinking", "Picking who answers"))).await;
-            let p = pick(&st, &group, &text).await;
+            let p = pick(&st, &group, &text, &group.members).await;
             crate::runner::set_activity(&st, &group.id, None).await;
             p
         };
@@ -245,14 +264,14 @@ pub async fn user_posted(st: &Shared, group: &Bot, text: &str, only: Option<&str
     });
 }
 
-/// Which Bots should answer the user's message: a fast model reads the Bots' jobs and the recent
-/// chat and picks the one that fits (more only when the user asks for several, or for separate
-/// things that are different Bots' jobs). If that fails, the Bot that spoke last answers.
-async fn pick(st: &Shared, group: &Bot, text: &str) -> Vec<String> {
-    let bots: Vec<Bot> = group.members.iter().filter_map(|m| st.db.get_bot(m).ok().flatten()).collect();
+/// Which of the Bots in `among` should answer the user's message: a fast model reads the Bots' jobs
+/// and the recent chat and picks the one that fits (more only when the user asks for several, or
+/// for separate things that are different Bots' jobs). If that fails, the Bot that spoke last answers.
+async fn pick(st: &Shared, group: &Bot, text: &str, among: &[String]) -> Vec<String> {
+    let bots: Vec<Bot> = among.iter().filter_map(|m| st.db.get_bot(m).ok().flatten()).collect();
     let recent = st.db.list_messages(&group.id, None, 12).unwrap_or_default();
     let last_speaker = recent.iter().rev().find_map(|m| m.meta.get("speaker").and_then(Value::as_str).map(str::to_string));
-    let fallback = || vec![last_speaker.clone().filter(|s| group.members.contains(s)).unwrap_or_else(|| group.members[0].clone())];
+    let fallback = || vec![last_speaker.clone().filter(|s| among.contains(s)).unwrap_or_else(|| among[0].clone())];
     let about = |b: &Bot| {
         let job = [b.label.trim(), b.instructions.trim()].iter().filter(|x| !x.is_empty()).cloned().collect::<Vec<_>>().join(". ");
         format!("- {}: {}", b.name, truncate_chars(&job, 400))
@@ -317,7 +336,7 @@ pub async fn forget_history(st: &Shared, g: &Bot) {
 /// "Try again" on an error in the group: the Bots picked for the user's last message try again.
 pub async fn retry(st: &Shared, group: &str) -> Result<(), String> {
     let g = get_group(st, group).ok_or("No such group chat")?;
-    let picked: Vec<String> = st.db.kv_get(&picked_key(group)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let picked = id_list(st, &picked_key(group));
     for m in g.members.iter().filter(|m| picked.is_empty() || picked.contains(m)) {
         crate::runner::enqueue_group(st, m, group, false).await;
     }
@@ -375,10 +394,25 @@ pub fn turn_prompt(st: &Shared, group: &str, bot: &str, winding_down: bool) -> O
     let mut p = crate::reactions::take_notes(st, group, bot);
     p.push_str(&format!("<obot_group name=\"{}\">\n{}\n</obot_group>", g.name.replace('"', "'"), lines.join("\n\n")));
     if !winding_down {
-        let picked: Vec<String> = st.db.kv_get(&picked_key(group)).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        let others: Vec<String> = picked.iter().filter(|m| m.as_str() != bot).map(|m| name_of(st, m)).collect();
+        let passed = id_list(st, &passed_key(group));
+        let others: Vec<String> =
+            id_list(st, &picked_key(group)).iter().filter(|m| m.as_str() != bot && !passed.contains(m)).map(|m| name_of(st, m)).collect();
         if !others.is_empty() {
             p.push_str(&format!("\n[oBot: {} also answer this message. Do only your part.]", join_names(&others)));
+        }
+        // The message was handed over to this Bot (see `hand_over`).
+        let quiet: Vec<String> = passed.iter().filter(|m| m.as_str() != bot).map(|m| name_of(st, m)).collect();
+        if !quiet.is_empty() {
+            let last_left = g.members.iter().all(|m| m == bot || passed.contains(m));
+            p.push_str(&format!(
+                "\n[oBot: {} passed on the user's message{}]",
+                join_names(&quiet),
+                if last_left {
+                    " and no other Bot is left, so answer it yourself: don't reply PASS. If you can't do what it asks, say so and say what would help."
+                } else {
+                    ", so it's yours now."
+                }
+            ));
         }
     }
     if winding_down {
@@ -397,9 +431,65 @@ pub fn rewind(st: &Shared, group: &str, bot: &str) {
     }
 }
 
-/// After a Bot's turn: members it @named get a turn too (up to the cap per user message).
+/// What happens to the user's message once a Bot picked for it has replied PASS.
+#[derive(Debug, PartialEq)]
+enum AfterPass {
+    /// Another Bot picked for it hasn't passed: that one answers.
+    Wait,
+    /// Everyone picked has passed: one of these members gets it.
+    Ask(Vec<String>),
+    /// Every member has passed.
+    Nobody,
+}
+
+fn after_pass(members: &[String], picked: &[String], passed: &[String]) -> AfterPass {
+    if picked.iter().any(|m| !passed.contains(m)) {
+        return AfterPass::Wait;
+    }
+    let left: Vec<String> = members.iter().filter(|m| !passed.contains(m)).cloned().collect();
+    if left.is_empty() { AfterPass::Nobody } else { AfterPass::Ask(left) }
+}
+
+/// A Bot picked for the user's message replied PASS. When everyone picked has passed, the message
+/// goes to another member: the one a fast model picks from those left, and the last one left is
+/// told to answer (see [`turn_prompt`]). If that one passes too, the chat says so. Before this, a
+/// message whose one picked Bot passed got no answer and the chat showed nothing.
+async fn hand_over(st: &Shared, g: &Bot, bot: &str) {
+    let mut picked = id_list(st, &picked_key(&g.id));
+    let mut passed = id_list(st, &passed_key(&g.id));
+    // A Bot that another Bot named may stay quiet, and a Bot passes on a message only once.
+    if !picked.iter().any(|m| m == bot) || passed.iter().any(|m| m == bot) {
+        return;
+    }
+    passed.push(bot.to_string());
+    st.db.kv_set(&passed_key(&g.id), &json!(passed).to_string());
+    let next = match after_pass(&g.members, &picked, &passed) {
+        AfterPass::Wait => return,
+        AfterPass::Nobody => {
+            crate::runner::add_event(st, &g.id, "No Bot took this message. Write @ and a Bot's name to ask one directly.", json!({"kind": "no-answer"}));
+            return;
+        }
+        AfterPass::Ask(left) if left.len() == 1 => left,
+        AfterPass::Ask(left) => {
+            crate::runner::set_activity(st, &g.id, Some(("thinking", "Picking who answers"))).await;
+            let next = pick(st, g, "", &left).await;
+            crate::runner::set_activity(st, &g.id, None).await;
+            next
+        }
+    };
+    picked.extend(next.iter().cloned());
+    st.db.kv_set(&picked_key(&g.id), &json!(picked).to_string());
+    for m in next {
+        crate::runner::enqueue_group(st, &m, &g.id, false).await;
+    }
+}
+
+/// After a Bot's turn: members it @named get a turn too (up to the cap per user message). If it
+/// replied PASS to the user's message, another member may get the message (see [`hand_over`]).
 pub async fn after_turn(st: &Shared, group: &str, bot: &str, started: i64) {
     let Some(g) = get_group(st, group) else { return };
+    let passed_now = st.db.kv_get(&pass_now_key(group, bot)).is_some_and(|v| v == "1");
+    st.db.kv_set(&pass_now_key(group, bot), "");
     let said: String = st
         .db
         .list_messages(group, None, 100)
@@ -410,6 +500,9 @@ pub async fn after_turn(st: &Shared, group: &str, bot: &str, started: i64) {
         .collect::<Vec<_>>()
         .join("\n");
     if said.is_empty() {
+        if passed_now {
+            hand_over(st, &g, bot).await;
+        }
         return;
     }
     let others: Vec<String> = g.members.iter().filter(|m| m.as_str() != bot).cloned().collect();
@@ -463,6 +556,19 @@ mod tests {
         assert!(is_pass("**PASS**"));
         assert!(!is_pass("I'll pass this to School Bot."));
         assert!(!is_pass("Passport photos are due."));
+    }
+
+    #[test]
+    fn a_passed_message_goes_to_the_next_bot() {
+        let v = |x: &[&str]| x.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let members = v(&["a", "b", "c"]);
+        // The one picked Bot passed: the other two are asked.
+        assert_eq!(after_pass(&members, &v(&["a"]), &v(&["a"])), AfterPass::Ask(v(&["b", "c"])));
+        // Two were picked and only one passed: the other one answers.
+        assert_eq!(after_pass(&members, &v(&["a", "b"]), &v(&["a"])), AfterPass::Wait);
+        // The message was handed to "b", which passed too: only "c" is left.
+        assert_eq!(after_pass(&members, &v(&["a", "b"]), &v(&["a", "b"])), AfterPass::Ask(v(&["c"])));
+        assert_eq!(after_pass(&members, &v(&["a", "b", "c"]), &v(&["a", "b", "c"])), AfterPass::Nobody);
     }
 
     #[test]

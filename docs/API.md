@@ -92,7 +92,9 @@ Bot = {
 // notifications, DELETE). When the user writes, the Bots named with @Name take a turn; otherwise a fast model picks
 // who does from the Bots' jobs and the recent chat (usually one; several when the user asks for everyone or for
 // separate things), and "retry" reruns those. A Bot taking a turn reads what was said since its last turn there
-// and answers, or replies PASS to stay quiet. A Bot can name another
+// and answers, or replies PASS to stay quiet. When every Bot picked for a message has passed, the message goes to
+// another member (the fast model picks from those left); the last member left is told to answer, and if it passes too
+// the chat shows an event (meta.kind = "no-answer"). A Bot can name another
 // member with @Name to give it a turn (at most 6 such turns per user message). Each Bot keeps a separate Claude Code
 // conversation per group and works in its own folder; what it posts (replies, tool rows, cards) goes to the group
 // with meta.speaker = its id. While it runs: running = true, activity = {kind, label: "Food Bot and School Bot are

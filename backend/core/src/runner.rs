@@ -2090,7 +2090,13 @@ impl Turn {
             self.passed = crate::routines::stays_quiet(text);
             return self.passed;
         }
-        self.group.is_some() && crate::group::is_pass(text)
+        match &self.group {
+            Some(g) if crate::group::is_pass(text) => {
+                crate::group::note_pass(&self.state, g, &self.bot_id);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Show a finished reply as a chat message.
