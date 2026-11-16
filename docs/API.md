@@ -523,7 +523,10 @@ computer is offline or the switch is off, the tool answers at once that nothing 
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event. This also runs before an idle summary (see above).
   * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
 * A run that writes no output for 15 minutes (longer than Claude Code's 10-minute limit for one shell command), while it
-  isn't waiting on an approval card, is stopped; the chat shows "Stopped: no progress for 15 minutes".
+  isn't waiting on an approval card, is stopped; the chat shows "Stopped: no progress for 15 minutes". Claude Code's
+  heartbeat lines (`tool_progress` with `heartbeat: true`, every 30 s while any tool runs, also a hung one) don't count
+  as output. Claude Code records the cut-off tool call as rejected, so the Bot's next message in its main conversation
+  starts with a note that oBot, not the user, stopped it.
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
   (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.
 * Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn

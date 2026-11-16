@@ -293,6 +293,20 @@ fn take_side_news(state: &Shared, bot_id: &str) -> String {
     side_news_note(&news)
 }
 
+/// Set when oBot stopped a Bot's main conversation for making no progress (`STUCK_MS`). Claude Code
+/// records the cut-off tool call as rejected, so the Bot is told with the next message who stopped it.
+const STUCK_NOTE: &str = "stuck_note:";
+
+fn take_stuck_note(state: &Shared, bot_id: &str) -> &'static str {
+    let key = format!("{STUCK_NOTE}{bot_id}");
+    if state.db.kv_get(&key).unwrap_or_default().is_empty() {
+        return "";
+    }
+    state.db.kv_set(&key, "");
+    "[oBot: oBot stopped your previous turn because nothing happened for 15 minutes (a command or tool hung). The \
+     tool call it cut off shows as rejected, but the user didn't reject it.]\n"
+}
+
 fn side_news_note(news: &str) -> String {
     format!(
         "[oBot: Routines posted since your last turn in this conversation. They run in their own conversation, so \
@@ -449,7 +463,7 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
             for id in jobs.iter().filter_map(|j| j.user_msg.as_deref()) {
                 mark_queued(&state, id, false, false);
             }
-            let prompt = format!("{}{}", take_side_news(&state, &bot_id), merge(&jobs, steered));
+            let prompt = format!("{}{}{}", take_stuck_note(&state, &bot_id), take_side_news(&state, &bot_id), merge(&jobs, steered));
             let from_user = jobs.iter().any(|j| j.user_msg.is_some());
             state.db.kv_set(&format!("{LAST_PROMPT}{bot_id}"), &prompt);
             state.db.kv_set(&format!("{LAST_ROUTINE}{bot_id}"), "");
@@ -1937,6 +1951,7 @@ async fn drive(
     turn.fresh = old_size == 0 || !resume || bot.session_id.is_empty();
     let mut deadline: Option<tokio::time::Instant> = None;
     // Claude Code writes a line for every step (helpers' steps too), so a long silence means it hangs.
+    // Its heartbeat lines (every 30 seconds while any tool runs, also a hung one) don't count.
     let mut last_line = tokio::time::Instant::now();
     let mut stuck = false;
 
@@ -1951,7 +1966,9 @@ async fn drive(
         tokio::select! {
             line = lines.next_line() => match line {
                 Ok(Some(l)) => {
-                    last_line = tokio::time::Instant::now();
+                    if !(l.starts_with(r#"{"type":"tool_progress""#) && l.contains(r#""heartbeat":true"#)) {
+                        last_line = tokio::time::Instant::now();
+                    }
                     turn.handle(&l).await
                 }
                 _ => break,
@@ -1981,8 +1998,10 @@ async fn drive(
         }
     }
     if stuck {
-        tracing::warn!("bot {bot_id}: no output for {} minutes, stopped the run", STUCK_MS / 60_000);
-        add_event(state, &turn.chat, "Stopped: no progress for 15 minutes. Send a message to try again.", json!({"kind": "stuck"}));
+        tracing::warn!("bot {bot_id}: no output for {} seconds, stopped the run", STUCK_MS / 1000);
+        if !side && group.is_none() {
+            state.db.kv_set(&format!("{STUCK_NOTE}{bot_id}"), "1");
+        }
     }
 
     let status = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
@@ -2019,7 +2038,9 @@ async fn drive(
         turn.cleanup();
         return Ok(Outcome::ResumeFailed);
     }
-    let end = if steer.load(Ordering::SeqCst) {
+    let end = if stuck {
+        End::Stuck
+    } else if steer.load(Ordering::SeqCst) {
         End::Steered
     } else if stopped.load(Ordering::SeqCst) {
         End::Stopped
@@ -2126,6 +2147,8 @@ enum End {
     Stopped,
     /// The user pressed "Send now" on a waiting message.
     Steered,
+    /// No progress for `STUCK_MS`.
+    Stuck,
 }
 
 /// The tool didn't run because the user said no, or moved on, at its approval card.
@@ -2912,7 +2935,7 @@ impl Turn {
         self.post_waiting().await;
         // Tools still running when the turn ends: cut off by Stop or by a new message ("stopped"),
         // or the run broke ("failed").
-        let cut_off = if matches!(end, End::Stopped | End::Steered) { "stopped" } else { "failed" };
+        let cut_off = if matches!(end, End::Stopped | End::Steered | End::Stuck) { "stopped" } else { "failed" };
         for (id, m) in self.tools.iter_mut() {
             if m.status == "running" {
                 m.status = cut_off.into();
@@ -2927,6 +2950,10 @@ impl Turn {
         }
         match end {
             // In a group these show once for everyone, not once per Bot (group.rs).
+            End::Stuck => {
+                add_event(&self.state, &self.chat, "Stopped: no progress for 15 minutes. Send a message to try again.", json!({"kind": "stuck"}));
+                None
+            }
             End::Stopped | End::Steered if self.group.is_some() => None,
             End::Stopped => {
                 add_simple(&self.state, &self.chat, "system", "Stopped");
@@ -3095,7 +3122,13 @@ mod tests {
         std::fs::create_dir_all(d.join("data")).unwrap();
         let d = d.canonicalize().unwrap();
         let fake = d.join("claude");
-        std::fs::write(&fake, "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}'\nexec sleep 30\n").unwrap();
+        // Like a tool that never returns: only Claude Code's heartbeat lines come.
+        let beat = r#"{"type":"tool_progress","tool_use_id":"t1-heartbeat-0","tool_name":"mcp__x__wait","heartbeat":true}"#;
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\ncat >/dev/null\necho '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}}'\ni=0\nwhile [ $i -lt 100 ]; do echo '{beat}'; sleep 0.3; i=$((i+1)); done\n"),
+        )
+        .unwrap();
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let st = crate::state::test_state(&d.join("data"));
         {
@@ -3111,6 +3144,14 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(15), "stopped long before the fake's 30 seconds");
         let events: Vec<String> = st.db.list_messages(&bot.id, None, 50).unwrap().into_iter().filter(|m| m.role == "event").map(|m| m.text).collect();
         assert!(events.iter().any(|e| e.starts_with("Stopped: no progress")), "{events:?}");
+        let plain = st.db.list_messages(&bot.id, None, 50).unwrap().into_iter().filter(|m| m.role == "system" && m.text == "Stopped").count();
+        assert_eq!(plain, 0, "one line says why it stopped");
+        assert_eq!(take_stuck_note(&st, &bot.id), "", "a routine runs in its own conversation");
+
+        // In the main conversation, the Bot's next message says who stopped it, once.
+        run_turn(&st, &bot.id, None, false, "hi", true, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)), None).await;
+        assert!(take_stuck_note(&st, &bot.id).starts_with("[oBot: oBot stopped your previous turn"));
+        assert_eq!(take_stuck_note(&st, &bot.id), "");
         let _ = std::fs::remove_dir_all(&d);
     }
 
