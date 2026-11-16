@@ -38,8 +38,10 @@ pub mod secure_form;
 pub mod security;
 pub mod skills;
 pub mod state;
+pub mod this_computer;
 pub mod tools;
 pub mod update;
+pub mod user_computers;
 pub mod util;
 pub mod vault;
 

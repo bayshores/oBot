@@ -3302,6 +3302,9 @@
     Read: ['file', 'Files', 'read a file'],
     WebFetch: ['globe', 'Web', 'open a web page'],
     WebSearch: ['globe', 'Web', 'search the web'],
+    mcp__obot__my_computer_run: ['terminal', 'Your computer', 'run a command'],
+    mcp__obot__my_computer_write: ['file', 'Your computer', 'write a file'],
+    mcp__obot__my_computer_copy: ['file', 'Your computer', 'copy a file'],
     mcp__obot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
     mcp__obot__email_send: ['mail', 'Email', 'send an email'],
     mcp__obot__email_update: ['trash', 'Email', 'move email to the trash'],
@@ -3465,13 +3468,16 @@
     const shell = tool === 'Bash' || tool === 'PowerShell';
     const mcp = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(tool);
     const [ic, , verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', '', `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', '', `use ${tool || 'a tool'}`]);
-    const source = shell ? 'Terminal' : APPROVAL_VERB[tool] ? APPROVAL_VERB[tool][1] : mcp ? mcp[1].replace(/[_-]/g, ' ') : 'Auto-review';
+    // An action on one of your own computers (not the Bots' computer) names it: "On proled (your Mac)".
+    const there = meta.where && meta.where.name ? meta.where : null;
+    const yours = there ? (/^(Mac|Windows PC|Linux PC)$/.test(there.kind || '') ? `your ${there.kind}` : 'your computer') : '';
+    const source = there ? `On ${there.name} (${yours})` : shell ? 'Terminal' : APPROVAL_VERB[tool] ? APPROVAL_VERB[tool][1] : mcp ? mcp[1].replace(/[_-]/g, ' ') : 'Auto-review';
     const input = meta.input && typeof meta.input === 'object' ? meta.input : null;
     const rule = (meta.proposed_rule || '').trim();
     let well = null;
     let full = '';
     if (input) {
-      const v = input.command || input.file_path || input.notebook_path || input.url || input.query || input.pattern || null;
+      const v = input.command || input.file_path || input.notebook_path || input.url || input.query || input.pattern || (there && (input.path || input.destination)) || null;
       if (typeof v === 'string') well = h('div', { class: 'card-well mono' }, v.length > 340 ? cutMiddle(v) : v);
       full = typeof v === 'string' && Object.keys(input).length === 1 ? v : JSON.stringify(input, null, 2);
     }
@@ -3490,7 +3496,7 @@
       'div',
       { class: 'card approval ' + status },
       h('div', { class: 'card-src' }, icon(shell ? 'terminal' : ic, 14), h('span', null, source)),
-      h('div', { class: 'card-title' }, cal ? cal.title || '(No title)' : `${botName} wants to ${verb}`),
+      h('div', { class: 'card-title' }, cal ? cal.title || '(No title)' : `${botName} wants to ${verb}${there ? ` on ${there.name}` : ''}`),
       cal && h('div', { class: 'card-desc' }, `${botName} wants to ${verb}`),
       reason && h('div', { class: 'card-caution' }, icon('alert', 14), h('span', null, reason)),
       well,
@@ -5534,6 +5540,8 @@
       );
     }
     await Promise.allSettled(jobs);
+    // "Let Bots work on this Mac" is this computer's own setting, so it comes from the app's own server.
+    if (sharesThisComputer()) S.thisComputer = await home('/api/this-computer').catch(() => null);
     if (S.settingsUI) rerenderSettings();
   }
   function rerenderSettings(force) {
@@ -5916,6 +5924,95 @@
     ['ask', 'Ask every time'],
     ['never', 'Never allow'],
   ];
+  // "Let Bots work on this Mac": the Bots run on another computer; this lets them work in folders here too.
+  const sharesThisComputer = () => (TAURI || onThisComputer()) && S.conn && S.conn.mode === 'remote';
+  async function putThisComputer(patch) {
+    try {
+      S.thisComputer = await home('/api/this-computer', { method: 'PUT', body: patch });
+      rerenderSettings(true);
+      // The helper connects a moment after the switch goes on: show the real state then.
+      setTimeout(async () => {
+        const t = await home('/api/this-computer').catch(() => null);
+        if (t) S.thisComputer = t;
+        rerenderSettings();
+      }, 1500);
+    } catch (e) {
+      fail(e);
+      rerenderSettings(true);
+    }
+  }
+  // The system's folder picker (desktop app only). Returns the folder's path, or null.
+  async function pickFolder(title) {
+    try {
+      const p = await TAURI.invoke('plugin:dialog|open', { options: { directory: true, multiple: false, title } });
+      return typeof p === 'string' ? p : null;
+    } catch (e) {
+      fail(e);
+      return null;
+    }
+  }
+  function thisComputerSection() {
+    const t = S.thisComputer;
+    const dev = thisDevice();
+    const host = computerName();
+    if (!t) return section(ThisDevice(), card(row(`Let Bots work on ${dev}`, null, 'Loading…')));
+    const on = !!t.enabled;
+    const problem =
+      t.status === 'needs_pairing'
+        ? `To use this, connect to ${host} with a pairing code instead of a token.`
+        : on && /^error/.test(t.status || '')
+          ? `Can’t reach ${host} right now. Bots can work on ${dev} again when it’s back.`
+          : '';
+    const what = on
+      ? `Bots on ${host} can run commands and work with files in the folders below, while oBot is open on ${dev}. ` +
+        (t.sandbox ? 'Commands can’t change anything outside these folders and can’t read your other folders.' : 'Every command asks you first.')
+      : `Off: Bots on ${host} can’t reach ${dev}. Turn it on to let them run commands and work with files here, only in folders you pick.`;
+    const rows = [
+      row(
+        `Let Bots work on ${dev}`,
+        toggleEl(on, (v) => putThisComputer({ enabled: v })),
+        problem ? h('span', null, what, ' ', h('span', { class: 'err' }, problem)) : what,
+        '',
+        'this-computer'
+      ),
+    ];
+    if (on) {
+      rows.push(
+        row(
+          'Bots’ own folder',
+          h(
+            'div',
+            { class: 'inline-form' },
+            TAURI &&
+              btn('Change', async () => {
+                const p = await pickFolder('Pick the folder Bots keep their own work in');
+                if (p) putThisComputer({ home: p });
+              }),
+            btn('Open', () => home('/api/open-folder', { method: 'POST', body: { path: t.home } }).catch(fail))
+          ),
+          h('span', null, h('span', { class: 'mono' }, t.home), h('br'), 'Each Bot gets a folder of its own in here and works there unless a task names another folder.')
+        )
+      );
+      const add = (p) => p && putThisComputer({ folders: [...(t.folders || []), p] });
+      let control;
+      if (TAURI) control = btn('Add folder', async () => add(await pickFolder('Pick a folder Bots may use')));
+      else {
+        // In a browser there is no folder picker: type the folder's path.
+        const input = h('input', { class: 'field', type: 'text', placeholder: '/Users/you/Code/project', 'aria-label': 'Folder path', spellcheck: 'false' });
+        control = h('div', { class: 'inline-form' }, input, btn('Add', () => add(input.value.trim())));
+      }
+      rows.push(row('Other folders Bots may use', control, `For work on a project of yours, add its folder. Bots can’t use anything else on ${dev}.`));
+      for (const f of t.folders || [])
+        rows.push(
+          row(
+            f.split(/[\\/]/).filter(Boolean).pop() || f,
+            btn('Remove', () => putThisComputer({ folders: t.folders.filter((x) => x !== f) })),
+            h('span', { class: 'mono' }, f)
+          )
+        );
+    }
+    return section(ThisDevice(), card(...rows));
+  }
   function tabComputer() {
     const c = S.computer;
     const conn = S.conn;
@@ -5961,6 +6058,8 @@
         )
       );
     } else out.append(section('Your computer', card(row('Running actions on this computer', null, S.settingsLoadErr ? 'Couldn’t load this setting' : 'Loading…'))));
+
+    if (sharesThisComputer()) out.append(thisComputerSection());
 
     // where bots run (a phone or other browser is paired with this computer and can't switch it)
     if (!TAURI && !onThisComputer()) {
@@ -6285,7 +6384,7 @@
     for (const dv of st.list || []) {
       rows.push(
         row(
-          h('span', null, dv.name, dv.current ? h('span', { class: 'chip' }, 'This device') : null),
+          h('span', null, dv.name, dv.current ? h('span', { class: 'chip' }, 'This device') : null, dv.shared && dv.shared.enabled ? h('span', { class: 'chip', title: [dv.shared.home, ...(dv.shared.folders || [])].join('\n') }, dv.shared.online ? 'Bots can work here' : 'Bots can work here when its oBot app is open') : null),
           h(
             'button',
             {

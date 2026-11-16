@@ -101,6 +101,9 @@ pub struct Config {
     /// The connected GitHub account (see github.rs).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github: Option<crate::github::Connection>,
+    /// "Let Bots work on this Mac": lets Bots that run on another computer (`connection`) work in
+    /// folders here (see this_computer.rs). Only this computer's own app can change it.
+    pub this_computer: crate::this_computer::Share,
 }
 
 impl Default for Config {
@@ -136,6 +139,7 @@ impl Default for Config {
             oauth: Default::default(),
             push: Default::default(),
             github: None,
+            this_computer: Default::default(),
         }
     }
 }

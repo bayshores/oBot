@@ -80,6 +80,10 @@ pub struct AppState {
     /// Each working Bot's helpers (sub-agents) of the current run, as the app lists them under the
     /// status line: Bot id -> `[{name, step, state}]` (see `Turn::show_helpers` in runner.rs).
     pub helpers: std::sync::Mutex<HashMap<String, Value>>,
+    /// The user's own computers that Bots here may work on (see user_computers.rs).
+    pub user_computers: crate::user_computers::Registry,
+    /// This computer as a place for another computer's Bots to work (see this_computer.rs).
+    pub this_computer: crate::this_computer::Helper,
 }
 
 pub type Shared = Arc<AppState>;

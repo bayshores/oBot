@@ -44,7 +44,8 @@ pub struct Device {
 /// (quotes, brackets, line breaks) is dropped.
 pub fn device_label(d: &Device) -> String {
     let clean = |s: &str| s.chars().filter(|c| !c.is_control() && !matches!(c, '"' | '[' | ']' | '<' | '>')).collect::<String>().trim().to_string();
-    let (name, platform) = (clean(&d.name), clean(&d.platform));
+    // A Mac pairs under its network name ("proled.local").
+    let (name, platform) = (clean(d.name.trim().trim_end_matches(".local")), clean(&d.platform));
     match (platform.as_str(), name.as_str()) {
         ("", "" | "Device") => "another device".into(),
         ("", "Web browser") => "a web browser".into(),
@@ -284,6 +285,7 @@ mod tests {
     fn devices_are_named_for_the_bot() {
         let d = |name: &str, platform: &str| Device { name: name.into(), platform: platform.into(), ..Default::default() };
         assert_eq!(device_label(&d("proled", "Mac")), "their Mac \"proled\"");
+        assert_eq!(device_label(&d("proled.local", "Mac")), "their Mac \"proled\"");
         assert_eq!(device_label(&d("iPhone", "")), "their iPhone");
         assert_eq!(device_label(&d("Web browser", "")), "a web browser");
         assert_eq!(device_label(&d("Device", "")), "another device");

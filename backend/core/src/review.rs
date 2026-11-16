@@ -68,14 +68,18 @@ fn parse(text: &str) -> Option<Verdict> {
 /// Several messages, not only the newest: measured on 56 real cards, most were shown because the
 /// action didn't match a newest message like "um u good?" sent while the Bot was still working on
 /// an earlier request.
-fn prompt(cfg: &Config, bot_name: &str, workdir: &str, recent: &[String], tool: &str, input: &Value) -> String {
+fn prompt(cfg: &Config, bot_name: &str, workdir: &str, place: Option<&crate::api::Place>, recent: &[String], tool: &str, input: &Value) -> String {
+    // An action on the user's own computer: the folders they opened to Bots there are its working folder.
+    let place = place
+        .map(|p| format!("\nThis action runs on the user's own {} \"{}\", not on the bot's computer. There, the bot's working folders are: {}", p.kind, p.name, p.folders.join(", ")))
+        .unwrap_or_default();
     let list = |items: Vec<String>| if items.is_empty() { "(none)".to_string() } else { items.join("\n") };
     let rules = |rules: &Vec<String>| list(rules.iter().map(|r| format!("- {r}")).collect());
     let skip = recent.len().saturating_sub(RECENT_MESSAGES);
     let messages = list(recent[skip..].iter().map(|m| format!("- {}", truncate_chars(&m.replace(['\n', '\r'], " "), MESSAGE_CHARS))).collect());
     format!(
         "{GUIDE}\n\nUser's \"Ask first\" rules:\n{}\n\nUser's \"Auto-approve\" rules:\n{}\n\n\
-         Bot: {bot_name}\nBot's working folder: {workdir}\n\n\
+         Bot: {bot_name}\nBot's working folder: {workdir}{place}\n\n\
          User's recent messages to the bot, oldest first:\n{messages}\n\n\
          Action the bot wants to take:\nTool: {tool}\nInput: {}\n",
         rules(&cfg.review_ask),
@@ -91,11 +95,12 @@ pub async fn review(
     data_dir: &std::path::Path,
     bot_name: &str,
     workdir: &str,
+    place: Option<&crate::api::Place>,
     recent: &[String],
     tool: &str,
     input: &Value,
 ) -> Option<Verdict> {
-    parse(&quick_answer(cfg, data_dir, &prompt(cfg, bot_name, workdir, recent, tool, input), 45).await?)
+    parse(&quick_answer(cfg, data_dir, &prompt(cfg, bot_name, workdir, place, recent, tool, input), 45).await?)
 }
 
 /// One short answer from a fast Claude model, with no tools or personal settings (used by
@@ -168,14 +173,18 @@ mod tests {
     fn prompt_shows_recent_messages_oldest_first() {
         let cfg = Config { review_allow: vec!["Read shop pages".into()], ..Config::default() };
         let recent: Vec<String> = (1..=8).map(|n| format!("message {n}\nsecond line")).collect();
-        let p = prompt(&cfg, "Shop Bot", "/bots/shop", &recent, "Bash", &json!({"command": "ls"}));
+        let p = prompt(&cfg, "Shop Bot", "/bots/shop", None, &recent, "Bash", &json!({"command": "ls"}));
         // Only the newest six, each on one line, in the order they were sent.
         assert!(!p.contains("message 2 ") && p.contains("- message 3 second line\n- message 4 second line"));
         assert!(p.contains("- message 8 second line\n\nAction the bot wants to take:\nTool: Bash\nInput: {\"command\":\"ls\"}"));
         assert!(p.contains("\"Ask first\" rules:\n(none)") && p.contains("\"Auto-approve\" rules:\n- Read shop pages"));
-        let long = prompt(&cfg, "Shop Bot", "/bots/shop", &["x".repeat(2000)], "Bash", &json!({}));
+        let long = prompt(&cfg, "Shop Bot", "/bots/shop", None, &["x".repeat(2000)], "Bash", &json!({}));
         assert!(long.contains(&"x".repeat(MESSAGE_CHARS)) && !long.contains(&"x".repeat(MESSAGE_CHARS + 2)));
-        assert!(prompt(&cfg, "Shop Bot", "/bots/shop", &[], "Bash", &json!({})).contains("oldest first:\n(none)"));
+        assert!(prompt(&cfg, "Shop Bot", "/bots/shop", None, &[], "Bash", &json!({})).contains("oldest first:\n(none)"));
+        // An action on the user's own computer names it and its folders.
+        let place = crate::api::Place { name: "proled".into(), kind: "Mac".into(), folders: vec!["/Users/sam/oBot/Shop Bot".into(), "/Users/sam/Code/site".into()] };
+        let there = prompt(&cfg, "Shop Bot", "/bots/shop", Some(&place), &[], "mcp__obot__my_computer_run", &json!({"command": "ls"}));
+        assert!(there.contains("Bot's working folder: /bots/shop\nThis action runs on the user's own Mac \"proled\", not on the bot's computer. There, the bot's working folders are: /Users/sam/oBot/Shop Bot, /Users/sam/Code/site\n\n"));
     }
 
     #[test]

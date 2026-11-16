@@ -10,6 +10,13 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <!-- "Let Bots work on this Mac": what macOS says the first time a Bot uses a folder you picked in one of these places. -->
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>A Bot is working in a folder you opened to Bots in oBot's settings.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>A Bot is working in a folder you opened to Bots in oBot's settings.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>A Bot is working in a folder you opened to Bots in oBot's settings.</string>
   <!-- obot://share#<page>: the "Send to oBot" bookmark opens the app with a page from the browser. -->
   <key>CFBundleURLTypes</key>
   <array>

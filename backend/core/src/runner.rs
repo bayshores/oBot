@@ -448,10 +448,14 @@ fn told_device_key(bot: &str, group: Option<&str>) -> String {
 }
 
 /// Where the user is writing from, as a sentence for the Bot. "" = at this computer.
-fn where_user_is(state: &Shared, cfg: &Config, chat: &str) -> String {
+fn where_user_is(state: &Shared, cfg: &Config, chat: &str, bot_name: &str) -> String {
     let id = state.db.kv_get(&from_device_key(chat)).unwrap_or_default();
     match cfg.devices.iter().find(|d| !id.is_empty() && d.id == id) {
-        Some(d) => format!("The user is writing from {}, not from this computer.", crate::security::device_label(d)),
+        Some(d) => format!(
+            "The user is writing from {}, not from this computer.{}",
+            crate::security::device_label(d),
+            crate::user_computers::note_for(state, &d.id, bot_name)
+        ),
         None => String::new(),
     }
 }
@@ -459,9 +463,9 @@ fn where_user_is(state: &Shared, cfg: &Config, chat: &str) -> String {
 /// A note for the Bot's next message about where the user is, "" when it already knows. A
 /// conversation starts out assuming the user is at this computer, so the Bot only hears about
 /// another device, once, and again when that changes.
-fn device_note(state: &Shared, cfg: &Config, bot: &str, group: Option<&str>, resuming: bool) -> String {
-    let key = told_device_key(bot, group);
-    let now = where_user_is(state, cfg, group.unwrap_or(bot));
+fn device_note(state: &Shared, cfg: &Config, bot: &Bot, group: Option<&str>, resuming: bool) -> String {
+    let key = told_device_key(&bot.id, group);
+    let now = where_user_is(state, cfg, group.unwrap_or(&bot.id), &bot.name);
     let told = if resuming { state.db.kv_get(&key).unwrap_or_default() } else { String::new() };
     if now != told {
         state.db.kv_set(&key, &now);
@@ -672,6 +676,8 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__obot__delete_bot" => ("waiting_for_you", "Waiting for your OK".into()),
         "mcp__obot__list_accounts" => ("thinking", "Checking accounts".into()),
         "mcp__obot__run_in_background" => ("running_commands", "Starting a background job".into()),
+        "mcp__obot__my_computers" => ("reading_file", "Looking at your computers".into()),
+        n if n.starts_with("mcp__obot__my_computer_") => ("running_commands", "Working on your computer".into()),
         "mcp__obot__background_jobs" | "mcp__obot__stop_background_job" => ("running_commands", "Checking background jobs".into()),
         "mcp__obot__email_search" | "mcp__obot__email_read" | "mcp__obot__email_attachment" => ("reading_file", "Reading email".into()),
         "mcp__obot__email_send" => ("working", "Writing an email".into()),
@@ -996,11 +1002,13 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          You run on the user's computer \"{host}\" ({os}) and can use its tools (shell, files, web) to actually get \
          things done instead of only giving advice. Your own working folder is: {workdir}\n\
          Files the user attaches are saved in the \"uploads\" folder inside your working folder.\n\
-         The user may write from another device (oBot tells you which). Paths and files they mention may be on \
-         that device, not on this computer: if you can't tell which, ask.\n\
-         You can't reach the user's other devices (their laptop or phone) directly. Never ask them to turn on SSH or \
-         Remote Login, open ports, install keys or remote-access apps so you can get in. To get files to them, send \
-         them with send_file, or put them in their Google Drive when it's connected (it syncs to their computer).\n\
+         The user may write from another device; oBot tells you which. Paths and files they mention may be on that \
+         device, not this computer: ask if you can't tell.\n\
+         When oBot says you can work on their computer, do work that belongs there with the my_computer tools \
+         (commands and files in the folders they opened to you), not in your own folder. Otherwise you can't reach \
+         their devices: never ask them to turn on SSH or Remote Login, open ports, install keys or remote-access \
+         apps. To get files to them, use send_file, or their Google Drive when it's connected (it syncs to their \
+         computer).\n\
          Show, don't only describe: when seeing something helps the user understand or choose (things to buy, \
          places, food, a design, a chart, what a page looks like), put pictures right in your reply with markdown, \
          ![short description](picture address or file path), next to the text about each one. Use the picture's \
@@ -1346,7 +1354,7 @@ fn build_command(
     } else {
         let resuming = resume && !session.is_empty();
         let (text, note) = stable_persona(state, bot, group, current, resuming, cache_ms(cfg));
-        (text, format!("{note}{}", device_note(state, cfg, &bot.id, group, resuming)))
+        (text, format!("{note}{}", device_note(state, cfg, bot, group, resuming)))
     };
     std::fs::write(&persona_path, persona_text)?;
 
@@ -1851,6 +1859,19 @@ pub fn tool_summary(name: &str, input: &Value, past: bool) -> String {
         "TodoWrite" => verb("Updated its to-do list", "Update its to-do list"),
         "Task" | "Agent" => format!("{} a helper: {}", verb("Started", "Start"), truncate_chars(&s("description"), 60)),
         "Skill" => format!("{} the {} skill", verb("Used", "Use"), crate::skills::display_name(&s("skill"))),
+        // On one of the user's own computers (user_computers.rs).
+        n if n.starts_with("mcp__obot__my_computer") => {
+            let on = if s("computer").is_empty() { "your computer".to_string() } else { truncate_chars(&s("computer"), 40) };
+            match n {
+                "mcp__obot__my_computer_run" => format!("{} `{}` on {on}", verb("Ran", "Run"), truncate_chars(&s("command").replace('\n', " "), 90)),
+                "mcp__obot__my_computer_read" => format!("{} {} on {on}", verb("Read", "Read"), short(s("path"))),
+                "mcp__obot__my_computer_write" => format!("{} {} on {on}", verb("Wrote", "Write"), short(s("path"))),
+                "mcp__obot__my_computer_copy" if s("to") == "bot" => format!("{} {} from {on}", verb("Copied", "Copy"), short(s("source"))),
+                "mcp__obot__my_computer_copy" => format!("{} {} to {on}", verb("Copied", "Copy"), short(s("source"))),
+                "mcp__obot__my_computer_job" => format!("{} a background command on {on}", verb("Checked", "Check")),
+                _ => verb("Looked at your computers", "Look at your computers"),
+            }
+        }
         "mcp__obot__message_bot" => format!("{} {}", verb("Messaged", "Message"), truncate_chars(&s("bot"), 40)),
         "mcp__obot__react" => format!("{} {}", verb("Reacted", "React"), truncate_chars(&s("emoji"), 8)),
         "mcp__obot__calendar_list" => verb("Looked at the calendars", "Look at the calendars"),

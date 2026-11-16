@@ -225,7 +225,7 @@ fn shell_command(cfg: &Config, bot: &Bot, command: &str) -> Command {
     c
 }
 
-fn git_bash() -> Option<PathBuf> {
+pub(crate) fn git_bash() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CLAUDE_CODE_GIT_BASH_PATH") {
         let p = PathBuf::from(p);
         if p.is_file() {
@@ -294,7 +294,7 @@ async fn copy_to_log(mut pipe: Box<dyn tokio::io::AsyncRead + Unpin + Send>, log
 }
 
 /// Stop a leftover job (no child handle) and everything it started.
-fn kill_pid_tree(pid: u32) {
+pub(crate) fn kill_pid_tree(pid: u32) {
     #[cfg(windows)]
     {
         let mut c = std::process::Command::new("taskkill");
@@ -313,7 +313,7 @@ fn kill_pid_tree(pid: u32) {
 }
 
 /// Stop the job and everything it started.
-async fn kill_tree(pid: Option<u32>, child: &mut tokio::process::Child) {
+pub(crate) async fn kill_tree(pid: Option<u32>, child: &mut tokio::process::Child) {
     if let Some(pid) = pid {
         #[cfg(windows)]
         {

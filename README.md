@@ -39,6 +39,10 @@ The diagram's source is [`docs/images/architecture.excalidraw`](docs/images/arch
   Bots use all your calendars, add repeating events with reminders and video links, find free time and
   answer invitations; invites show as an event card you send yourself. With Google Drive for desktop on
   your Mac, files a Bot puts in your Drive show up there.
+* **Work on your Mac.** Bots run on the PC, but a Bot knows which device you're writing from. On the Mac, turn on
+  Settings › Computer › **Let Bots work on this Mac**: Bots can then run commands and read, write and copy files there,
+  in their own folder (`~/oBot/<Bot name>`) and in project folders you add. It works while the oBot app is open on
+  the Mac. See [Security](#security).
 * **GitHub.** Connect GitHub in Settings › Connections (you type a short code on github.com once). Bots read
   your repos, files, issues and pull requests, including private ones, and can work on a copy of the code.
   Comments, new issues and pushes always ask you first.
@@ -120,6 +124,12 @@ Data lives in `%APPDATA%\oBot` (settings, chats), and Bot folders in `%USERPROFI
   judges how risky an action is, using your rules and your recent messages, and asks you about the risky ones (deleting
   outside the Bot's folder, logging in, passwords, payments, system changes) with an **Allow / Always allow / Deny** card. Sending
   email, inviting people, sharing Drive files and deleting always ask.
+* **Let Bots work on this Mac** is off until you turn it on, and the switch and folder list are saved on the Mac: the
+  PC can't change them. The Mac refuses files outside the folders you picked, and runs each command in the macOS
+  sandbox, where it can change files only inside those folders and can't read your other folders (Documents,
+  Desktop, other projects, `.ssh`). The PC never connects to the Mac: the Mac's app asks the PC for work. Risky
+  actions show the same **Allow / Always allow / Deny** card, marked **On <Mac's name> (your Mac)**. On a Windows or
+  Linux device there is no sandbox, so every command asks.
 * **Vault** passwords, secrets and the API key are encrypted with a key the system keeps (Windows DPAPI,
   the macOS Keychain, or a private file on Linux). Saved values are shown as `••••` if they ever appear
   in a chat or memory. Each Vault item and connected account can be limited to the Bots you pick.

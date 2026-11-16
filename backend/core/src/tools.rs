@@ -204,6 +204,7 @@ pub fn definitions() -> Value {
         a.extend(crate::drive::tool_definitions());
         a.extend(crate::github::tool_definitions());
         a.extend(crate::jobs::tool_definitions());
+        a.extend(crate::user_computers::tool_definitions());
         a.push(crate::relay::tool_definition());
         a.push(crate::reactions::tool_definition());
     }
@@ -405,13 +406,15 @@ pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Too
             Err(e) => ToolResult { text: e, is_error: true, image: None },
         };
     }
-    if crate::accounts::is_tool(name) || crate::calendar::is_tool(name) || crate::drive::is_tool(name) || crate::github::is_tool(name) || crate::jobs::is_tool(name) || crate::relay::is_tool(name) || crate::reactions::is_tool(name) {
+    if crate::accounts::is_tool(name) || crate::calendar::is_tool(name) || crate::drive::is_tool(name) || crate::github::is_tool(name) || crate::jobs::is_tool(name) || crate::user_computers::is_tool(name) || crate::relay::is_tool(name) || crate::reactions::is_tool(name) {
         let bot = match state.db.get_bot(bot_id) {
             Ok(Some(b)) => b,
             _ => return ToolResult { text: "this bot no longer exists".into(), is_error: true, image: None },
         };
         let out = if crate::jobs::is_tool(name) {
             crate::jobs::tool(state, &bot, name, args).await
+        } else if crate::user_computers::is_tool(name) {
+            crate::user_computers::tool(state, &bot, name, args).await
         } else if crate::relay::is_tool(name) {
             crate::relay::tool(state, &bot, args).await
         } else if crate::reactions::is_tool(name) {
@@ -913,7 +916,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 if rcount > 0 { format!("Its chat, its own memories and its {} are", count(rcount, "routine", "routines")) } else { "Its chat and its own memories are".to_string() }
             );
             // Always asks, whatever the permission settings: this can't be undone.
-            let ok = crate::api::ask_approval(state, bot_id, "mcp__obot__delete_bot", &summary, &json!({"bot": b.name, "bot_id": b.id, "reason": reason}), "", "")
+            let ok = crate::api::ask_approval(state, bot_id, "mcp__obot__delete_bot", &summary, &json!({"bot": b.name, "bot_id": b.id, "reason": reason}), "", "", None)
                 .await
                 .map_err(|e| e.to_string())?;
             if !ok {

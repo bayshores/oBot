@@ -1,13 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser, save files a Bot sent, update the app and take pages sent with the Send to oBot bookmark.",
+  "description": "Lets the oBot page (served by the built-in local server) drag the window, notify, set the badge, check focus, open links in the browser, save files a Bot sent, update the app, take pages sent with the Send to oBot bookmark and pick a folder Bots may use on this computer.",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "notification:default",
+    "dialog:allow-open",
     "allow-notify",
     "allow-set-badge",
     "allow-is-focused",

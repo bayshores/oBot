@@ -833,7 +833,7 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
 
 /// Ask the user with an Allow / Deny card. Never offers "Always allow".
 pub(crate) async fn confirm(st: &Shared, bot: &Bot, tool: &str, summary: &str, input: Value, reason: &str) -> Result<bool, String> {
-    crate::api::ask_approval(st, &bot.id, &format!("mcp__obot__{tool}"), summary, &input, "", reason)
+    crate::api::ask_approval(st, &bot.id, &format!("mcp__obot__{tool}"), summary, &input, "", reason, None)
         .await
         .map_err(|e| e.to_string())
 }

@@ -223,6 +223,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        // The folder picker for Settings › Computer › "Let Bots work on this Mac".
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().pubkey(obot_core::update::PUBLIC_KEY).build())
         .invoke_handler(tauri::generate_handler![notify, set_badge, is_focused, open_url, save_file, app_update_check, app_update_install, take_share])
         // Menu bar: oBot › Settings… (⌘,) and Connect to Remote Computer…
@@ -279,6 +281,10 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while running oBot")
         .run(|_app, _event| {
+            // Commands Bots run on this computer end with the app.
+            if let tauri::RunEvent::Exit = _event {
+                obot_core::this_computer::kill_all();
+            }
             // "Send to oBot" in the user's browser opened obot://share#<page> (Info.plist registers
             // the obot:// scheme): bring the window forward and let the page take it.
             #[cfg(target_os = "macos")]

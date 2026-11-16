@@ -203,7 +203,8 @@ Settings = {
 }
 // permission_mode values: "ask" (Ask every time; auto-review may wave routine actions through),
 //   "allow_all" (Always allow), "never" (Never allow: anything needing approval is denied), plus legacy "auto", "accept_edits".
-// approval meta also has: decision ("allow"|"always"|"deny" once answered), proposed_rule (string shown for "Always allow"; saved into review_allow), reason (why it asked).
+// approval meta also has: decision ("allow"|"always"|"deny" once answered), proposed_rule (string shown for "Always allow"; saved into review_allow), reason (why it asked),
+//   where ({name, kind: "Mac"|"Windows PC"|"Linux PC"}, only for an action on one of the user's own computers: the card says "On proled (your Mac)").
 
 Computer = {
   hostname, os, os_version, arch, uptime_secs, cpu_count, mem_total, mem_used,  // numbers in bytes/secs
@@ -235,7 +236,14 @@ Usage = {
 | POST | /api/push/subscribe | the browser's `PushSubscription` JSON `{endpoint, keys:{p256dh, auth}}` | `{ok}`. Saved with the device that sent it (at most 20); removing the device removes it |
 | POST | /api/push/unsubscribe | `{endpoint}` | `{ok}` |
 | POST | /api/push/test | `{endpoint}` | `{ok}` after a test notification went out to that one device; 502 `{error}` with the push service's answer |
-| GET | /api/devices | – | `[{id, name, platform, created_at, last_seen, current}]` (`current` = the device making this request) |
+| GET | /api/devices | – | `[{id, name, platform, created_at, last_seen, current, shared}]` (`current` = the device making this request; `shared` = `{enabled, online, home, folders}` when that device's oBot app reported "Let Bots work on this computer", else null) |
+| GET | /api/this-computer | – | `{enabled, home, default_home, folders, sandbox, name, status}` (home only, not from a paired device): "Let Bots work on this computer", this computer's own setting. `home` = the Bots' own folder here (each Bot works in `<home>/<Bot name>`), `folders` = other folders Bots may use, `sandbox` = commands are kept inside those folders (macOS), `status` = `"off"`, `"connecting"`, `"connected"`, `"needs_pairing"` (connected with a token instead of a pairing code) or `"error: …"` |
+| PUT | /api/this-computer | partial: `{enabled, home, folders}` (`home:""` = the default `<home folder>/oBot`) | same (home only). 400 `{error}` for a folder that doesn't exist or that holds oBot's own settings. `enabled:false` also stops every command Bots are running here (each Bot is told it was stopped). The computer the Bots run on has no route that changes this |
+| POST | /api/my-computer/hello | `{name, platform, enabled, home, folders, sandbox}` | `{ok}`. **Device token only** for all `/api/my-computer/*` routes (403 with the owner token): a paired computer's oBot app says what it lets Bots do there. Sent at start and when its settings change |
+| GET | /api/my-computer/poll | `?wait=25` (seconds, 1 to 30) | `{requests:[{id, kind, bot_id, bot_name, …}], cancel:[id], hello?}`: waits until a Bot asks for something on this computer. `kind` = `run`, `read`, `write`, `job`, `send`, `receive`. A request is handed out once; when the computer isn't polling, the Bot gets an error and nothing is kept for later. `cancel` = requests to stop (the Bot's turn ended); `hello:true` = send hello again |
+| POST | /api/my-computer/reply | `{id, ok, text}` | `{ok}`: the result of one request |
+| GET / POST | /api/my-computer/file/:id | – / the file's bytes (max 100 MB) | the bytes of a file a Bot is copying to this computer / `{ok, size}` for a file copied to the Bot. `:id` = the request's id |
+| POST | /api/my-computer/job-done | `{bot_id, job_id, name, command, status, exit_code?, tail}` | `{ok}`: a background command ended; wakes that Bot up |
 | DELETE | /api/devices/:id | – | `{ok}` revokes that device's token right away |
 | GET/PUT | /api/prefs | object | object (home only) |
 | GET | /api/bootstrap | `?platform=` (optional; the desktop app sends "Mac" / "Windows PC" / "Linux PC", saved on its paired device) | see above |
@@ -340,7 +348,7 @@ push service removes the subscription. The VAPID private key is in `config.json`
 * `bot.created {bot}` · `bot.updated {bot}` · `bot.deleted {bot_id}`
 * `message.created {message}` (a Bot reply arrives once, when it's finished; while it's being written, `bot.activity.label` is "Writing") · `message.updated {message}` (tool finished, approval decided, queued mark changed) · `messages.cleared {bot_id}` · `messages.deleted {bot_id, ids[]}`
 * `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished) · `github.connected {login}` · `github.failed {error}`
-* `devices.updated` (a device was paired or removed; re-fetch /api/devices)
+* `devices.updated` (a device was paired or removed, or said what it lets Bots do there; re-fetch /api/devices)
 * `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
 * `screen.updated {bot_id, running}` (a bot's screen started or stopped)
 * `screens.setup {state:"running"|"done"|"error", log?, error?}`
@@ -394,6 +402,16 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 | `github_comment {repo, number, body}` · `github_create_issue {repo, title, body?, labels?}` | comment or open an issue as the user. Always shows an Allow / Deny card and waits |
 | `github_clone {repo, to?, ref?}` · `github_push {path, branch?}` | a working copy in the bot's folder (default `github/<name>`; updates an existing one with a fast-forward pull), with commits credited to the user's GitHub noreply address · push it: the card lists the commits; never force-pushes, refuses when GitHub has commits the copy lacks |
 | `github_api {method, path, body?}` | any other REST call; methods other than GET show an Allow / Deny card first |
+| `my_computers` | the user's own computers a Bot can work on (`backend/core/src/user_computers.rs`): name, system, online or not, its folder there and the other folders it may use. A computer is listed when its oBot app is paired with this one and "Let Bots work on this computer" is on there |
+| `my_computer_run {command, cwd?, timeout_s?, background?, name?, computer?}` | a shell command on that computer, in the Bot's folder there unless `cwd` names another opened folder. Default 120 s, max 600 s; `background:true` returns a job id and wakes the Bot when it ends. Output over 30 KB keeps its start and end. Goes through the same permission check as a shell command here (mode, saved rules, auto-review, then a card that names the computer). On a Mac the command runs in the macOS sandbox: it can write only inside the opened folders and temp folders, and can't read the user's other folders. A computer without a sandbox (Windows, Linux) always asks |
+| `my_computer_read {path, offset?, limit?, computer?}` | a text file (max 2000 lines a call) or a folder's list. Never asks: the computer itself refuses anything outside the opened folders |
+| `my_computer_write {path, content, computer?}` | create or replace a text file there. Same permission check as a file edit |
+| `my_computer_copy {to: "computer"\|"bot", source, destination, computer?}` | one file of any type, up to 100 MB, between the Bot's working folder and that computer. Same permission check |
+| `my_computer_job {job_id, stop?, computer?}` | newest output of a background command there, or stop it |
+
+`computer` is needed only when several are online: otherwise the Bot works on the computer the user last wrote from, else
+the only one online. Relative paths mean the Bot's own folder there (`<home>/<Bot name>`, made on first use). When the
+computer is offline or the switch is off, the tool answers at once that nothing was done.
 
 ### How a turn runs
 
@@ -403,7 +421,9 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 * The same goes for where the user is writing from. A conversation assumes they are at the computer the Bots run on.
   When a message comes from a paired device, the Bot's next message starts with
   `[oBot: The user is writing from their Mac "proled", not from this computer.]`, once, and again only when the device
-  changes (`[oBot: The user is at this computer now.]`) or after Claude Code summarized the conversation.
+  changes (`[oBot: The user is at this computer now.]`) or after Claude Code summarized the conversation. When that
+  device lets Bots work on it, the note goes on: `You can work there with the my_computer tools. Your folder there:
+  /Users/you/oBot/Life Admin. Other folders there: /Users/you/Code/project.`
 * For the same reason a conversation keeps the instructions it started with. When they change (a new memory, a rename,
   new routines, another Bot's tagline), the Bot gets the changed lines as a note at the start of its next message
   (`[oBot: Your setup changed since this conversation started …]`). The current instructions take over with a new
@@ -531,3 +551,7 @@ When `window.__TAURI_INTERNALS__` exists, the UI can call:
 * `invoke('set_badge', {count})` → Dock/taskbar number = total unread across bots
 * `invoke('is_focused')` → boolean
 * `invoke('open_url', {url})` → opens an http(s) link in the default browser
+* `invoke('save_file', {url, name, open})` → saves a file a Bot sent into Downloads, then opens it (`open`) or shows it in Finder; returns `[name, opened]`
+* `invoke('take_share')` → a page sent with the "Send to oBot" bookmark that the window hasn't taken yet, or null
+* `invoke('app_update_check')` · `invoke('app_update_install')` → is there a newer version of the app · download it (signature checked), replace the app and restart
+* `invoke('plugin:dialog|open', {options: {directory: true, title}})` → the system's folder picker (Settings › Computer › "Let Bots work on this Mac"); returns the folder's path or null

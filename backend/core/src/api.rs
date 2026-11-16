@@ -93,6 +93,8 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         group_turns: Default::default(),
         finishing: Default::default(),
         helpers: Default::default(),
+        user_computers: Default::default(),
+        this_computer: Default::default(),
     });
 
     // Look up Claude Code in the background so the first screen loads fast.
@@ -115,6 +117,7 @@ pub async fn start(opts: ServeOptions) -> anyhow::Result<StartedServer> {
         tokio::spawn(async move { crate::jobs::recover(&st).await });
     }
     crate::screen::Screens::spawn_reaper(state.clone());
+    crate::this_computer::spawn(state.clone());
 
     let app = router(state.clone());
     tokio::spawn(async move {
@@ -203,6 +206,12 @@ fn router(state: Shared) -> Router {
         .route("/api/connection/pair", post(pair_with_computer))
         .route("/api/tailscale", get(get_tailscale))
         .route("/api/discover", post(discover_computers))
+        .route("/api/this-computer", get(get_this_computer).put(put_this_computer))
+        .route("/api/my-computer/hello", post(my_computer_hello))
+        .route("/api/my-computer/poll", get(my_computer_poll))
+        .route("/api/my-computer/reply", post(my_computer_reply))
+        .route("/api/my-computer/job-done", post(my_computer_job_done))
+        .route("/api/my-computer/file/{id}", get(my_computer_file_out).post(my_computer_file_in).layer(DefaultBodyLimit::disable()))
         .layer(middleware::from_fn_with_state(state.clone(), require_token));
 
     Router::new()
@@ -472,6 +481,8 @@ async fn put_connection(
     }
     st.config.write().await.connection = c.clone();
     st.save_config().await?;
+    // "Let Bots work on this Mac" follows the computer this app is connected to.
+    crate::this_computer::settings_changed(&st);
     Ok(Json(c))
 }
 
@@ -597,6 +608,7 @@ fn qr_svg(text: &str) -> String {
 
 async fn list_devices(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>) -> ApiResult<Json<Value>> {
     let seen = st.device_seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let shared = crate::user_computers::views(&st);
     let mut changed = false;
     let list = {
         let mut cfg = st.config.write().await;
@@ -615,6 +627,8 @@ async fn list_devices(State(st): State<Shared>, axum::Extension(who): axum::Exte
                     "id": d.id, "name": d.name, "platform": d.platform, "created_at": d.created_at,
                     "last_seen": seen.get(&d.id).copied().unwrap_or(d.last_seen).max(d.last_seen),
                     "current": who.0.as_deref() == Some(d.id.as_str()),
+                    // Set when its oBot app said whether Bots may work on it (user_computers.rs).
+                    "shared": shared.get(&d.id),
                 })
             })
             .collect::<Vec<_>>()
@@ -637,6 +651,7 @@ async fn revoke_device(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -
     }
     st.save_config().await?;
     st.device_seen.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    crate::user_computers::forget(&st, &id);
     st.emit("devices.updated", json!({}));
     Ok(Json(json!({ "ok": true })))
 }
@@ -1232,7 +1247,7 @@ fn rule_for(tool: &str, input: &Value) -> String {
 
 /// Called by the MCP helper. Shows an approval card and waits for the user's answer.
 async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprove>) -> ApiResult<Json<Value>> {
-    let allowed = decide(&st, &b.bot_id, &b.tool_name, &b.input).await?;
+    let allowed = decide(&st, &b.bot_id, &b.tool_name, &b.input, None).await?;
     Ok(Json(if allowed {
         json!({ "behavior": "allow", "updatedInput": b.input })
     } else {
@@ -1264,6 +1279,22 @@ pub(crate) fn rule_allows(rules: &[String], tool: &str, command: &str) -> bool {
 /// `always_ask`: the action runs outside the sandbox the saved rules were meant for, so skip the
 /// rules and auto-review and always show the card (without "Always allow").
 pub(crate) async fn check_permission(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, always_ask: bool) -> anyhow::Result<bool> {
+    check_permission_at(st, bot_id, tool_name, input, always_ask, None).await
+}
+
+/// Where an action runs when it isn't on this computer: one of the user's own computers
+/// (user_computers.rs). The card names it, and auto-review judges by its folders.
+pub struct Place {
+    /// "proled"
+    pub name: String,
+    /// "Mac", "Windows PC"
+    pub kind: String,
+    /// The folders the Bot may use there; the first is its own.
+    pub folders: Vec<String>,
+}
+
+/// `check_permission` for an action that runs at `place` (None = on this computer).
+pub(crate) async fn check_permission_at(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, always_ask: bool, place: Option<&Place>) -> anyhow::Result<bool> {
     let cfg = st.config.read().await.clone();
     let command = input.get("command").and_then(Value::as_str).unwrap_or("");
     match cfg.permission_mode.as_str() {
@@ -1274,16 +1305,16 @@ pub(crate) async fn check_permission(st: &Shared, bot_id: &str, tool_name: &str,
     if always_ask {
         let summary = runner::tool_summary(tool_name, input, false);
         let reason = "This runs outside the Bot's sandbox, so oBot always asks.";
-        return ask_approval(st, bot_id, tool_name, &summary, input, "", reason).await;
+        return ask_approval(st, bot_id, tool_name, &summary, input, "", reason, place).await;
     }
     if rule_allows(&cfg.allow_rules, tool_name, command) {
         return Ok(true);
     }
-    decide(st, bot_id, tool_name, input).await
+    decide(st, bot_id, tool_name, input, place).await
 }
 
 /// Auto-review, then (if it doesn't wave the action through) an Allow / Deny card.
-async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> anyhow::Result<bool> {
+async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, place: Option<&Place>) -> anyhow::Result<bool> {
     let b = InternalApprove { bot_id: bot_id.to_string(), tool_name: tool_name.to_string(), input: input.clone() };
     let summary = runner::tool_summary(&b.tool_name, &b.input, false);
 
@@ -1299,7 +1330,7 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
             runner::set_activity(&st, &b.bot_id, Some(("thinking", "Checking the action"))).await;
             // What the user said in the chat this turn is in: the group's when the Bot answers there.
             let recent = st.db.recent_user_texts(&st.chat_of(&b.bot_id).0, crate::review::RECENT_MESSAGES);
-            verdict = crate::review::review(&cfg, &st.data_dir, &bot.name, &bot.workdir, &recent, &b.tool_name, &b.input).await;
+            verdict = crate::review::review(&cfg, &st.data_dir, &bot.name, &bot.workdir, place, &recent, &b.tool_name, &b.input).await;
             if let Some(v) = &verdict {
                 if v.allow {
                     tracing::info!("auto-review allowed {} for {}: {}", b.tool_name, bot.name, v.reason);
@@ -1315,7 +1346,7 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| crate::review::fallback_rule(&b.tool_name, &b.input));
     let reason = verdict.as_ref().map(|v| v.reason.clone()).unwrap_or_default();
-    let allowed = ask_approval(st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason).await?;
+    let allowed = ask_approval(st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason, place).await?;
     if allowed {
         runner::restore_activity(st, bot_id, before, "Working").await;
     }
@@ -1324,6 +1355,7 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value) -> an
 
 /// Show an Allow / Deny card in the bot's chat and wait for the user's answer.
 /// An empty `proposed_rule` hides "Always allow". Returns false if the run ends first.
+/// `place`: the user's own computer the action runs on, named on the card (None = this computer).
 pub(crate) async fn ask_approval(
     st: &Shared,
     bot_id: &str,
@@ -1332,6 +1364,7 @@ pub(crate) async fn ask_approval(
     input: &Value,
     proposed_rule: &str,
     reason: &str,
+    place: Option<&Place>,
 ) -> anyhow::Result<bool> {
     let approval_id = new_id();
     let mut m = Message {
@@ -1348,6 +1381,7 @@ pub(crate) async fn ask_approval(
             "input": trim_value(input),
             "proposed_rule": proposed_rule,
             "reason": reason,
+            "where": place.map(|p| json!({ "name": p.name, "kind": p.kind })),
         }),
         created_at: now_ms(),
     };
@@ -1448,6 +1482,66 @@ async fn internal_tool(State(st): State<Shared>, Json(c): Json<ToolCall>) -> Jso
     let r = crate::tools::call(&st, &c.bot_id, &c.name, &c.arguments).await;
     let image = r.image.map(|(data, mime)| json!({ "data": data, "mime": mime }));
     Json(json!({ "text": r.text, "is_error": r.is_error, "image": image }))
+}
+
+// ---------------------------------------------------------------- the user's own computers (user_computers.rs, this_computer.rs)
+
+/// The paired device a `/api/my-computer/*` request comes from. The owner token (this computer's own
+/// app, and the Bots' helper) is refused: a computer speaks only for itself.
+fn computer_device(who: &AuthDevice) -> ApiResult<&str> {
+    who.0.as_deref().ok_or_else(|| ApiError(StatusCode::FORBIDDEN, "Only a paired computer's oBot app can use this.".into()))
+}
+
+async fn my_computer_hello(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, Json(b): Json<Value>) -> ApiResult<Json<Value>> {
+    crate::user_computers::hello(&st, computer_device(&who)?, &b).await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn my_computer_poll(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, Query(q): Query<HashMap<String, String>>) -> ApiResult<Json<Value>> {
+    let wait = q.get("wait").and_then(|w| w.parse().ok()).unwrap_or(25);
+    Ok(Json(crate::user_computers::poll(&st, computer_device(&who)?, wait).await))
+}
+
+async fn my_computer_reply(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, Json(b): Json<Value>) -> ApiResult<Json<Value>> {
+    crate::user_computers::reply(&st, computer_device(&who)?, &b);
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn my_computer_job_done(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, Json(b): Json<Value>) -> ApiResult<Json<Value>> {
+    crate::user_computers::job_done(&st, computer_device(&who)?, &b).await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn my_computer_file_in(
+    State(st): State<Shared>,
+    axum::Extension(who): axum::Extension<AuthDevice>,
+    UrlPath(id): UrlPath<String>,
+    body: axum::body::Body,
+) -> ApiResult<Json<Value>> {
+    let device = computer_device(&who)?;
+    let bytes = axum::body::to_bytes(body, crate::this_computer::MAX_FILE_BYTES as usize).await.map_err(|_| bad("That file is too big."))?;
+    crate::user_computers::file_in(&st, device, &id, &bytes).await.map_err(|e| bad(&e))?;
+    Ok(Json(json!({ "ok": true, "size": bytes.len() })))
+}
+
+async fn my_computer_file_out(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    let bytes = crate::user_computers::file_out(&st, computer_device(&who)?, &id).await.map_err(|e| bad(&e))?;
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream")], bytes).into_response())
+}
+
+/// Home server: "Let Bots work on this Mac" (this computer's own app only).
+async fn get_this_computer(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>) -> ApiResult<Json<Value>> {
+    if who.0.is_some() {
+        return Err(ApiError(StatusCode::FORBIDDEN, "Look at this on the computer itself.".into()));
+    }
+    Ok(Json(crate::this_computer::view(&st).await))
+}
+
+async fn put_this_computer(State(st): State<Shared>, axum::Extension(who): axum::Extension<AuthDevice>, Json(b): Json<Value>) -> ApiResult<Json<Value>> {
+    if who.0.is_some() {
+        return Err(ApiError(StatusCode::FORBIDDEN, "Change this on the computer itself.".into()));
+    }
+    Ok(Json(crate::this_computer::update(&st, &b).await.map_err(|e| bad(&e))?))
 }
 
 // ---------------------------------------------------------------- bot screens (screen.rs)

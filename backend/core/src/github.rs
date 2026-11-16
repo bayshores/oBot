@@ -704,7 +704,7 @@ async fn login(st: &Shared) -> String {
 }
 
 async fn approve(st: &Shared, bot: &Bot, tool: &str, summary: &str, input: Value) -> Result<bool, String> {
-    crate::api::ask_approval(st, &bot.id, &format!("mcp__obot__{tool}"), summary, &input, "", "").await.map_err(|e| e.to_string())
+    crate::api::ask_approval(st, &bot.id, &format!("mcp__obot__{tool}"), summary, &input, "", "", None).await.map_err(|e| e.to_string())
 }
 
 // ------------------------------------------------------------------ git

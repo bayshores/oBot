@@ -33,5 +33,8 @@ web-push-native = "0.5"
 http = "1"
 minisign-verify = "0.2"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
