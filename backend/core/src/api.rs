@@ -1375,12 +1375,25 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, place
         .map(|v| v.proposed_rule.clone())
         .filter(|r| !r.trim().is_empty())
         .unwrap_or_else(|| crate::review::fallback_rule(&b.tool_name, &b.input));
+    let proposed_rule = rule_at(proposed_rule, place, cfg.auto_review);
     let reason = verdict.as_ref().map(|v| v.reason.clone()).unwrap_or_default();
     let allowed = ask_approval(st, &b.bot_id, &b.tool_name, &summary, &b.input, &proposed_rule, &reason, place).await?;
     if allowed {
         runner::restore_activity(st, bot_id, before, "Working").await;
     }
     Ok(allowed)
+}
+
+/// "Always allow" for an action on one of the user's own computers saves only this plain-language
+/// rule, which auto-review reads: so it names that computer (or it would also wave through the same
+/// thing here), and isn't offered while auto-review is off (it would do nothing).
+fn rule_at(rule: String, place: Option<&Place>, auto_review: bool) -> String {
+    match place {
+        None => rule,
+        Some(_) if !auto_review => String::new(),
+        Some(p) if rule.to_lowercase().contains(&p.name.to_lowercase()) => rule,
+        Some(p) => format!("{} on {}", rule.trim_end_matches('.'), p.name),
+    }
 }
 
 /// Show an Allow / Deny card in the bot's chat and wait for the user's answer.
@@ -1481,8 +1494,10 @@ async fn decide_approval(State(st): State<Shared>, UrlPath(id): UrlPath<String>,
         .remove(&id)
         .ok_or_else(|| not_found("This request already ended"))?;
     let allow = d.decision == "allow" || d.decision == "always";
-    if d.decision == "always" && !p.tool_name.starts_with("mcp__obot__") {
-        let rule = rule_for(&p.tool_name, &p.input);
+    if d.decision == "always" {
+        // An oBot tool can't be a Claude Code rule (it would allow all of the tool): only the card's
+        // plain-language rule is saved for it.
+        let rule = if p.tool_name.starts_with("mcp__obot__") { String::new() } else { rule_for(&p.tool_name, &p.input) };
         let proposed = st
             .db
             .get_message(&p.message_id)
@@ -2797,5 +2812,41 @@ mod approval_tests {
         let card = st.db.list_messages("b", None, 10).unwrap().into_iter().find(|m| m.role == "approval").unwrap();
         assert_eq!(card.status, "expired");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn always_allow_on_a_mac_card_saves_its_rule() {
+        let d = std::env::temp_dir().join(format!("ob-always-{}", crate::util::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        let ask = {
+            let st = st.clone();
+            tokio::spawn(async move {
+                let input = json!({"command": "git status", "computer": "proled"});
+                super::ask_approval(&st, "b", "mcp__obot__my_computer_run", "Run git status", &input, "Run git commands that only read on proled", "", None).await
+            })
+        };
+        let id = loop {
+            if let Some(id) = st.approvals.lock().await.keys().next().cloned() {
+                break id;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        };
+        let decision = axum::Json(super::Decision { decision: "always".into() });
+        assert!(super::decide_approval(axum::extract::State(st.clone()), axum::extract::Path(id), decision).await.is_ok());
+        assert!(ask.await.unwrap().unwrap());
+        let cfg = st.config.read().await;
+        assert_eq!(cfg.review_allow, vec!["Run git commands that only read on proled".to_string()]);
+        assert!(cfg.allow_rules.is_empty(), "never a rule that allows the whole tool");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_rule_for_another_computer_names_it() {
+        let place = super::Place { name: "proled".into(), kind: "Mac".into(), folders: vec![], open: None };
+        assert_eq!(super::rule_at("Run git commands.".into(), Some(&place), true), "Run git commands on proled");
+        assert_eq!(super::rule_at("Read files on Proled".into(), Some(&place), true), "Read files on Proled");
+        assert_eq!(super::rule_at("Run git commands".into(), Some(&place), false), "", "auto-review off: nothing to save");
+        assert_eq!(super::rule_at("Run git commands".into(), None, false), "Run git commands");
     }
 }

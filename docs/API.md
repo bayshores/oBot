@@ -208,7 +208,7 @@ Settings = {
 }
 // permission_mode values: "ask" (Ask every time; auto-review may wave routine actions through),
 //   "allow_all" (Always allow), "never" (Never allow: anything needing approval is denied), plus legacy "auto", "accept_edits".
-// approval meta also has: decision ("allow"|"always"|"deny" once answered), proposed_rule (string shown for "Always allow"; saved into review_allow), reason (why it asked),
+// approval meta also has: decision ("allow"|"always"|"deny" once answered), proposed_rule (string shown for "Always allow"; saved into review_allow, and for an oBot tool only there; on one of the user's own computers it names that computer, and is empty while auto-review is off), reason (why it asked),
 //   where ({name, kind: "Mac"|"Windows PC"|"Linux PC", open}, only for an action on one of the user's own computers: the card says "On proled (your Mac)").
 //   where.open = a folder there the action needs that isn't open to Bots yet. Such a card always shows (whatever the permission mode, except "never"),
 //   has no "Always allow", and only the oBot app on that computer can answer Allow: "Open folder and allow" PUTs {add_folder} to /api/this-computer
