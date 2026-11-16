@@ -6076,12 +6076,13 @@
     // Your computer › Execution
     if (s) {
       const pm = s.permission_mode === 'allow_all' || s.permission_mode === 'never' ? s.permission_mode : 'ask';
+      const pc = conn.mode === 'remote' && c && c.hostname ? c.hostname : 'this computer';
       out.append(
         section(
           'Your computer',
           card(
             row(
-              conn.mode === 'remote' && c && c.hostname ? `Running actions on ${c.hostname}` : 'Running actions on this computer',
+              `Running actions on ${pc}`,
               selectEl(pm, EXEC_OPTS, (v) => putSettings({ permission_mode: v }, 'local-execution'), 'ghost'),
               'Let oBot open files and run tasks on your computer. Auto-review screens each action before it runs.',
               '',
@@ -6090,12 +6091,12 @@
             // Windows computers only: run Claude Code inside WSL Linux, where its sandbox works.
             s.wsl_available
               ? row(
-                  'Where Bots run commands',
+                  `Commands on ${pc}`,
                   selectEl(
                     s.runner === 'wsl' ? 'wsl' : 'native',
                     [
-                      ['native', 'Directly on Windows'],
-                      ['wsl', `In Linux (WSL: ${s.wsl_distro || 'Ubuntu'}), sandboxed`],
+                      ['native', 'Run in Windows'],
+                      ['wsl', `Run in Linux (WSL: ${s.wsl_distro || 'Ubuntu'}), sandboxed`],
                     ],
                     (v) => putSettings({ runner: v }, 'bot-runner'),
                     'ghost'
@@ -6115,7 +6116,7 @@
 
     // where bots run (a phone or other browser is paired with this computer and can't switch it)
     if (!TAURI && !onThisComputer()) {
-      out.append(section('Where Bots run', card(row(h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()), null, `Your Bots work on this computer. This ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} is paired with it.`))));
+      out.append(section('Where your Bots live', card(row(h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()), null, `Your Bots work on this computer. This ${browserDeviceName() === 'Web browser' ? 'browser' : browserDeviceName()} is paired with it.`))));
     } else {
     const seg = h(
       'div',
@@ -6144,14 +6145,14 @@
         ? row(
             h('span', { class: 'comp-name' }, icon('monitor', 16), computerName()),
             h('div', { class: 'secret-ctl' }, h('span', { class: 'status-pill ' + (linkOk ? 'on' : 'off') }, h('i'), linkOk ? 'Online' : S.link === 'unpaired' ? 'Not paired' : 'Can’t reach'), pillBtn(`Switch to ${thisDevice()}`, () => useThisDevice())),
-            `Your Bots run here · ${hostOf(conn.url)}`
+            `Your Bots live here · ${hostOf(conn.url)}`
           )
         : row(
             h('span', { class: 'comp-name' }, icon('monitor', 16), ThisDevice()),
             pillBtn('Set up an always-on computer', () => openSetupWizard()),
-            `Your Bots run here. They pause when ${thisDevice()} sleeps.`
+            `Your Bots live here. They pause when ${thisDevice()} sleeps.`
           );
-    const runsOn = card(current, row('Bots run on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : `Bots are using ${thisDevice()}.`));
+    const runsOn = card(current, row('Your Bots live on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : `Bots are using ${thisDevice()}.`));
     if (d.mode === 'remote') {
       // Pair with another computer: its private address + a 6-digit code made on that computer.
       const urlIn = h('input', { class: 'field', placeholder: 'https://my-pc.your-tailnet.ts.net', value: d.url, spellcheck: 'false', autocomplete: 'off', 'aria-label': 'Computer address' });
@@ -6241,7 +6242,7 @@
         )
       );
     }
-    out.append(section('Where Bots run', runsOn));
+    out.append(section('Where your Bots live', runsOn));
     }
 
     // status
