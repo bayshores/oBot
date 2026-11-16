@@ -1822,10 +1822,6 @@ fn skill_dir(bot: &Bot) -> PathBuf {
     crate::skills::dir(&bot.workdir)
 }
 
-fn valid_skill_name(n: &str) -> bool {
-    !n.is_empty() && n.len() <= 64 && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
 /// Skills are Claude Code skills in the bot's folder: .claude/skills/<name>/SKILL.md
 async fn list_skills(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Vec<Value>>> {
     let bot = get_bot(&st, &id).await?;
@@ -1867,22 +1863,13 @@ async fn put_skill(
     Json(b): Json<SkillBody>,
 ) -> ApiResult<Json<Value>> {
     let bot = get_bot(&st, &id).await?;
-    if !valid_skill_name(&name) {
-        return Err(bad("Use lowercase letters, numbers and dashes, like weekly-report"));
-    }
-    if b.body.trim().is_empty() {
-        return Err(bad("Write the skill's instructions"));
-    }
-    let dir = skill_dir(&bot).join(&name);
-    std::fs::create_dir_all(&dir)?;
-    let desc = b.description.replace(['\n', '"'], " ");
-    std::fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\ndescription: \"{}\"\n---\n\n{}\n", desc.trim(), b.body.trim()))?;
+    crate::skills::save(&bot.workdir, &name, &b.description, &b.body).map_err(|e| bad(&e))?;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn delete_skill(State(st): State<Shared>, UrlPath((id, name)): UrlPath<(String, String)>) -> ApiResult<Json<Value>> {
     let bot = get_bot(&st, &id).await?;
-    if valid_skill_name(&name) {
+    if crate::skills::valid_name(&name) {
         let _ = std::fs::remove_dir_all(skill_dir(&bot).join(&name));
     }
     Ok(Json(json!({ "ok": true })))

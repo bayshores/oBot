@@ -311,7 +311,7 @@ Usage = {
 | DELETE | /api/bots/:id | – | 400 for the Main Bot |
 | PATCH | /api/bots/:id | also `{label, pinned, notifications}` | `Bot` |
 | GET | /api/bots/:id/skills | – | `[{name, description, body}]` (Claude Code skills in the bot folder) |
-| PUT | /api/bots/:id/skills/:name | `{description, body}` (name: lowercase-dashes) | `{ok}` |
+| PUT | /api/bots/:id/skills/:name | `{description, body}` (name: lowercase-dashes; description ≤ 200 characters, body ≤ 20,000) | `{ok}` |
 | DELETE | /api/bots/:id/skills/:name | – | `{ok}` |
 | GET | /api/bots/:id/library | – | `[{name, path, size, modified, mime, url}]` newest first (Files library) |
 | POST | /api/memories/import | `{text}` one fact per line | `{imported}` |
@@ -352,7 +352,7 @@ push service removes the subscription. The VAPID private key is in `config.json`
 * `message.created {message}` (a Bot reply arrives once, when it's finished; while it's being written, `bot.activity.label` is "Writing") · `message.updated {message}` (tool finished, approval decided, queued mark changed) · `messages.cleared {bot_id}` · `messages.deleted {bot_id, ids[]}`
 * `usage.updated {usage}` · `settings.updated {settings}` · `account.connected {id, email, provider}` (a sign-in finished) · `github.connected {login}` · `github.failed {error}`
 * `devices.updated` (a device was paired or removed, or said what it lets Bots do there; re-fetch /api/devices)
-* `routines.updated {bot_id}` · `memories.updated {bot_id?}` (re-fetch if that bot's settings are open)
+* `routines.updated {bot_id}` · `memories.updated {bot_id?}` · `skills.updated {bot_id}` (re-fetch if that bot's settings are open)
 * `screen.updated {bot_id, running}` (a bot's screen started or stopped)
 * `screens.setup {state:"running"|"done"|"error", log?, error?}`
 * `resync` (reload everything)
@@ -377,6 +377,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 | `send_file {path, caption?}` · `show_page {title, html \| path, emoji_ok?}` | file in the chat · sandboxed page (a summary, diagram, chart, table or small app). `html` is content only and gets oBot's look. Pictures (`<img src>` with a web address or a file path) are saved with the page. The call is refused, with a message telling the bot what to fix, when the page has emoji (unless `emoji_ok`, for when the user asked for them), an icon name that doesn't exist, a picture that can't be loaded (or more than 40 pictures), or `html` that is a whole document. To show pictures inside a reply, bots write markdown images instead (see `html` above) |
 | `remember {fact, tier: "profile"\|"log", about?: "user"\|"me", bot?}` | save a fact. `profile` (standing instructions and rules like "never ask me to sign in to X", core identity) is in the bot's prompt every turn; `log` (everything else) is searched with `recall`, and only its newest 15 entries are in the prompt. `about:"user"` facts are shared by all bots; `bot` saves a private fact for another bot |
 | `recall {query?, bot?}` · `update_memory {id, fact?, tier?}` · `forget {id}` | search facts by words (no query: profile + newest log) · fix one or move it between tiers · delete one |
+| `save_skill {name, description, body}` | save or replace one of the bot's skills (`.claude/skills/<name>/SKILL.md`, the same save as `PUT /api/bots/:id/skills/:name`); the old text is kept as `SKILL.prev.md`, and the chat shows "Saved a skill: …" / "Updated the skill …". Bots are told to save one after a many-step task the user may repeat, after finding what works past errors, or when corrected. Claude Code doesn't let a bot write into `.claude/` itself in some permission modes, so this is a tool |
 | `check_back_later {note, in_minutes \| at}` | one-time wake-up |
 | `run_in_background {command, name, note?, max_minutes?}` · `background_jobs {id?}` · `stop_background_job {id}` | a long command run by the oBot server (not Claude Code), output in `<data>/bots/<id>/jobs/<job>.log`. Goes through the same permission check as a shell command (mode, saved rules, auto-review, then an Allow / Deny card); with `runner = "wsl"` jobs run outside Claude Code's sandbox, so they always get a card. Saved prefix rules like `Bash(git log:*)` never cover commands with `; & | $( \` < >` or newlines. Anything the command leaves running is stopped when it ends. When it ends (or oBot restarts while it runs) the bot gets a wake-up turn with the exit code and last 40 lines. Max 5 running per bot, 24 h each |
 | `create_routine {name, prompt, schedule, bot?}` · `list_routines {bot?, all?}` · `update_routine {id, …}` · `delete_routine {id}` · `move_routine {id, to_bot}` | routines, for this bot or another |
@@ -500,7 +501,8 @@ computer is offline or the switch is off, the tool answers at once that nothing 
 * Skills in the bot folder (`.claude/skills/<name>/SKILL.md`, see `/api/bots/:id/skills`) are copied before each run into
   `<data>/bots/<id>/skills-plugin` and loaded with `--plugin-dir` (`backend/core/src/skills.rs`). Each SKILL.md keeps only
   `name`, `description` and `when_to_use`; fields like `allowed-tools` and `hooks` are dropped. Links aren't copied, and a
-  skill folder is limited to 200 files and 5 MB.
+  skill folder is limited to 200 files and 5 MB. A saved description is at most 200 characters (it is listed with every
+  message) and the instructions at most 20,000 (read only when the skill is used). `SKILL.prev.md` isn't copied.
 * Claude Code's built-in `dataviz` skill is turned off for Bots (`skillOverrides` in the run settings file): Bots make
   charts with `show_page`, which has its own instructions. Measured: about 500 fewer tokens on every message.
 * The saved "Always allow" rules (`allow_rules`) reach Claude Code as `permissions.allow` in the run settings file, not on

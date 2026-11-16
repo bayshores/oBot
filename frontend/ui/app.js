@@ -1394,6 +1394,9 @@
       case 'memories.updated':
         if (S.panelOpen && (!e.bot_id || e.bot_id === S.current)) loadPanelLists('memories');
         break;
+      case 'skills.updated':
+        if (S.panelOpen && (!e.bot_id || e.bot_id === S.current)) loadPanelLists('skills');
+        break;
       default:
         break;
     }
@@ -4678,7 +4681,7 @@
     box.textContent = '';
     const b = curBot();
     if (list == null) return box.append(h('div', { class: 'p-empty' }, 'Couldn’t load skills.'));
-    if (!list.length) return box.append(h('div', { class: 'p-empty' }, 'No skills yet. A skill is a saved set of steps the Bot can follow, like “weekly-report”.'));
+    if (!list.length) return box.append(h('div', { class: 'p-empty' }, 'No skills yet. A skill is a saved set of steps the Bot follows, like “weekly-report”. The Bot saves one when it learns a task you’ll ask for again.'));
     for (const sk of list) {
       box.append(
         h(
@@ -4694,8 +4697,8 @@
   function openSkillEditor(b, sk) {
     if (!b) return;
     const nameIn = h('input', { class: 'field mono', value: sk ? sk.name : '', placeholder: 'weekly-report', maxlength: '64', spellcheck: 'false', 'aria-label': 'Name', disabled: !!sk });
-    const descIn = h('input', { class: 'field', value: sk ? sk.description || '' : '', placeholder: 'When should the Bot use this skill?', maxlength: '300', 'aria-label': 'Description' });
-    const bodyIn = h('textarea', { class: 'field', rows: '9', placeholder: 'The steps the Bot follows', 'aria-label': 'Instructions' });
+    const descIn = h('input', { class: 'field', value: sk ? sk.description || '' : '', placeholder: 'When should the Bot use this skill?', maxlength: '200', 'aria-label': 'Description' });
+    const bodyIn = h('textarea', { class: 'field', rows: '9', placeholder: 'The steps the Bot follows', maxlength: '20000', 'aria-label': 'Instructions' });
     bodyIn.value = sk ? sk.body || '' : '';
     const err = h('div', { class: 'dialog-error', role: 'alert', hidden: true });
     nameIn.addEventListener('input', () => {

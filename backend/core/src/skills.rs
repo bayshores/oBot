@@ -5,6 +5,9 @@
 //! small plugin in oBot's own data folder and loads that with --plugin-dir. Each SKILL.md keeps
 //! only its name, description and instructions: fields that change permissions or run commands
 //! (allowed-tools, hooks, ...) are dropped.
+//!
+//! Skills are saved by the user (the Bot panel) and by the Bot itself (the save_skill tool), both
+//! through `save`. Claude Code won't let a Bot write into .claude/ in some permission modes.
 
 use std::path::{Path, PathBuf};
 
@@ -15,10 +18,50 @@ const KEEP: [&str; 3] = ["name", "description", "when_to_use"];
 const MAX_FILES: usize = 200;
 const MAX_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_DEPTH: usize = 4;
+/// A skill's description is listed in every message, so it stays one short line.
+pub const MAX_DESCRIPTION: usize = 200;
+/// Instructions are read only when the skill is used.
+pub const MAX_BODY: usize = 20_000;
+/// The text a skill had before its last save (one step of undo). Not copied into the plugin.
+pub const PREVIOUS: &str = "SKILL.prev.md";
 
 /// Where a Bot's skills live.
 pub fn dir(workdir: &str) -> PathBuf {
     PathBuf::from(workdir).join(".claude").join("skills")
+}
+
+/// Skill names: lowercase letters, numbers and dashes, like weekly-report.
+pub fn valid_name(n: &str) -> bool {
+    !n.is_empty() && n.len() <= 64 && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Save a skill's SKILL.md. The old text, if any, is kept as SKILL.prev.md. Ok(true) when it
+/// replaced an existing skill. Err is a message for the user or the Bot.
+pub fn save(workdir: &str, name: &str, description: &str, body: &str) -> Result<bool, String> {
+    if !valid_name(name) {
+        return Err("Use lowercase letters, numbers and dashes for the name, like weekly-report".into());
+    }
+    let body = body.trim();
+    if body.is_empty() {
+        return Err("Write the skill's instructions".into());
+    }
+    if body.chars().count() > MAX_BODY {
+        return Err(format!("The instructions are too long (max {MAX_BODY} characters)"));
+    }
+    let desc = description.replace(['\n', '\r', '"'], " ");
+    let desc = desc.trim();
+    if desc.chars().count() > MAX_DESCRIPTION {
+        return Err(format!("The description is too long (max {MAX_DESCRIPTION} characters): one line saying when to use it"));
+    }
+    let folder = dir(workdir).join(name);
+    let file = folder.join("SKILL.md");
+    std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
+    let old = std::fs::read_to_string(&file).ok();
+    if let Some(old) = &old {
+        std::fs::write(folder.join(PREVIOUS), old).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&file, format!("---\nname: {name}\ndescription: \"{desc}\"\n---\n\n{body}\n")).map_err(|e| e.to_string())?;
+    Ok(old.is_some())
 }
 
 /// A skill's display name without the plugin prefix.
@@ -55,7 +98,7 @@ fn copy_files(from: &Path, to: &Path, depth: usize, files: &mut usize, bytes: &m
         if meta.is_dir() && depth < MAX_DEPTH {
             std::fs::create_dir_all(&dest)?;
             copy_files(&e.path(), &dest, depth + 1, files, bytes)?;
-        } else if meta.is_file() && e.file_name() != "SKILL.md" {
+        } else if meta.is_file() && e.file_name() != "SKILL.md" && !(depth == 1 && e.file_name() == PREVIOUS) {
             if *files >= MAX_FILES || *bytes + meta.len() > MAX_BYTES {
                 continue;
             }
@@ -134,6 +177,28 @@ mod tests {
         assert!(out.join("skills/hello/scripts/run.sh").exists());
         assert!(!out.join("skills/hello/link").exists());
         assert!(out.join(".claude-plugin/plugin.json").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn save_keeps_the_old_text_and_checks_its_input() {
+        let root = std::env::temp_dir().join(format!("ob-skills-{}", crate::util::new_id()));
+        let work = root.to_str().unwrap();
+        assert_eq!(save(work, "Weekly Report", "x", "steps"), Err("Use lowercase letters, numbers and dashes for the name, like weekly-report".into()));
+        assert!(save(work, "report", "x", "  ").is_err());
+        assert!(save(work, "report", &"d".repeat(MAX_DESCRIPTION + 1), "steps").is_err());
+        assert!(save(work, "report", "x", &"b".repeat(MAX_BODY + 1)).is_err());
+
+        assert_eq!(save(work, "report", "Weekly report\n\"now\"", "1. Open the site"), Ok(false));
+        let file = dir(work).join("report").join("SKILL.md");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "---\nname: report\ndescription: \"Weekly report  now\"\n---\n\n1. Open the site\n");
+        assert_eq!(save(work, "report", "Weekly report", "1. Open the new site"), Ok(true));
+        let prev = std::fs::read_to_string(dir(work).join("report").join(PREVIOUS)).unwrap();
+        assert!(prev.contains("1. Open the site") && !prev.contains("new site"));
+        // The old copy isn't loaded as part of the skill.
+        let out = build_plugin(work, &root.join("bot")).unwrap().unwrap();
+        assert!(out.join("skills/report/SKILL.md").exists());
+        assert!(!out.join("skills/report").join(PREVIOUS).exists());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

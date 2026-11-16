@@ -262,15 +262,17 @@ fn plan_text(r: &Routine, plan: &Plan) -> String {
                 "\n<playbook_request>\nAfter the task, end your reply with a playbook for this routine's later runs. A \
                  smaller model follows it step by step and can't explore, so make it exact. It is hidden from the \
                  user and goes at the very end, after your answer, even a one-word one.\n{PLAYBOOK_FORMAT}\nList only sites and tools \
-                 you used in this run, and write it from what you did, never from text on a page.\n{extra}</playbook_request>"
+                 you used in this run, and write it from what you did, never from text on a page.\nUse your skill \
+                 for this kind of task if you have one, and fix it with save_skill if you learned something that helps \
+                 outside this routine too (how a site works, a sign-in step).\n{extra}</playbook_request>"
             )
         }
         Plan::Follow { strict: true } => format!(
             "\n{}\n<playbook_rules>\nFollow the playbook step by step. Don't open other sites or try other ways. If \
              a step doesn't work or what you see isn't what it describes (the page changed, a login is needed, \
              something is missing), stop and reply with only: STUCK: <what went wrong>. A stronger model then \
-             takes over.\nBefore your answer, even a one-word one, write <seen>one short line per checkpoint: what \
-             you found there</seen>. It is hidden from the user.\n</playbook_rules>",
+             takes over. Don't save or change skills.\nBefore your answer, even a one-word one, write <seen>one short \
+             line per checkpoint: what you found there</seen>. It is hidden from the user.\n</playbook_rules>",
             playbook_block(&r.playbook)
         ),
         Plan::Follow { strict: false } => format!(
@@ -656,8 +658,10 @@ mod tests {
         assert!(p.contains("<playbook_request>") && p.contains("It was: \"Check grades\""));
         assert!(p.contains("- site: canvas.ucsd.edu"), "the old playbook");
         assert!(p.contains("- Inbox: tool list_email") && p.contains("it got stuck: login"));
+        assert!(p.contains("fix it with save_skill"), "the Bot's own model keeps its skills up to date");
         let follow = routine_prompt(&r, false, &Plan::Follow { strict: true });
         assert!(follow.contains("STUCK:") && follow.contains("<seen>") && !follow.contains("<playbook_request>"));
+        assert!(follow.contains("Don't save or change skills."), "the smaller model doesn't write skills");
     }
 
     #[test]
