@@ -4675,13 +4675,13 @@
   // what the routine model saw at each checkpoint.
   function routineLastRun(r) {
     const l = r.last;
-    if (!l || !l.model) return null;
+    if (!l || (!l.model && !l.skipped)) return null;
     const check = l.check === 'ok' ? 'Followed its playbook' : l.check || '';
     return h(
       'div',
       null,
       h('div', { class: 'rt-label' }, 'Last run'),
-      h('div', { class: 'rt-sub' }, [modelName(l.model), typeof l.cost === 'number' && usd(l.cost), check].filter(Boolean).join(' · ')),
+      h('div', { class: 'rt-sub' }, [l.model && modelName(l.model), !l.skipped && typeof l.cost === 'number' && usd(l.cost), check].filter(Boolean).join(' · ')),
       l.seen && h('div', { class: 'rt-sub rt-seen' }, 'What it saw: ' + l.seen)
     );
   }

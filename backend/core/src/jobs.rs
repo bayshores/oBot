@@ -171,6 +171,26 @@ async fn start(st: &Shared, bot: &Bot, args: &Value) -> Result<String, String> {
     ))
 }
 
+/// Run a routine's quick check (its playbook's `Check:` line) and return what it printed. It is
+/// approved like any command the Bot runs. Err (not allowed, failed, over a minute): the routine
+/// runs as usual.
+pub(crate) async fn run_check(st: &Shared, bot: &Bot, command: &str) -> Result<String, String> {
+    let input = json!({ "command": command, "description": "Routine check before waking the Bot" });
+    let outside_sandbox = cfg!(windows) && st.config.read().await.runner == "wsl";
+    if !crate::api::check_permission(st, &bot.id, "Bash", &input, outside_sandbox).await.map_err(|e| e.to_string())? {
+        return Err("not allowed".into());
+    }
+    let cfg = st.config.read().await.clone();
+    let out = tokio::time::timeout(Duration::from_secs(60), shell_command(&cfg, bot, command).output())
+        .await
+        .map_err(|_| "took over a minute".to_string())?
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("exit code {}", out.status.code().unwrap_or(-1)));
+    }
+    Ok(truncate_chars(String::from_utf8_lossy(&out.stdout).trim(), 8000))
+}
+
 /// The command in the same kind of shell the Bot uses (bash where there is one).
 fn shell_command(cfg: &Config, bot: &Bot, command: &str) -> Command {
     let wsl = cfg!(windows) && cfg.runner == "wsl";

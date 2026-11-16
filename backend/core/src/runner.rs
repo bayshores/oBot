@@ -926,12 +926,28 @@ async fn run_routine(state: &Shared, bot_id: &str, id: &str, test: bool, stopped
     let mut last = json!({ "at": started, "model": smart, "check": "" });
     let mut cost = 0.0;
 
+    // The playbook's check: when it prints nothing, nothing is new and no model runs at all.
+    let mut extra = String::new();
+    if let Some(command) = crate::routines::check_command(&r.playbook).filter(|_| fresh && !test) {
+        match crate::jobs::run_check(state, &bot, &command).await {
+            Ok(out) if out.is_empty() => {
+                let last = json!({ "at": started, "model": "", "skipped": true, "check": "Skipped: its check found nothing new", "cost": 0.0 });
+                state.db.kv_set(&format!("{ROUTINE_LAST}{id}"), &last.to_string());
+                state.db.routine_run_was_quiet(id);
+                state.emit("routines.updated", json!({ "bot_id": bot_id }));
+                return;
+            }
+            Ok(out) => extra = crate::routines::check_note(&out),
+            Err(e) => tracing::info!("routine {}: its check didn't run ({e}); running it as usual", r.id),
+        }
+    }
+
     let cheap = routine_model(&r, &bot, &cfg).filter(|_| fresh);
     let (log, plan_redo) = match cheap {
         None => (None, None),
         Some(model) => {
             let rt = RoutineRun::new(model.clone(), cfg.routine_effort.clone(), true);
-            let prompt = side_prompt(state, bot_id, &crate::routines::routine_prompt(&r, test, &Plan::Follow { strict: true }));
+            let prompt = side_prompt(state, bot_id, &(crate::routines::routine_prompt(&r, test, &Plan::Follow { strict: true }) + &extra));
             run_turn(state, bot_id, None, true, &prompt, false, stopped.clone(), steer.clone(), Some(rt.clone())).await;
             let log = std::mem::take(&mut *rt.log());
             cost += log.cost;
@@ -984,7 +1000,7 @@ async fn run_routine(state: &Shared, bot_id: &str, id: &str, test: bool, stopped
                 &format!("{} went off the playbook of “{}” ({why}). {} is doing this run instead.", model_label(&model), r.name, model_label(&smart)),
                 json!({"kind": "routine-redo", "routine_id": r.id}),
             );
-            let log = smart_run(state, bot_id, &r, test, &smart, &cfg, &Plan::Learn { others: &others, redo: Some(&redo) }, stopped.clone(), steer.clone()).await;
+            let log = smart_run(state, bot_id, &r, test, &smart, &cfg, &Plan::Learn { others: &others, redo: Some(&redo) }, &extra, stopped.clone(), steer.clone()).await;
             cost += log.cost;
             failed = log.failed;
             last["check"] = json!(format!("Redone by {}: {why}", model_label(&smart)));
@@ -1012,7 +1028,7 @@ async fn run_routine(state: &Shared, bot_id: &str, id: &str, test: bool, stopped
         // The Bot's own model: no playbook yet (or out of date), or no cheaper routine model.
         (None, _) => {
             let plan = if fresh { Plan::Follow { strict: false } } else { Plan::Learn { others: &others, redo: None } };
-            let log = smart_run(state, bot_id, &r, test, &smart, &cfg, &plan, stopped.clone(), steer.clone()).await;
+            let log = smart_run(state, bot_id, &r, test, &smart, &cfg, &plan, &extra, stopped.clone(), steer.clone()).await;
             cost += log.cost;
             failed = log.failed;
         }
@@ -1038,11 +1054,12 @@ async fn smart_run(
     model: &str,
     cfg: &Config,
     plan: &crate::routines::Plan<'_>,
+    extra: &str,
     stopped: Arc<AtomicBool>,
     steer: Arc<AtomicBool>,
 ) -> RoutineLog {
     let rt = RoutineRun::new(model.to_string(), cfg.effort.clone(), false);
-    let prompt = side_prompt(state, bot_id, &crate::routines::routine_prompt(r, test, plan));
+    let prompt = side_prompt(state, bot_id, &(crate::routines::routine_prompt(r, test, plan) + extra));
     run_turn(state, bot_id, None, true, &prompt, false, stopped.clone(), steer, Some(rt.clone())).await;
     let log = std::mem::take(&mut *rt.log());
     if let Some(p) = log.playbook.as_deref().filter(|_| !log.failed && !stopped.load(Ordering::SeqCst)) {
@@ -3001,6 +3018,71 @@ mod tests {
     /// run that leaves the route is redone once by the Bot's model, and after three redos in a row
     /// the routine moves to the Bot's model.
     #[cfg(unix)]
+    #[tokio::test]
+    async fn a_routine_check_that_prints_nothing_skips_the_model() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("obot-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("data")).unwrap();
+        let d = d.canonicalize().unwrap();
+        let fake = d.join("claude");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\ncat > \"{dir}/prompt.txt\"\necho run >> \"{dir}/runs.log\"\necho '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}}'\necho '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"s1\",\"total_cost_usd\":0.01}}'\n",
+                dir = d.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let st = crate::state::test_state(&d.join("data"));
+        {
+            let mut cfg = st.config.write().await;
+            cfg.workspace_root = d.join("bots").to_string_lossy().into();
+            cfg.claude_path = fake.to_string_lossy().into();
+            cfg.permission_mode = "allow_all".into();
+        }
+        let bot = crate::bots::create(&st, &crate::bots::NewBot { name: "Mail".into(), ..Default::default() }).await.unwrap();
+        let routine = |check: &str| crate::db::Routine {
+            id: "r1".into(),
+            bot_id: bot.id.clone(),
+            name: "Mail".into(),
+            prompt: "Tell me about new mail".into(),
+            schedule: json!({"kind":"daily","time":"08:00"}),
+            enabled: true,
+            playbook: format!("Steps:\n1. Read new mail\nCheckpoints:\n- tool: list_email\nCheck: {check}"),
+            playbook_prompt: "Tell me about new mail".into(),
+            playbook_bot: bot.id.clone(),
+            ..Default::default()
+        };
+        let save = |check: &str| {
+            let r = routine(check);
+            st.db.upsert_routine(&r).unwrap();
+            st.db.set_playbook(&r.id, &r.playbook, &r.prompt, &r.bot_id).unwrap();
+        };
+        let runs = || std::fs::read_to_string(d.join("runs.log")).unwrap_or_default().lines().count();
+        let go = || run_routine(&st, &bot.id, "r1", false, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+
+        // Nothing printed: no model runs, and the routine's last run says why.
+        save("true");
+        go().await;
+        assert_eq!(runs(), 0);
+        let last: Value = serde_json::from_str(&st.db.kv_get(&format!("{ROUTINE_LAST}r1")).unwrap()).unwrap();
+        assert_eq!(last["skipped"], json!(true));
+
+        // Something printed: the run happens and is told what the check found.
+        save("echo 2 new emails from Ana");
+        go().await;
+        assert_eq!(runs(), 1);
+        assert!(std::fs::read_to_string(d.join("prompt.txt")).unwrap().contains("2 new emails from Ana"));
+
+        // A failing check doesn't stop the routine.
+        save("exit 3");
+        go().await;
+        assert_eq!(runs(), 2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[tokio::test]
     async fn a_run_that_prints_nothing_is_stopped() {
         use std::os::unix::fs::PermissionsExt;

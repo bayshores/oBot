@@ -363,7 +363,7 @@ push service removes the subscription. The VAPID private key is in `config.json`
 Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday at 08:00" */, enabled,
             next_run_at /* ms|null */, last_run_at, paused_for_unread,
             model /* "" = Settings › Routine model */, playbook, playbook_stale /* rewritten on the next run */,
-            last /* null | {at, model, cost /* USD */, check /* "ok" | "Redone by …: why" | "" */, seen?} */ }
+            last /* null | {at, model ("" when skipped), cost /* USD */, check /* "ok" | "Redone by …: why" | "Skipped: …" | "" */, seen?, skipped?} */ }
 // schedule: {kind:"once",at:ms} | {kind:"interval",minutes} | {kind:"daily"|"weekdays",time:"HH:MM"}
 //         | {kind:"weekly",day:"monday",time} | {kind:"monthly",day:1..31,time}
 ```
@@ -487,6 +487,11 @@ computer is offline or the switch is off, the tool answers at once that nothing 
     off route, or an error another model might fix) its replies are dropped and the Bot's model redoes the run once,
     told what was already done so it doesn't repeat it, and fixes the playbook. After 3 redos in a row the routine's
     `model` is set to the Bot's model.
+  * A playbook may end with `Check: <command>`: one shell command that prints nothing when there's nothing new. Before
+    a scheduled run with an up-to-date playbook, oBot runs it in the Bot's folder (approved like any command the Bot
+    runs, at most a minute). It prints nothing → no model runs and `last` says "Skipped: its check found nothing new".
+    It prints something → the run gets that output in `<check_output>`. Not allowed, failed or too slow → the run goes
+    ahead as usual. Test runs skip the check.
   * `last` (kv `routine_last:<id>`) records the latest run's model, cost, check and `<seen>` text.
   Their settings also set `autoCompactEnabled: true`, so turning summarizing off for your own Claude Code on the PC
   (`/config`, saved in `~/.claude.json`) doesn't turn it off for Bots.
