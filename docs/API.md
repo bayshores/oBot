@@ -111,7 +111,8 @@ Message = {
                           // folder under shown/ when the reply finishes, and `text` then points at
                           // /api/bots/{id}/files/shown/… (pictures that can't be saved become a link).
   status: "done" | "running" | "ok" | "failed" | "stopped" | "declined" | "pending" | "allowed" | "denied" | "expired" | "skipped" | "replaced",
-          // expired = approval left open when the turn ended or oBot restarted; skipped = approval closed because the
+          // expired = approval left open when the turn ended or oBot restarted, or not answered within 10 minutes (the Bot
+          // is told no one answered and ends its turn); skipped = approval closed because the
           // user pressed Stop or sent a new message (a new message while a card waits stops the turn and is read right away); stopped = a tool cut off by Stop or by a new
           // message; declined = a tool that didn't run because the user said no (or moved on) at its card; replaced = a secure form closed because the Bot asked again with a newer one
   meta: object,           // see below
@@ -515,6 +516,8 @@ computer is offline or the switch is off, the tool answers at once that nothing 
   * **Stop**: if the bot's last reply promises a follow-up ("I'll check back…") but nothing was scheduled, it is sent back once to call `check_back_later` or correct itself. Not in a routine's own conversation: a routine runs again by itself.
   * **PreCompact**: before Claude Code summarizes older messages, the user's latest requests are saved as a `log` memory. The chat shows a `compacted` event. This also runs before an idle summary (see above).
   * **PostToolUse** of `ask_user`, `request_form` and `request_control` (`after-ask`): once the card is in the chat the turn ends, so the bot doesn't repeat it in a reply under the card.
+* A run that writes no output for 15 minutes (longer than Claude Code's 10-minute limit for one shell command), while it
+  isn't waiting on an approval card, is stopped; the chat shows "Stopped: no progress for 15 minutes".
 * Turns oBot starts itself (routines, check-ins, background-job wake-ups, memory tidy-up) send the model a tagged block
   (`<obot_routine>`, `<obot_wakeup>`, `<obot_task>`) with numbered instructions; the chat only shows a short event line.
 * Weekly at night (and right after a memory import, for the Main Bot) bots with 12+ facts get a memory tidy-up turn

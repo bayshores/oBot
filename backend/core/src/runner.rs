@@ -1826,6 +1826,12 @@ fn build_command(
 
 /// Claude Code's setting for how long a finished run waits for background work (see `build_command`).
 const HELPER_WAIT: &str = "CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS";
+/// A run that writes nothing for this long is stopped. Longer than Claude Code's own 10-minute
+/// limit for one shell command, so a slow command is never cut off by this.
+#[cfg(not(test))]
+const STUCK_MS: u64 = 15 * 60 * 1000;
+#[cfg(test)]
+const STUCK_MS: u64 = 1500;
 
 fn interrupt(pid: Option<u32>) {
     let Some(pid) = pid else { return };
@@ -1913,6 +1919,9 @@ async fn drive(
     // The first request of a new or just summarized conversation shows the size it starts with.
     turn.fresh = old_size == 0 || !resume || bot.session_id.is_empty();
     let mut deadline: Option<tokio::time::Instant> = None;
+    // Claude Code writes a line for every step (helpers' steps too), so a long silence means it hangs.
+    let mut last_line = tokio::time::Instant::now();
+    let mut stuck = false;
 
     loop {
         let grace = async {
@@ -1921,9 +1930,13 @@ async fn drive(
                 None => std::future::pending::<()>().await,
             }
         };
+        let quiet = tokio::time::sleep_until(last_line + Duration::from_millis(STUCK_MS));
         tokio::select! {
             line = lines.next_line() => match line {
-                Ok(Some(l)) => turn.handle(&l).await,
+                Ok(Some(l)) => {
+                    last_line = tokio::time::Instant::now();
+                    turn.handle(&l).await
+                }
                 _ => break,
             },
             _ = stop.notified(), if deadline.is_none() => {
@@ -1932,11 +1945,27 @@ async fn drive(
                 interrupt(pid);
                 deadline = Some(tokio::time::Instant::now() + Duration::from_secs(5));
             },
+            _ = quiet, if deadline.is_none() => {
+                // Waiting for the user's OK isn't hanging (a card expires on its own, see api.rs).
+                if state.approvals.lock().await.values().any(|p| p.bot_id == bot_id) {
+                    last_line = tokio::time::Instant::now();
+                } else {
+                    stuck = true;
+                    stopped.store(true, Ordering::SeqCst);
+                    turn.cutting = true;
+                    interrupt(pid);
+                    deadline = Some(tokio::time::Instant::now() + Duration::from_secs(5));
+                }
+            },
             _ = grace => {
                 let _ = child.start_kill();
                 break;
             }
         }
+    }
+    if stuck {
+        tracing::warn!("bot {bot_id}: no output for {} minutes, stopped the run", STUCK_MS / 60_000);
+        add_event(state, &turn.chat, "Stopped: no progress for 15 minutes. Send a message to try again.", json!({"kind": "stuck"}));
     }
 
     let status = match tokio::time::timeout(Duration::from_secs(10), child.wait()).await {
@@ -2972,6 +3001,33 @@ mod tests {
     /// run that leaves the route is redone once by the Bot's model, and after three redos in a row
     /// the routine moves to the Bot's model.
     #[cfg(unix)]
+    #[tokio::test]
+    async fn a_run_that_prints_nothing_is_stopped() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("obot-stuck-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("data")).unwrap();
+        let d = d.canonicalize().unwrap();
+        let fake = d.join("claude");
+        std::fs::write(&fake, "#!/bin/sh\ncat >/dev/null\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\"}'\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let st = crate::state::test_state(&d.join("data"));
+        {
+            let mut cfg = st.config.write().await;
+            cfg.workspace_root = d.join("bots").to_string_lossy().into();
+            cfg.claude_path = fake.to_string_lossy().into();
+        }
+        let bot = crate::bots::create(&st, &crate::bots::NewBot { name: "Hung".into(), ..Default::default() }).await.unwrap();
+        let r = crate::db::Routine { id: "r1".into(), bot_id: bot.id.clone(), name: "Check".into(), prompt: "Check".into(), schedule: json!({"kind":"daily","time":"08:00"}), enabled: true, ..Default::default() };
+        st.db.upsert_routine(&r).unwrap();
+        let started = std::time::Instant::now();
+        run_routine(&st, &bot.id, "r1", false, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false))).await;
+        assert!(started.elapsed() < Duration::from_secs(15), "stopped long before the fake's 30 seconds");
+        let events: Vec<String> = st.db.list_messages(&bot.id, None, 50).unwrap().into_iter().filter(|m| m.role == "event").map(|m| m.text).collect();
+        assert!(events.iter().any(|e| e.starts_with("Stopped: no progress")), "{events:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[tokio::test]
     async fn a_cheap_routine_follows_its_playbook_and_is_redone_off_route() {
         use std::os::unix::fs::PermissionsExt;

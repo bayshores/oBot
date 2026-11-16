@@ -1264,7 +1264,10 @@ fn rule_for(tool: &str, input: &Value) -> String {
 
 /// Called by the MCP helper. Shows an approval card and waits for the user's answer.
 async fn internal_approve(State(st): State<Shared>, Json(b): Json<InternalApprove>) -> ApiResult<Json<Value>> {
-    let allowed = decide(&st, &b.bot_id, &b.tool_name, &b.input, None).await?;
+    let allowed = match decide(&st, &b.bot_id, &b.tool_name, &b.input, None).await {
+        Err(e) if e.to_string() == NO_ANSWER => return Ok(Json(json!({ "behavior": "deny", "message": NO_ANSWER }))),
+        other => other?,
+    };
     Ok(Json(if allowed {
         json!({ "behavior": "allow", "updatedInput": b.input })
     } else {
@@ -1417,6 +1420,7 @@ pub(crate) async fn ask_approval(
         runner::set_activity(st, bot_id, Some(("waiting_for_you", "Waiting for your OK"))).await;
     }
 
+    let card_id = m.id.clone();
     let (tx, rx) = oneshot::channel();
     st.approvals.lock().await.insert(
         approval_id.clone(),
@@ -1428,8 +1432,31 @@ pub(crate) async fn ask_approval(
             reply: tx,
         },
     );
-    Ok(rx.await.unwrap_or(false))
+    match tokio::time::timeout(Duration::from_millis(APPROVAL_WAIT_MS), rx).await {
+        Ok(answer) => Ok(answer.unwrap_or(false)),
+        // Nobody answered: the card expires, so the Bot isn't stuck waiting (a routine at night, the
+        // user away) and can say what it needs.
+        Err(_) => {
+            st.approvals.lock().await.remove(&approval_id);
+            if let Ok(Some(mut card)) = st.db.get_message(&card_id) {
+                card.status = "expired".into();
+                if st.db.upsert_message(&card).is_ok() {
+                    st.emit_message(false, &card);
+                }
+            }
+            Err(anyhow::anyhow!(NO_ANSWER))
+        }
+    }
 }
+
+/// How long an Allow / Deny card waits for the user.
+#[cfg(not(test))]
+const APPROVAL_WAIT_MS: u64 = 10 * 60 * 1000;
+#[cfg(test)]
+const APPROVAL_WAIT_MS: u64 = 300;
+/// What the Bot is told when the user didn't answer a card in time.
+pub const NO_ANSWER: &str = "No answer from the user within 10 minutes, so this wasn't done. Tell them in one line what \
+     you need them to allow, and end your turn; they can ask you to try again.";
 
 #[derive(Deserialize)]
 struct Decision {
@@ -2741,6 +2768,24 @@ mod card_tests {
         super::skip_open_questions(&st, "b");
         assert_eq!(st.db.get_message("open").unwrap().unwrap().status, "skipped");
         assert_eq!(st.db.get_message("done").unwrap().unwrap().status, "done", "an answered card stays as it was");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn an_unanswered_card_expires_and_tells_the_bot() {
+        let d = std::env::temp_dir().join(format!("ob-appr-{}", crate::util::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        let err = super::ask_approval(&st, "b", "Bash", "Run a script", &json!({"command": "x"}), "", "", None).await.unwrap_err();
+        assert_eq!(err.to_string(), super::NO_ANSWER);
+        assert!(st.approvals.lock().await.is_empty(), "nothing left waiting");
+        let card = st.db.list_messages("b", None, 10).unwrap().into_iter().find(|m| m.role == "approval").unwrap();
+        assert_eq!(card.status, "expired");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
