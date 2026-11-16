@@ -3351,7 +3351,7 @@ dependencies = [
 
 [[package]]
 name = "obot"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "dirs 6.0.0",
  "obot-core",
@@ -3367,7 +3367,7 @@ dependencies = [
 
 [[package]]
 name = "obot-core"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",
@@ -3402,7 +3402,7 @@ dependencies = [
 
 [[package]]
 name = "obot-server"
-version = "0.2.23"
+version = "0.2.24"
 dependencies = [
  "anyhow",
  "chrono",
