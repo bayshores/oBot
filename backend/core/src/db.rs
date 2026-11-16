@@ -640,6 +640,11 @@ impl Db {
         Ok(n > 0)
     }
 
+    /// Make a memory one Bot's own fact.
+    pub fn move_memory(&self, id: &str, bot_id: &str) -> anyhow::Result<bool> {
+        Ok(self.c().execute("UPDATE memories SET bot_id = ?2 WHERE id = ?1", params![id, bot_id])? > 0)
+    }
+
     pub fn delete_memory(&self, id: &str) -> anyhow::Result<bool> {
         Ok(self.c().execute("DELETE FROM memories WHERE id = ?1", [id])? > 0)
     }

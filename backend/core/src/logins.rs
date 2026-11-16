@@ -464,10 +464,9 @@ pub fn persona(cfg: &Config, bot_id: &str) -> String {
     let logins = for_bot(cfg, bot_id).len();
     let contacts = contacts_for(cfg, bot_id).len();
     format!(
-        "\nVault: {} and {} saved for you. To sign in to a website on your screen: open its login page, call \
-         list_logins with the site, then fill_login (you never see passwords). If there's no saved login, or you need a \
-         2FA code or a new password, call request_form so the user types it into a secure form in the chat; it goes \
-         straight into the page. Never ask the user to type a password or code in the chat itself.\n",
+        "\nVault: {} and {} saved for you. To sign in on your screen, open the login page, then list_logins and \
+         fill_login (you never see passwords). With no saved login, or for a 2FA code or new password, use \
+         request_form. Never ask the user to type a password or code in the chat.\n",
         count(logins, "login", "logins"),
         count(contacts, "contact info entry", "contact info entries"),
     )

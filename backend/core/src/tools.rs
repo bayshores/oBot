@@ -66,11 +66,11 @@ pub fn definitions() -> Value {
         },
         {
             "name": "remember",
-            "description": "Save a lasting fact so you (and, for facts about the user, every bot) remember it in future chats. Keep each fact short and self-contained. Pick the tier: \"profile\" is only for standing instructions and core identity (name, location, role, family, strong preferences, how they want you to work). Rules about how to do things (\"always\", \"never\", \"don't ask me to\", which way to sign in to a site, a workaround you were told to use) are standing instructions: put them in the profile. It's in your prompt every time, so keep it small. Everything else (events, plans, one-off details, things you did, what you learned) goes in \"log\", which you search with recall. To hand a fact to another of the user's Bots, give its name in \"bot\": it becomes that Bot's own memory.",
+            "description": "Save a lasting fact for future chats: one or two sentences (at most 500 characters). Steps for doing a task go in a skill (save_skill), not here. Tier \"profile\": standing rules (always / never / don't ask me to / how to sign in to a site) and core identity (name, location, role, family). It's in your prompt every message, so keep it small. Tier \"log\": everything else (events, plans, choices, what you did); search it with recall. Facts are yours alone unless about:'user', which shares them with every one of the user's Bots: only for what every Bot needs (who they are, contact details, how they want to be talked to). To hand a fact to another Bot, give its name in \"bot\".",
             "inputSchema": {"type": "object", "properties": {
                 "fact": {"type": "string"},
-                "tier": {"type": "string", "enum": ["profile", "log"], "description": "profile: a rule or standing instruction (always / never / don't ask me to / how to get into a site) or core identity. log: anything else"},
-                "about": {"type": "string", "enum": ["user", "me"], "description": "'user' = about the user (shared with all bots), 'me' = only for this bot"},
+                "tier": {"type": "string", "enum": ["profile", "log"], "description": "profile: a standing rule or core identity. log: anything else"},
+                "about": {"type": "string", "enum": ["me", "user"], "description": "'me' (default) = only for you; 'user' = shared with all the user's Bots"},
                 "bot": {"type": "string", "description": "Optional: another Bot's name or id to save this for (only that Bot sees it)"}
             }, "required": ["fact", "tier"]}
         },
@@ -84,11 +84,12 @@ pub fn definitions() -> Value {
         },
         {
             "name": "update_memory",
-            "description": "Fix a remembered fact's text, or move it between \"profile\" and \"log\".",
+            "description": "Fix a remembered fact's text, move it between \"profile\" and \"log\", or hand it to one Bot with \"bot\" (it becomes that Bot's own fact; for a shared fact only that Bot needs).",
             "inputSchema": {"type": "object", "properties": {
                 "id": {"type": "string"},
-                "fact": {"type": "string", "description": "New text (leave out to keep it)"},
-                "tier": {"type": "string", "enum": ["profile", "log"]}
+                "fact": {"type": "string", "description": "New text, at most 500 characters (leave out to keep it)"},
+                "tier": {"type": "string", "enum": ["profile", "log"]},
+                "bot": {"type": "string", "description": "Optional: a Bot's name or id to move the fact to"}
             }, "required": ["id"]}
         },
         {
@@ -102,7 +103,8 @@ pub fn definitions() -> Value {
             "inputSchema": {"type": "object", "properties": {
                 "name": {"type": "string", "description": "lowercase-with-dashes, like weekly-report"},
                 "description": {"type": "string", "description": "One line: what it does and when to use it (shown with every message, max 200 characters)"},
-                "body": {"type": "string", "description": "The instructions in Markdown: the steps, exact addresses and tools, what to check, and the mistakes to avoid"}
+                "body": {"type": "string", "description": "The instructions in Markdown: the steps, exact addresses and tools, what to check, and the mistakes to avoid"},
+                "bot": {"type": "string", "description": "Optional: another Bot's name or id, to save the skill for that Bot"}
             }, "required": ["name", "description", "body"]}
         },
         {
@@ -394,6 +396,21 @@ pub fn recall_text(mems: &[Memory], query: &str) -> String {
 }
 
 
+/// Most characters in one memory.
+pub const MAX_FACT: usize = 500;
+
+/// A fact that's too long is refused, not cut: a cut fact loses its end without the Bot knowing.
+fn fact_fits(fact: &str) -> Result<(), String> {
+    let n = fact.chars().count();
+    if n > MAX_FACT {
+        return Err(format!(
+            "Not saved: this fact is {n} characters and the most is {MAX_FACT}. Keep only the fact, in one or two \
+             sentences. Steps for doing a task go in a skill (save_skill)."
+        ));
+    }
+    Ok(())
+}
+
 /// Run one oBot tool.
 pub async fn call(state: &Shared, bot_id: &str, name: &str, args: &Value) -> ToolResult {
     if name.starts_with("computer_") {
@@ -565,14 +582,15 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             if fact.is_empty() {
                 return Err("remember needs a fact".into());
             }
+            fact_fits(fact)?;
             let target = target_bot(state, &bot, args)?;
             let for_other = target.id != bot_id;
-            let about_user = !for_other && s(args, "about") != "me";
+            let about_user = !for_other && s(args, "about") == "user";
             let tier = if s(args, "tier") == crate::db::PROFILE { crate::db::PROFILE } else { crate::db::LOG };
             let m = Memory {
                 id: new_id()[..8].to_string(),
                 bot_id: if about_user { None } else { Some(target.id.clone()) },
-                text: truncate_chars(fact, 500),
+                text: fact.to_string(),
                 created_at: now_ms(),
                 tier: tier.into(),
             };
@@ -602,13 +620,24 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 t if t == crate::db::PROFILE || t == crate::db::LOG => Some(t),
                 _ => return Err("tier must be profile or log".into()),
             };
-            let fact = (!fact.is_empty()).then(|| truncate_chars(fact, 500));
-            if state.db.update_memory(id, fact.as_deref(), tier).map_err(|e| e.to_string())? {
-                state.emit("memories.updated", json!({"bot_id": bot_id}));
-                Ok("Updated.".into())
-            } else {
-                Err("No memory with that id".into())
+            if !fact.is_empty() {
+                fact_fits(fact)?;
             }
+            let fact = (!fact.is_empty()).then(|| fact.to_string());
+            // Handing a fact to one Bot is a move, not a copy and a forget, so it can't get lost halfway.
+            let to = if s(args, "bot").is_empty() { None } else { Some(find_bot(state, s(args, "bot"))?) };
+            if !state.db.update_memory(id, fact.as_deref(), tier).map_err(|e| e.to_string())? {
+                return Err("No memory with that id".into());
+            }
+            if let Some(to) = &to {
+                state.db.move_memory(id, &to.id).map_err(|e| e.to_string())?;
+                state.emit("memories.updated", json!({"bot_id": to.id}));
+            }
+            state.emit("memories.updated", json!({"bot_id": bot_id}));
+            Ok(match to {
+                Some(to) => format!("Moved to {}: it's that Bot's own fact now.", to.name),
+                None => "Updated.".into(),
+            })
         }
 
         "forget" => {
@@ -622,11 +651,19 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
 
         "save_skill" => {
             let name = s(args, "name");
-            let updated = crate::skills::save(&bot.workdir, name, s(args, "description"), s(args, "body"))?;
-            let text = if updated { format!("Updated the skill “{name}”") } else { format!("Saved a skill: “{name}”") };
-            crate::runner::add_event(state, bot_id, &text, json!({"kind": "skill", "skill": name}));
-            state.emit("skills.updated", json!({"bot_id": bot_id}));
-            Ok(format!("{}. It loads as skills:{name} from your next message.", if updated { "Updated" } else { "Saved" }))
+            let target = target_bot(state, &bot, args)?;
+            let updated = crate::skills::save(&target.workdir, name, s(args, "description"), s(args, "body"))?;
+            let mut text = if updated { format!("Updated the skill “{name}”") } else { format!("Saved a skill: “{name}”") };
+            if target.id != bot_id {
+                text.push_str(&format!(" (from {})", bot.name));
+            }
+            crate::runner::add_event(state, &target.id, &text, json!({"kind": "skill", "skill": name}));
+            state.emit("skills.updated", json!({"bot_id": target.id}));
+            Ok(if target.id == bot_id {
+                format!("{}. It loads as skills:{name} from your next message.", if updated { "Updated" } else { "Saved" })
+            } else {
+                format!("{} for {}. It loads as skills:{name} from its next message.", if updated { "Updated" } else { "Saved" }, target.name)
+            })
         }
 
         "check_back_later" => {
@@ -821,6 +858,9 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             if facts.len() > 50 {
                 return Err("At most 50 memories at once".into());
             }
+            for (i, f) in facts.iter().enumerate() {
+                fact_fits(f).map_err(|e| format!("Memory {}: {e}", i + 1))?;
+            }
             let routine_specs = args.get("routines").and_then(Value::as_array).cloned().unwrap_or_default();
             if routine_specs.len() > 10 {
                 return Err("At most 10 routines at once".into());
@@ -844,7 +884,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             for f in &facts {
                 state
                     .db
-                    .add_memory(&Memory { id: new_id()[..8].to_string(), bot_id: Some(new.id.clone()), text: truncate_chars(f, 500), created_at: now_ms(), tier: crate::db::PROFILE.into() })
+                    .add_memory(&Memory { id: new_id()[..8].to_string(), bot_id: Some(new.id.clone()), text: f.clone(), created_at: now_ms(), tier: crate::db::PROFILE.into() })
                     .map_err(|e| e.to_string())?;
             }
             for mut r in planned {
@@ -993,5 +1033,52 @@ mod tests {
         assert!(recall_text(&m, "zebra").starts_with("Nothing in memory matches"));
         let all = recall_text(&m, "");
         assert!(all.starts_with("Profile:") && all.contains("Newest log entries (2 of 2"), "{all}");
+    }
+
+    #[tokio::test]
+    async fn memories_are_private_by_default_and_never_cut() {
+        let d = std::env::temp_dir().join(format!("ob-mem-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.workspace_root = d.join("bots").to_string_lossy().into();
+        let a = crate::bots::create(&st, &crate::bots::NewBot { name: "A".into(), ..Default::default() }).await.unwrap();
+        let b = crate::bots::create(&st, &crate::bots::NewBot { name: "B".into(), ..Default::default() }).await.unwrap();
+
+        // No "about": the fact is A's own, so B doesn't load it.
+        run(&st, &a.id, "remember", &json!({"fact": "Orders on Sundays", "tier": "profile"})).await.unwrap();
+        run(&st, &a.id, "remember", &json!({"fact": "Lives in San Diego", "tier": "profile", "about": "user"})).await.unwrap();
+        let seen_by_b: Vec<String> = st.db.memories_for(&b.id).unwrap().into_iter().map(|m| m.text).collect();
+        assert_eq!(seen_by_b, vec!["Lives in San Diego".to_string()]);
+
+        // Too long: refused with a hint, and nothing is saved (before, it was cut at 500 characters).
+        let long = "x".repeat(MAX_FACT + 1);
+        let err = run(&st, &a.id, "remember", &json!({"fact": long, "tier": "log"})).await.unwrap_err();
+        assert!(err.contains("Not saved") && err.contains("save_skill"), "{err}");
+        assert_eq!(st.db.memories_for(&a.id).unwrap().len(), 2);
+        let id = st.db.memories_for(&a.id).unwrap()[0].id.clone();
+        assert!(run(&st, &a.id, "update_memory", &json!({"id": id, "fact": "y".repeat(MAX_FACT + 1)})).await.is_err());
+
+        // A shared fact handed to one Bot moves in one step: only B sees it now, nothing is lost.
+        let shared = st.db.memories_for(&a.id).unwrap().into_iter().find(|m| m.bot_id.is_none()).unwrap();
+        let out = run(&st, &a.id, "update_memory", &json!({"id": shared.id, "bot": "B"})).await.unwrap();
+        assert!(out.starts_with("Moved to B"), "{out}");
+        assert!(st.db.memories_for(&a.id).unwrap().iter().all(|m| m.text != "Lives in San Diego"));
+        assert!(st.db.memories_for(&b.id).unwrap().iter().any(|m| m.text == "Lives in San Diego" && m.bot_id.as_deref() == Some(b.id.as_str())));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_bot_can_save_a_skill_for_another_bot() {
+        let d = std::env::temp_dir().join(format!("ob-skill-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.workspace_root = d.join("bots").to_string_lossy().into();
+        let main = crate::bots::create(&st, &crate::bots::NewBot { name: "Main".into(), ..Default::default() }).await.unwrap();
+        let food = crate::bots::create(&st, &crate::bots::NewBot { name: "Food".into(), ..Default::default() }).await.unwrap();
+        let out = run(&st, &main.id, "save_skill", &json!({"name": "meal-order", "description": "Weekly meal order", "body": "1. Two teriyaki at most", "bot": "Food"})).await.unwrap();
+        assert!(out.contains("for Food"), "{out}");
+        assert!(crate::skills::dir(&food.workdir).join("meal-order/SKILL.md").exists());
+        assert!(!crate::skills::dir(&main.workdir).join("meal-order").exists());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

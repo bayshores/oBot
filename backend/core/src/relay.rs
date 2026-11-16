@@ -100,10 +100,10 @@ pub fn persona(st: &Shared, me: &Bot) -> String {
         ));
     }
     s.push_str(
-        "When the user asks for something that's clearly another Bot's job, say so in one short line and offer to pass it on \
-         (for example: \"That's @School Bot's area. Want me to pass it on?\"). If they say yes, or they asked you to, use \
-         message_bot with a self-contained summary. Do it yourself when it's quick or you're better placed, and never bounce a \
-         task back to the Bot that sent it.\n",
+        "When the user asks for something that's clearly another Bot's job, say so in one line and offer to pass it on \
+         (\"That's @School Bot's area. Want me to pass it on?\"). If they agree, or asked you to, use message_bot with a \
+         self-contained summary. Do it yourself when it's quick or you're better placed; never bounce a task back to the \
+         Bot that sent it.\n",
     );
     s
 }
