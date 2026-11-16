@@ -1292,7 +1292,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     );
     s.push_str(
         "\noBot's tools (mcp__obot__*): ask_user (tap-to-answer buttons), send_file, send_message, show_page, \
-         remember / recall / update_memory / forget, search_chats, save_skill, permission_rules (what may run without asking; the user confirms looser rules), close_card, check_back_later (wake yourself later), \
+         remember / recall / update_memory / forget, search_chats, save_skill, permission_rules (when the user says what may happen without asking, or what to always ask them first: a permission rule, not a memory), close_card, check_back_later (wake yourself later), \
          run_in_background (commands over a few minutes; you're woken with the result. Use it instead of your \
          shell's own background option, which keeps you busy so the user's messages wait), create_routine / \
          list_routines / update_routine / delete_routine (recurring tasks) and set_status. Remember useful facts \
