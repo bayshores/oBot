@@ -86,7 +86,7 @@ pub struct Memory {
 pub const PROFILE: &str = "profile";
 pub const LOG: &str = "log";
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Routine {
     pub id: String,
     pub bot_id: String,
@@ -98,6 +98,14 @@ pub struct Routine {
     pub last_run_at: Option<i64>,
     pub unread_runs: i64,
     pub created_at: i64,
+    /// The model its runs use ("" = Settings › Routine model). See routines.rs.
+    pub model: String,
+    /// Steps and checkpoints written by the Bot's own model, followed by the routine model.
+    pub playbook: String,
+    /// The instruction and the Bot the playbook was written for. When either changed since, the
+    /// playbook is out of date (`routines::playbook_stale`). Saved only by `set_playbook`.
+    pub playbook_prompt: String,
+    pub playbook_bot: String,
 }
 
 fn row_to_routine(r: &Row) -> rusqlite::Result<Routine> {
@@ -113,6 +121,10 @@ fn row_to_routine(r: &Row) -> rusqlite::Result<Routine> {
         last_run_at: r.get("last_run_at")?,
         unread_runs: r.get("unread_runs")?,
         created_at: r.get("created_at")?,
+        model: r.get("model")?,
+        playbook: r.get("playbook")?,
+        playbook_prompt: r.get("playbook_prompt")?,
+        playbook_bot: r.get("playbook_bot")?,
     })
 }
 
@@ -248,6 +260,10 @@ impl Db {
             ("bots", "members", "TEXT NOT NULL DEFAULT '[]'"),
             ("memories", "tier", "TEXT NOT NULL DEFAULT 'profile'"),
             ("jobs", "pid", "INTEGER"),
+            ("routines", "model", "TEXT NOT NULL DEFAULT ''"),
+            ("routines", "playbook", "TEXT NOT NULL DEFAULT ''"),
+            ("routines", "playbook_prompt", "TEXT NOT NULL DEFAULT ''"),
+            ("routines", "playbook_bot", "TEXT NOT NULL DEFAULT ''"),
         ] {
             let exists: bool = conn
                 .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
@@ -632,15 +648,25 @@ impl Db {
 
     pub fn upsert_routine(&self, r: &Routine) -> anyhow::Result<()> {
         self.c().execute(
-            r#"INSERT INTO routines (id,bot_id,name,prompt,schedule,enabled,next_run_at,last_run_at,unread_runs,created_at)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
-               ON CONFLICT(id) DO UPDATE SET bot_id=?2,name=?3,prompt=?4,schedule=?5,enabled=?6,next_run_at=?7,last_run_at=?8,unread_runs=?9"#,
+            r#"INSERT INTO routines (id,bot_id,name,prompt,schedule,enabled,next_run_at,last_run_at,unread_runs,created_at,model)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+               ON CONFLICT(id) DO UPDATE SET bot_id=?2,name=?3,prompt=?4,schedule=?5,enabled=?6,next_run_at=?7,last_run_at=?8,unread_runs=?9,model=?11"#,
             params![
                 r.id, r.bot_id, r.name, r.prompt, r.schedule.to_string(), r.enabled as i64,
-                r.next_run_at, r.last_run_at, r.unread_runs, r.created_at
+                r.next_run_at, r.last_run_at, r.unread_runs, r.created_at, r.model
             ],
         )?;
         Ok(())
+    }
+
+    /// Save a routine's playbook with the instruction and Bot it was written for. Kept apart from
+    /// `upsert_routine`, so an edit saved while a run writes its playbook doesn't undo either one.
+    /// False when the routine is gone.
+    pub fn set_playbook(&self, id: &str, playbook: &str, prompt: &str, bot_id: &str) -> anyhow::Result<bool> {
+        Ok(self.c().execute(
+            "UPDATE routines SET playbook = ?2, playbook_prompt = ?3, playbook_bot = ?4 WHERE id = ?1",
+            params![id, playbook, prompt, bot_id],
+        )? > 0)
     }
 
     pub fn get_routine(&self, id: &str) -> anyhow::Result<Option<Routine>> {

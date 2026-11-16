@@ -262,6 +262,22 @@ fn not_found(msg: &str) -> ApiError {
     ApiError(StatusCode::NOT_FOUND, msg.into())
 }
 
+/// A model setting: "" (the default) or a model name or alias, passed to `claude --model`.
+fn model_name(v: &str) -> ApiResult<String> {
+    let v = v.trim().to_string();
+    if v.len() > 80 || v.contains(char::is_whitespace) {
+        return Err(bad("That isn't a model name"));
+    }
+    Ok(v)
+}
+
+fn effort_level(v: String) -> ApiResult<String> {
+    if !crate::config::EFFORTS.contains(&v.as_str()) {
+        return Err(bad("Effort must be low, medium, high, xhigh or max"));
+    }
+    Ok(v)
+}
+
 type ApiResult<T> = Result<T, ApiError>;
 
 use crate::security::{client_key, constant_eq, sha256_hex};
@@ -1643,7 +1659,16 @@ async fn answer_widget(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
 }
 
 async fn list_routines(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Vec<Value>>> {
-    Ok(Json(st.db.routines_for(Some(&id))?.iter().map(crate::routines::routine_json).collect()))
+    Ok(Json(st.db.routines_for(Some(&id))?.iter().map(|r| routine_detail(&st, r)).collect()))
+}
+
+/// A routine for the app: also its playbook and how its latest run went (`runner::run_routine`).
+fn routine_detail(st: &Shared, r: &crate::db::Routine) -> Value {
+    let mut v = crate::routines::routine_json(r);
+    v["playbook"] = json!(r.playbook);
+    v["playbook_stale"] = json!(!r.playbook.trim().is_empty() && crate::routines::playbook_stale(r));
+    v["last"] = st.db.kv_get(&format!("{}{}", runner::ROUTINE_LAST, r.id)).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    v
 }
 
 #[derive(Deserialize, Default)]
@@ -1653,6 +1678,10 @@ struct RoutinePatch {
     prompt: Option<String>,
     schedule: Option<Value>,
     enabled: Option<bool>,
+    /// "" = Settings › Routine model.
+    model: Option<String>,
+    /// Edited by the user: taken as right for the routine's instruction as it is now.
+    playbook: Option<String>,
 }
 
 async fn patch_routine(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(p): Json<RoutinePatch>) -> ApiResult<Json<Value>> {
@@ -1661,17 +1690,25 @@ async fn patch_routine(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
     if let Some(v) = p.prompt { r.prompt = v.trim().to_string(); }
     if let Some(v) = p.schedule { r.schedule = crate::routines::validate(&v).map_err(|e| bad(&e))?; }
     if let Some(v) = p.enabled { r.enabled = v; r.unread_runs = 0; }
+    if let Some(v) = p.model { r.model = model_name(&v)?; }
     r.next_run_at = if r.enabled { crate::routines::next_run(&r.schedule, now_ms()) } else { None };
     st.db.upsert_routine(&r)?;
+    if let Some(v) = p.playbook {
+        let v = truncate_chars(v.trim(), crate::routines::MAX_PLAYBOOK);
+        st.db.set_playbook(&r.id, &v, &r.prompt, &r.bot_id)?;
+        r.playbook = v;
+        r.playbook_prompt = r.prompt.clone();
+        r.playbook_bot = r.bot_id.clone();
+    }
     st.emit("routines.updated", json!({ "bot_id": r.bot_id }));
-    Ok(Json(crate::routines::routine_json(&r)))
+    Ok(Json(routine_detail(&st, &r)))
 }
 
 /// "Test routine": run it once right now.
 async fn run_routine_now(State(st): State<Shared>, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
     let r = st.db.get_routine(&id)?.ok_or_else(|| not_found("No such routine"))?;
     runner::add_event(&st, &r.bot_id, &format!("Testing routine: {}", r.name), json!({"kind": "routine-run", "routine_id": r.id}));
-    runner::enqueue_side(&st, &r.bot_id, crate::routines::routine_prompt(&r, true), None).await;
+    runner::enqueue_routine(&st, &r.bot_id, &r.id, true).await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -2037,6 +2074,8 @@ struct SettingsBody {
     allow_rules: Option<Vec<String>>,
     default_model: Option<String>,
     effort: Option<String>,
+    routine_model: Option<String>,
+    routine_effort: Option<String>,
     workspace_root: Option<String>,
     claude_path: Option<String>,
     runner: Option<String>,
@@ -2099,17 +2138,16 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
             cfg.allow_rules = v.into_iter().map(|s| s.trim().to_string()).filter(|s| crate::config::usable_rule(s)).collect();
         }
         if let Some(v) = b.default_model {
-            let v = v.trim().to_string();
-            if v.len() > 80 || v.contains(char::is_whitespace) {
-                return Err(bad("That isn't a model name"));
-            }
-            cfg.default_model = v;
+            cfg.default_model = model_name(&v)?;
+        }
+        if let Some(v) = b.routine_model {
+            cfg.routine_model = model_name(&v)?;
         }
         if let Some(v) = b.effort {
-            if !crate::config::EFFORTS.contains(&v.as_str()) {
-                return Err(bad("Effort must be low, medium, high, xhigh or max"));
-            }
-            cfg.effort = v;
+            cfg.effort = effort_level(v)?;
+        }
+        if let Some(v) = b.routine_effort {
+            cfg.routine_effort = effort_level(v)?;
         }
         if let Some(v) = b.workspace_root {
             let v = v.trim().to_string();

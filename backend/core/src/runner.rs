@@ -21,7 +21,7 @@ use crate::computer::find_claude;
 use crate::config::Config;
 use crate::db::{Bot, Message};
 use crate::markdown;
-use crate::state::{Job, RunHandle, Shared};
+use crate::state::{Job, RoutineJob, RunHandle, Shared};
 use crate::util::{hide_console, new_id, now_ms, preview, truncate_chars};
 
 // ---------------------------------------------------------------- queue
@@ -32,7 +32,7 @@ pub async fn enqueue(state: &Shared, bot_id: &str, prompt: String) {
     push(state, bot_id, prompt, None, None, false, false, None).await;
 }
 
-/// Queue a routine. It runs in a new, short conversation of its own, not the Bot's main one.
+/// Queue a routine run. It runs in a new, short conversation of its own, not the Bot's main one.
 ///
 /// A routine starts hours after the Bot last ran, when nothing of the main conversation is cached
 /// any more, so running it there meant paying full price to re-read that whole conversation (up to
@@ -40,10 +40,46 @@ pub async fn enqueue(state: &Shared, bot_id: &str, prompt: String) {
 /// instructions, the task and the last few chat messages (`side_prompt`). The main conversation
 /// is told what the routine posted with its next message (`take_side_news`).
 ///
-/// `routine`: the scheduled routine this is, so a run that posts nothing (the Bot replied PASS)
-/// doesn't count as a result the user hasn't read.
-pub async fn enqueue_side(state: &Shared, bot_id: &str, prompt: String, routine: Option<&str>) {
-    push(state, bot_id, prompt, None, None, false, true, routine.map(str::to_string)).await;
+/// `test`: "Test" or "Try again", not a scheduled run (see `RoutineJob`).
+pub async fn enqueue_routine(state: &Shared, bot_id: &str, routine_id: &str, test: bool) {
+    push(state, bot_id, String::new(), None, None, false, true, Some(RoutineJob { id: routine_id.to_string(), test })).await;
+}
+
+/// A routine run on its way through `run_turn`: the model it runs on, and what it did.
+pub struct RoutineRun {
+    pub model: String,
+    pub effort: String,
+    /// The routine model following its playbook: its replies and errors are held back until
+    /// `run_routine` has checked the run (it may be redone by the Bot's own model instead).
+    pub hold: bool,
+    log: std::sync::Mutex<RoutineLog>,
+}
+
+#[derive(Default)]
+struct RoutineLog {
+    /// Every tool call: its name and input.
+    calls: Vec<(String, Value)>,
+    /// The replies that are for the user (without the blocks below).
+    replies: Vec<String>,
+    /// Held replies (`hold`), posted or dropped by `run_routine`.
+    held: Vec<Message>,
+    /// The `<playbook>` and `<seen>` blocks it wrote (hidden from the user).
+    playbook: Option<String>,
+    seen: Vec<String>,
+    /// What the run cost (USD).
+    cost: f64,
+    /// It failed. `held_failure`: a failure that wasn't shown yet, because another model may do it.
+    failed: bool,
+    held_failure: Option<String>,
+}
+
+impl RoutineRun {
+    fn new(model: String, effort: String, hold: bool) -> Arc<Self> {
+        Arc::new(RoutineRun { model, effort, hold, log: Default::default() })
+    }
+    fn log(&self) -> std::sync::MutexGuard<'_, RoutineLog> {
+        self.log.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 /// An automatic note about something the Bot posted (a form it sent, say): goes to the Bot that
@@ -91,7 +127,7 @@ async fn push(
     group: Option<String>,
     winding_down: bool,
     side: bool,
-    routine: Option<String>,
+    routine: Option<RoutineJob>,
 ) -> bool {
     if state.db.get_bot(bot_id).ok().flatten().is_some_and(|b| b.is_group()) {
         // A group chat isn't a Bot; its Bots take turns (group.rs).
@@ -138,6 +174,25 @@ fn mark_queued(state: &Shared, msg_id: &str, queued: bool, dropped: bool) {
     }
 }
 
+/// The jobs for the next turn, and the ones that wait for a later turn. One conversation per turn:
+/// the Bot's main one, one group's, or one routine run (each routine has its own model and
+/// playbook, and its run is checked on its own).
+fn split_turn(jobs: Vec<Job>) -> (Vec<Job>, Vec<Job>) {
+    let mut jobs = jobs.into_iter();
+    let Some(first) = jobs.next() else { return (vec![], vec![]) };
+    let alone = first.routine.is_some();
+    let (group, side) = (first.group.clone(), first.side);
+    let (mut now, mut later) = (vec![first], vec![]);
+    for j in jobs {
+        if !alone && j.routine.is_none() && j.group == group && j.side == side {
+            now.push(j);
+        } else {
+            later.push(j);
+        }
+    }
+    (now, later)
+}
+
 /// Everything that piled up becomes one turn. User messages that arrived while the bot was busy
 /// say so, and after "Send now" the bot is told its earlier work was cut short.
 fn merge(jobs: &[Job], steered: bool) -> String {
@@ -164,8 +219,8 @@ fn merge(jobs: &[Job], steered: bool) -> String {
 }
 
 const LAST_PROMPT: &str = "last_prompt:";
-/// "1" when the last turn was a routine in its own conversation, so "Try again" runs it there too.
-const LAST_SIDE: &str = "last_side:";
+/// The routine the last turn ran ("" = the main conversation), so "Try again" runs it again.
+const LAST_ROUTINE: &str = "last_routine:";
 /// The conversation of the routine turn that is running (only kept to continue it after an error).
 const SIDE_SESSION: &str = "side_session:";
 /// What routines posted in the chat since the main conversation's last turn.
@@ -310,7 +365,7 @@ async fn summarize_idle(state: &Shared, bot_id: &str, rx: &mut mpsc::UnboundedRe
     state.runs.lock().await.insert(bot_id.to_string(), RunHandle { stop: stop.clone(), steer: steer.clone() });
     let mut arrived = vec![];
     {
-        let run = drive(state, bot_id, None, false, true, false, "/compact", stop.clone(), Arc::new(AtomicBool::new(false)), steer, true);
+        let run = drive(state, bot_id, None, false, true, false, "/compact", stop.clone(), Arc::new(AtomicBool::new(false)), steer, true, None);
         tokio::pin!(run);
         loop {
             tokio::select! {
@@ -360,12 +415,9 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
         while let Ok(more) = rx.try_recv() {
             jobs.push(more);
         }
-        // One conversation per turn: the Bot's main one, its routines' or one group's. The rest
-        // waits for the next turn.
-        let (group, side) = (jobs[0].group.clone(), jobs[0].side);
-        let (now, later): (Vec<Job>, Vec<Job>) = jobs.into_iter().partition(|j| j.group == group && j.side == side);
+        let (jobs, later) = split_turn(jobs);
         carry.extend(later);
-        let jobs = now;
+        let Some(group) = jobs.first().map(|j| j.group.clone()) else { continue };
         if let Some(g) = &group {
             let winding_down = jobs.iter().all(|j| j.winding_down);
             // Automatic notes (a form was filled...) come after what was said in the group.
@@ -377,7 +429,7 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
             };
             let stopped = Arc::new(AtomicBool::new(false));
             let steer = Arc::new(AtomicBool::new(false));
-            run_turn(&state, &bot_id, Some(g), false, &prompt, false, stopped.clone(), steer.clone()).await;
+            run_turn(&state, &bot_id, Some(g), false, &prompt, false, stopped.clone(), steer.clone(), None).await;
             steered = false;
             if stopped.load(Ordering::SeqCst) && !steer.load(Ordering::SeqCst) {
                 // Stop in the group also cancels this Bot's other waiting turns there.
@@ -388,28 +440,20 @@ async fn worker(state: Shared, bot_id: String, mut rx: mpsc::UnboundedReceiver<J
             }
             continue;
         }
-        for id in jobs.iter().filter_map(|j| j.user_msg.as_deref()) {
-            mark_queued(&state, id, false, false);
-        }
-        let routines: Vec<String> = jobs.iter().filter_map(|j| j.routine.clone()).collect();
-        let mut prompt = merge(&jobs, steered);
-        if !side {
-            prompt = format!("{}{prompt}", take_side_news(&state, &bot_id));
-        }
-        let from_user = jobs.iter().any(|j| j.user_msg.is_some());
-        state.db.kv_set(&format!("{LAST_PROMPT}{bot_id}"), &prompt);
-        state.db.kv_set(&format!("{LAST_SIDE}{bot_id}"), if side { "1" } else { "" });
-        if side {
-            prompt = side_prompt(&state, &bot_id, &prompt);
-        }
         let stopped = Arc::new(AtomicBool::new(false));
         let steer = Arc::new(AtomicBool::new(false));
-        let quiet = run_turn(&state, &bot_id, None, side, &prompt, from_user, stopped.clone(), steer.clone()).await;
-        if quiet && !routines.is_empty() {
-            for id in &routines {
-                state.db.routine_run_was_quiet(id);
+        if let Some(r) = &jobs[0].routine {
+            state.db.kv_set(&format!("{LAST_ROUTINE}{bot_id}"), &r.id);
+            run_routine(&state, &bot_id, &r.id, r.test, stopped.clone(), steer.clone()).await;
+        } else {
+            for id in jobs.iter().filter_map(|j| j.user_msg.as_deref()) {
+                mark_queued(&state, id, false, false);
             }
-            state.emit("routines.updated", json!({ "bot_id": bot_id }));
+            let prompt = format!("{}{}", take_side_news(&state, &bot_id), merge(&jobs, steered));
+            let from_user = jobs.iter().any(|j| j.user_msg.is_some());
+            state.db.kv_set(&format!("{LAST_PROMPT}{bot_id}"), &prompt);
+            state.db.kv_set(&format!("{LAST_ROUTINE}{bot_id}"), "");
+            run_turn(&state, &bot_id, None, false, &prompt, from_user, stopped.clone(), steer.clone(), None).await;
         }
         steered = steer.load(Ordering::SeqCst);
         if stopped.load(Ordering::SeqCst) && !steered {
@@ -521,10 +565,18 @@ pub async fn retry(state: &Shared, bot_id: &str) -> Result<(), String> {
     if state.runs.lock().await.contains_key(bot_id) {
         return Err("The Bot is already working on it.".into());
     }
-    let prompt = state.db.kv_get(&format!("{LAST_PROMPT}{bot_id}")).ok_or("There's nothing to try again yet.")?;
+    let routine = state.db.kv_get(&format!("{LAST_ROUTINE}{bot_id}")).filter(|r| !r.is_empty());
+    let prompt = state.db.kv_get(&format!("{LAST_PROMPT}{bot_id}"));
+    if routine.is_none() && prompt.is_none() {
+        return Err("There's nothing to try again yet.".into());
+    }
     add_event(state, bot_id, "Trying again", json!({"kind": "retry"}));
-    let side = state.db.kv_get(&format!("{LAST_SIDE}{bot_id}")).is_some_and(|v| v == "1");
-    push(state, bot_id, retry_prompt(&prompt), None, None, false, side, None).await;
+    match routine {
+        Some(r) => enqueue_routine(state, bot_id, &r, true).await,
+        None => {
+            push(state, bot_id, retry_prompt(&prompt.unwrap_or_default()), None, None, false, false, None).await;
+        }
+    }
     Ok(())
 }
 
@@ -733,7 +785,8 @@ async fn run_turn(
     from_user: bool,
     stopped: Arc<AtomicBool>,
     steer: Arc<AtomicBool>,
-) -> bool {
+    rt: Option<Arc<RoutineRun>>,
+) {
     // Where this turn's messages go.
     let chat = group.unwrap_or(bot_id);
     let started = now_ms();
@@ -757,7 +810,7 @@ async fn run_turn(
     let mut attempt = 0;
     let mut current = prompt.to_string();
     let failure = loop {
-        let outcome = match drive(state, bot_id, group, side, false, from_user, &current, stop.clone(), stopped.clone(), steer.clone(), resume).await {
+        let outcome = match drive(state, bot_id, group, side, false, from_user, &current, stop.clone(), stopped.clone(), steer.clone(), resume, rt.clone()).await {
             Ok(o) => o,
             Err(e) => Outcome::Failed(Failure::from_text(&e.to_string(), true)),
         };
@@ -809,10 +862,15 @@ async fn run_turn(
             }
         }
     };
-    // A routine that worked and posted nothing: the Bot replied PASS.
-    let quiet = side && !add_side_news(state, bot_id, started) && failure.is_none() && !stopped.load(Ordering::SeqCst);
     if let Some(f) = failure {
-        add_error(state, chat, group.map(|_| bot_id), &f, attempt, from_user);
+        if let Some(rt) = &rt {
+            rt.log().failed = true;
+        }
+        match rt.as_ref().filter(|rt| rt.hold && f.code.redo_helps()) {
+            // The routine model's run: the Bot's own model may still do it (`run_routine`).
+            Some(rt) => rt.log().held_failure = Some(f.text),
+            None => add_error(state, chat, group.map(|_| bot_id), &f, attempt, from_user),
+        }
         if let Some(g) = group {
             crate::group::rewind(state, g, bot_id);
         }
@@ -830,7 +888,178 @@ async fn run_turn(
         state.emit_bot(g).await;
         crate::group::after_turn(state, g, bot_id, started).await;
     }
-    quiet
+}
+
+/// Put a finished Bot reply in the chat (its pictures saved, its markdown rendered).
+async fn show_reply(state: &Shared, bot_id: &str, mut m: Message) -> Message {
+    m.text = crate::media::save_pictures(state, bot_id, m.text.trim()).await;
+    m.html = markdown::render(&m.text);
+    let _ = state.db.upsert_message(&m);
+    state.emit_message(true, &m);
+    m
+}
+
+/// Routine-model runs in a row that may be redone before the routine moves to the Bot's own model:
+/// by then its playbook keeps failing, and each run would pay for both models.
+const MAX_REDOS: u32 = 3;
+const ROUTINE_REDOS: &str = "routine_redos:";
+/// About a routine's latest run, shown in its details (see `routines::routine_json`).
+pub const ROUTINE_LAST: &str = "routine_last:";
+
+/// Run a routine. With an up-to-date playbook and a routine model cheaper than the Bot's own,
+/// the routine model follows the playbook and oBot checks the run: if it got stuck, failed, or
+/// left the playbook's route (`routines::route_check`), its replies are dropped and the Bot's own
+/// model does the run instead and fixes the playbook. Without a playbook, or when its instruction
+/// or Bot changed, the Bot's own model does the run and writes one.
+async fn run_routine(state: &Shared, bot_id: &str, id: &str, test: bool, stopped: Arc<AtomicBool>, steer: Arc<AtomicBool>) {
+    use crate::routines::{route_check, stuck_reason, Checkpoints, Plan};
+    let (Ok(Some(r)), Ok(Some(bot))) = (state.db.get_routine(id), state.db.get_bot(bot_id)) else { return };
+    let cfg = state.config.read().await.clone();
+    let smart = chat_model(&bot, &cfg);
+    let started = now_ms();
+    let others = crate::routines::known_routes(&state.db.routines_for(Some(bot_id)).unwrap_or_default(), &r.id);
+    let fresh = !crate::routines::playbook_stale(&r);
+    let is_stopped = || stopped.load(Ordering::SeqCst);
+    let mut last = json!({ "at": started, "model": smart, "check": "" });
+    let mut cost = 0.0;
+
+    let cheap = routine_model(&r, &bot, &cfg).filter(|_| fresh);
+    let (log, plan_redo) = match cheap {
+        None => (None, None),
+        Some(model) => {
+            let rt = RoutineRun::new(model.clone(), cfg.routine_effort.clone(), true);
+            let prompt = side_prompt(state, bot_id, &crate::routines::routine_prompt(&r, test, &Plan::Follow { strict: true }));
+            run_turn(state, bot_id, None, true, &prompt, false, stopped.clone(), steer.clone(), Some(rt.clone())).await;
+            let log = std::mem::take(&mut *rt.log());
+            cost += log.cost;
+            let why = if let Some(f) = &log.held_failure {
+                Some(format!("it stopped with an error ({})", truncate_chars(f.trim(), 200)))
+            } else if log.failed {
+                None
+            } else if let Some(s) = log.replies.iter().find_map(|t| stuck_reason(t)) {
+                Some(format!("it got stuck: {s}"))
+            } else {
+                route_check(&Checkpoints::parse(&r.playbook), &log.calls).err()
+            };
+            last["model"] = json!(model);
+            last["seen"] = json!(log.seen.join("\n"));
+            (Some((model, log)), why)
+        }
+    };
+    let mut failed = log.as_ref().is_some_and(|(_, l)| l.failed && l.held_failure.is_none());
+    match (log, plan_redo) {
+        // The routine model did it: post what it held back.
+        (Some((_, log)), None) => {
+            state.db.kv_set(&format!("{ROUTINE_REDOS}{id}"), "0");
+            last["check"] = json!(if failed { "" } else { "ok" });
+            let n = log.held.len() as i64;
+            let mut text = String::new();
+            for mut m in log.held {
+                m.created_at = now_ms();
+                text = show_reply(state, bot_id, m).await.text;
+            }
+            if n > 0 {
+                if let Ok(Some(mut b)) = state.db.get_bot(bot_id) {
+                    b.last_preview = preview(&text);
+                    b.updated_at = now_ms();
+                    b.unread += n;
+                    let _ = state.db.upsert_bot(&b);
+                    state.emit_bot(bot_id).await;
+                }
+            }
+        }
+        // Stopped: nothing more runs, and what it held back is dropped.
+        (Some(_), Some(_)) if is_stopped() => {}
+        // Off its playbook: the Bot's own model does this run and fixes the playbook.
+        (Some((model, log)), Some(why)) => {
+            let done: Vec<String> =
+                log.calls.iter().take(40).map(|(n, i)| format!("- {}", truncate_chars(&tool_summary(n, i, true), 200))).collect();
+            let redo = format!("{why}.\nWhat it already did:\n{}", if done.is_empty() { "- nothing".into() } else { done.join("\n") });
+            add_event(
+                state,
+                bot_id,
+                &format!("{} went off the playbook of “{}” ({why}). {} is doing this run instead.", model_label(&model), r.name, model_label(&smart)),
+                json!({"kind": "routine-redo", "routine_id": r.id}),
+            );
+            let log = smart_run(state, bot_id, &r, test, &smart, &cfg, &Plan::Learn { others: &others, redo: Some(&redo) }, stopped.clone(), steer.clone()).await;
+            cost += log.cost;
+            failed = log.failed;
+            last["check"] = json!(format!("Redone by {}: {why}", model_label(&smart)));
+            let redos = state.db.kv_get(&format!("{ROUTINE_REDOS}{id}")).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0) + 1;
+            state.db.kv_set(&format!("{ROUTINE_REDOS}{id}"), &redos.to_string());
+            if redos >= MAX_REDOS {
+                if let Ok(Some(mut cur)) = state.db.get_routine(id) {
+                    cur.model = smart.clone();
+                    let _ = state.db.upsert_routine(&cur);
+                    state.db.kv_set(&format!("{ROUTINE_REDOS}{id}"), "0");
+                    add_event(
+                        state,
+                        bot_id,
+                        &format!(
+                            "“{}” now runs on {}: {redos} runs in a row went off its playbook on {}. You can change its model in the routine.",
+                            r.name,
+                            model_label(&smart),
+                            model_label(&model)
+                        ),
+                        json!({"kind": "routine-model", "routine_id": r.id}),
+                    );
+                }
+            }
+        }
+        // The Bot's own model: no playbook yet (or out of date), or no cheaper routine model.
+        (None, _) => {
+            let plan = if fresh { Plan::Follow { strict: false } } else { Plan::Learn { others: &others, redo: None } };
+            let log = smart_run(state, bot_id, &r, test, &smart, &cfg, &plan, stopped.clone(), steer.clone()).await;
+            cost += log.cost;
+            failed = log.failed;
+        }
+    }
+    last["cost"] = json!(cost);
+    state.db.kv_set(&format!("{ROUTINE_LAST}{id}"), &last.to_string());
+    // A scheduled run that worked and posted nothing (it replied PASS) leaves nothing unread.
+    let posted = add_side_news(state, bot_id, started);
+    if !test && !posted && !failed && !is_stopped() {
+        state.db.routine_run_was_quiet(id);
+    }
+    state.emit("routines.updated", json!({ "bot_id": bot_id }));
+}
+
+/// A routine run on the Bot's own model. It may write a playbook (always asked to by `Plan::Learn`),
+/// which is saved for the instruction and Bot the run started with: if either changed meanwhile,
+/// the playbook is already out of date and the next run writes a new one.
+async fn smart_run(
+    state: &Shared,
+    bot_id: &str,
+    r: &crate::db::Routine,
+    test: bool,
+    model: &str,
+    cfg: &Config,
+    plan: &crate::routines::Plan<'_>,
+    stopped: Arc<AtomicBool>,
+    steer: Arc<AtomicBool>,
+) -> RoutineLog {
+    let rt = RoutineRun::new(model.to_string(), cfg.effort.clone(), false);
+    let prompt = side_prompt(state, bot_id, &crate::routines::routine_prompt(r, test, plan));
+    run_turn(state, bot_id, None, true, &prompt, false, stopped.clone(), steer, Some(rt.clone())).await;
+    let log = std::mem::take(&mut *rt.log());
+    if let Some(p) = log.playbook.as_deref().filter(|_| !log.failed && !stopped.load(Ordering::SeqCst)) {
+        let p = crate::routines::keep_reached(p, &log.calls);
+        if !p.is_empty() && state.db.set_playbook(&r.id, &p, &r.prompt, &r.bot_id).unwrap_or(false) && p != r.playbook.trim() {
+            add_event(state, bot_id, &format!("Updated the playbook of “{}”", r.name), json!({"kind": "routine-playbook", "routine_id": r.id}));
+        }
+    }
+    log
+}
+
+/// "claude-haiku-5-5" → "Haiku 5.5", "sonnet" → "Sonnet".
+pub fn model_label(model: &str) -> String {
+    let m = model.trim().strip_prefix("claude-").unwrap_or(model.trim());
+    let mut parts = m.split('-');
+    let name = parts.next().unwrap_or("");
+    let mut c = name.chars();
+    let name = c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default();
+    let version: Vec<&str> = parts.take_while(|p| p.chars().all(|c| c.is_ascii_digit()) && p.len() <= 2).collect();
+    if version.is_empty() { name } else { format!("{name} {}", version.join(".")) }
 }
 
 enum Outcome {
@@ -874,6 +1103,10 @@ impl Code {
     }
     fn retryable(self) -> bool {
         matches!(self, Code::RateLimit | Code::Overloaded | Code::Crashed)
+    }
+    /// Another model might get it done: not a problem with the plan, the login or the setup.
+    fn redo_helps(self) -> bool {
+        matches!(self, Code::Overloaded | Code::Crashed | Code::TooLong | Code::Other)
     }
     fn short(self) -> &'static str {
         match self {
@@ -1311,6 +1544,22 @@ fn retell_persona(state: &Shared, bot: &str, group: Option<&str>) {
 }
 
 /// Returns the command and a note to put before the message (changed instructions, or "").
+/// The model a Bot chats with: its own, else Settings › Model, else `DEFAULT_MODEL`.
+pub fn chat_model(bot: &Bot, cfg: &Config) -> String {
+    [&bot.model, &cfg.default_model]
+        .into_iter()
+        .find(|m| !m.trim().is_empty())
+        .map(|m| m.trim().to_string())
+        .unwrap_or_else(|| crate::config::DEFAULT_MODEL.to_string())
+}
+
+/// The model a routine's runs use when it has an up-to-date playbook: its own, else Settings ›
+/// Routine model. None = the Bot's own model (then there is nothing cheaper to hand it to).
+pub fn routine_model(r: &crate::db::Routine, bot: &Bot, cfg: &Config) -> Option<String> {
+    let chat = chat_model(bot, cfg);
+    [&r.model, &cfg.routine_model].into_iter().map(|m| m.trim()).find(|m| !m.is_empty()).filter(|m| *m != chat).map(str::to_string)
+}
+
 fn build_command(
     state: &Shared,
     bot: &Bot,
@@ -1320,6 +1569,7 @@ fn build_command(
     cfg: &Config,
     claude: &PathBuf,
     resume: bool,
+    rt: Option<&RoutineRun>,
 ) -> anyhow::Result<(Command, String)> {
     let bot_dir = state.data_dir.join("bots").join(&bot.id);
     std::fs::create_dir_all(&bot_dir)?;
@@ -1381,14 +1631,13 @@ fn build_command(
         args.push("--resume".into());
         args.push(session);
     }
-    let model = [&bot.model, &cfg.default_model]
-        .into_iter()
-        .find(|m| !m.trim().is_empty())
-        .map(|m| m.trim().to_string())
-        .unwrap_or_else(|| crate::config::DEFAULT_MODEL.to_string());
+    let (model, effort) = match rt {
+        Some(rt) => (rt.model.clone(), rt.effort.as_str()),
+        None => (chat_model(bot, cfg), cfg.effort.as_str()),
+    };
     args.push("--model".into());
     args.push(model);
-    let effort = if crate::config::EFFORTS.contains(&cfg.effort.as_str()) { cfg.effort.as_str() } else { crate::config::DEFAULT_EFFORT };
+    let effort = if crate::config::EFFORTS.contains(&effort) { effort } else { crate::config::DEFAULT_EFFORT };
     args.push("--effort".into());
     args.push(effort.into());
 
@@ -1609,6 +1858,7 @@ async fn drive(
     stopped: Arc<AtomicBool>,
     steer: Arc<AtomicBool>,
     resume: bool,
+    rt: Option<Arc<RoutineRun>>,
 ) -> anyhow::Result<Outcome> {
     let bot = state.db.get_bot(bot_id)?.ok_or_else(|| anyhow!("This bot was deleted."))?;
     let cfg = state.config.read().await.clone();
@@ -1620,7 +1870,7 @@ async fn drive(
         )
     })?;
 
-    let (mut cmd, change_note) = build_command(state, &bot, group, side, tidy, &cfg, &claude, resume)?;
+    let (mut cmd, change_note) = build_command(state, &bot, group, side, tidy, &cfg, &claude, resume, rt.as_deref())?;
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("Couldn't start Claude Code ({}): {e}", claude.display()))?;
@@ -1657,6 +1907,7 @@ async fn drive(
     let stdout = child.stdout.take().ok_or_else(|| anyhow!("no output from Claude Code"))?;
     let mut lines = BufReader::new(stdout).lines();
     let mut turn = Turn::new(state.clone(), bot_id.to_string(), group.map(str::to_string), side, tidy);
+    turn.rt = rt;
     turn.ack_due = from_user && group.is_none() && !side;
     let (old_size, _, old_start) = saved_context(state, bot_id);
     // The first request of a new or just summarized conversation shows the size it starts with.
@@ -1743,7 +1994,7 @@ struct Turn {
     /// Where messages go: the Bot's own chat, or the group it's answering in.
     chat: String,
     group: Option<String>,
-    /// A routine in its own conversation (see `enqueue_side`).
+    /// A routine in its own conversation (see `enqueue_routine`).
     side: bool,
     /// An idle summary (see `summarize_idle`): the chat only gets the line saying it happened.
     tidy: bool,
@@ -1796,6 +2047,8 @@ struct Turn {
     resting: bool,
     /// The Bot shows as done (see `AppState::finishing`).
     shown_done: bool,
+    /// The routine run this turn is, if it is one.
+    rt: Option<Arc<RoutineRun>>,
 }
 
 /// A helper (sub-agent) a Bot started with the Agent tool.
@@ -1961,6 +2214,7 @@ impl Turn {
             other_work: 0,
             resting: false,
             shown_done: false,
+            rt: None,
         }
     }
 
@@ -2144,7 +2398,8 @@ impl Turn {
     }
 
     async fn finalize(&mut self, id: &str) {
-        let Some(m) = self.live.remove(id) else { return };
+        let Some(mut m) = self.live.remove(id) else { return };
+        m.text = self.routine_text(&m.text);
         if m.text.trim().is_empty() || self.passes(&m.text) {
             return;
         }
@@ -2172,18 +2427,37 @@ impl Turn {
     }
 
     /// Show a finished reply as a chat message.
-    async fn post(&mut self, mut m: Message) {
-        m.text = crate::media::save_pictures(&self.state, &self.bot_id, m.text.trim()).await;
-        m.html = markdown::render(&m.text);
-        let _ = self.state.db.upsert_message(&m);
-        self.state.emit_message(true, &m);
+    async fn post(&mut self, m: Message) {
+        let m = show_reply(&self.state, &self.bot_id, m).await;
         self.bump_bot(&m.text, 1).await;
     }
 
-    /// A routine's turn is over: post the replies that waited, unless it ended with PASS.
+    /// A routine's reply: the `<playbook>` and `<seen>` blocks taken out and kept for `run_routine`,
+    /// the rest noted as said. Other turns' text stays as it is.
+    fn routine_text(&self, text: &str) -> String {
+        let Some(rt) = &self.rt else { return text.to_string() };
+        let (text, playbook) = crate::routines::take_block(text, "playbook");
+        let (text, seen) = crate::routines::take_block(&text, "seen");
+        let mut log = rt.log();
+        if playbook.is_some() {
+            log.playbook = playbook;
+        }
+        log.seen.extend(seen);
+        if !text.trim().is_empty() {
+            log.replies.push(text.clone());
+        }
+        text
+    }
+
+    /// A routine's turn is over: post the replies that waited, unless it ended with PASS. A held
+    /// run's replies wait in its log instead (`run_routine` posts them).
     async fn post_waiting(&mut self) {
         let waiting = std::mem::take(&mut self.waiting);
         if std::mem::take(&mut self.passed) {
+            return;
+        }
+        if let Some(rt) = self.rt.as_ref().filter(|rt| rt.hold) {
+            rt.log().held.extend(waiting);
             return;
         }
         for mut m in waiting {
@@ -2218,7 +2492,8 @@ impl Turn {
     /// Show a Bot reply that wasn't streamed live. `update`: sent with send_message while the work
     /// goes on (meta.update: shown like any reply, but nobody is notified).
     fn add_bot_text(&mut self, text: &str, update: bool) {
-        if self.passes(text) {
+        let text = &self.routine_text(text);
+        if text.trim().is_empty() || self.passes(text) {
             return;
         }
         let m = self.new_msg("bot", text, "done", if update { json!({"update": true}) } else { json!({}) });
@@ -2277,6 +2552,9 @@ impl Turn {
                         continue;
                     }
                     let input = b.get("input").cloned().unwrap_or(json!({}));
+                    if let Some(rt) = &self.rt {
+                        rt.log().calls.push((name.clone(), input.clone()));
+                    }
                     // A message for the user: shown as the Bot's reply, not as a tool line.
                     if name == "mcp__obot__send_message" {
                         if self.tool_inputs.insert(id, json!({})).is_none() {
@@ -2514,6 +2792,9 @@ impl Turn {
             let key = format!("cost:{sid}");
             let prev: f64 = self.state.db.kv_get(&key).and_then(|s| s.parse().ok()).unwrap_or(0.0);
             let delta = if total >= prev { total - prev } else { total };
+            if let Some(rt) = &self.rt {
+                rt.log().cost += delta;
+            }
             self.state.db.kv_set(&key, &total.to_string());
             let _ = self.state.db.add_usage(&self.bot_id, delta, now_ms());
             let usage = crate::api::usage_json(&self.state);
@@ -2637,6 +2918,170 @@ impl Turn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queued(routine: Option<&str>, user: bool) -> Job {
+        Job {
+            prompt: "p".into(),
+            user_msg: user.then(|| "m".to_string()),
+            while_busy: false,
+            group: None,
+            winding_down: false,
+            side: routine.is_some(),
+            routine: routine.map(|id| RoutineJob { id: id.into(), test: false }),
+        }
+    }
+
+    #[test]
+    fn each_routine_run_is_a_turn_of_its_own() {
+        let (now, later) = split_turn(vec![queued(Some("a"), false), queued(Some("b"), false), queued(None, true)]);
+        assert_eq!(now.len(), 1);
+        assert_eq!(now[0].routine.as_ref().unwrap().id, "a");
+        assert_eq!(later.len(), 2);
+        // Messages for the main conversation still go together, without the routine between them.
+        let (now, later) = split_turn(vec![queued(None, true), queued(Some("a"), false), queued(None, true)]);
+        assert_eq!((now.len(), later.len()), (2, 1));
+        assert!(now.iter().all(|j| j.routine.is_none()));
+    }
+
+    #[test]
+    fn a_routine_model_is_only_used_when_it_differs_from_the_bots() {
+        let mut cfg = Config::default();
+        let db = crate::db::Db::open(std::path::Path::new(":memory:")).unwrap();
+        let root = std::env::temp_dir().join(format!("obot-model-test-{}", std::process::id()));
+        let bot = crate::bots::build(&db, &Config { workspace_root: root.to_string_lossy().into(), ..Config::default() }, &crate::bots::NewBot { name: "M".into(), ..Default::default() }).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let mut r = crate::db::Routine::default();
+        assert_eq!(routine_model(&r, &bot, &cfg), None, "nothing set: the Bot's own model");
+        cfg.routine_model = "claude-haiku-5-5".into();
+        assert_eq!(routine_model(&r, &bot, &cfg).as_deref(), Some("claude-haiku-5-5"));
+        r.model = "claude-fable-5-2".into();
+        assert_eq!(routine_model(&r, &bot, &cfg).as_deref(), Some("claude-fable-5-2"), "the routine's own wins");
+        r.model = crate::config::DEFAULT_MODEL.into();
+        assert_eq!(routine_model(&r, &bot, &cfg), None, "same as the Bot's: nothing cheaper");
+    }
+
+    #[test]
+    fn model_labels() {
+        assert_eq!(model_label("claude-haiku-5-5"), "Haiku 5.5");
+        assert_eq!(model_label("claude-sonnet-5-5"), "Sonnet 5.5");
+        assert_eq!(model_label("haiku"), "Haiku");
+    }
+
+    /// A routine on a cheaper model, run for real against a stand-in for Claude Code that answers
+    /// like the model would: the Bot's model writes the playbook, the routine model follows it, a
+    /// run that leaves the route is redone once by the Bot's model, and after three redos in a row
+    /// the routine moves to the Bot's model.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_cheap_routine_follows_its_playbook_and_is_redone_off_route() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("obot-routine-run-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("data")).unwrap();
+        let d = d.canonicalize().unwrap();
+        let fake = d.join("claude");
+        std::fs::write(
+            &fake,
+            r#"#!/bin/sh
+DIR="__DIR__"
+model=""; prev=""
+for a in "$@"; do [ "$prev" = "--model" ] && model="$a"; prev="$a"; done
+input=$(cat)
+echo "$model" >> "$DIR/models.log"
+sid="s$$"
+echo '{"type":"system","subtype":"init","session_id":"'$sid'"}'
+open() {
+  echo '{"type":"assistant","message":{"id":"a'$1'","content":[{"type":"tool_use","id":"t'$1'","name":"mcp__obot__computer_open","input":{"url":"'$2'"}}]}}'
+  echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t'$1'","content":"ok"}]}}'
+}
+say() { printf '{"type":"assistant","message":{"id":"m%s","content":[{"type":"text","text":"%s"}]}}\n' "$1" "$2"; }
+case "$input" in
+  *playbook_request*)
+    open 1 "https://good.example/slots"
+    say 2 'The slot opened.\n<playbook>\nSteps:\n1. Open https://good.example/slots\nCheckpoints:\n- site: good.example\n- site: never.example\n</playbook>' ;;
+  *playbook_rules*)
+    if [ "$(cat "$DIR/mode")" = off ]; then open 1 "https://bad.example/x"; say 2 'Cheap model says hi'
+    else open 1 "https://good.example/slots"; say 2 '<seen>slots: none</seen>\nPASS'; fi ;;
+esac
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"'$sid'","total_cost_usd":0.01}'
+"#
+            .replace("__DIR__", &d.to_string_lossy()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let st = crate::state::test_state(&d.join("data"));
+        {
+            let mut cfg = st.config.write().await;
+            cfg.workspace_root = d.join("bots").to_string_lossy().into();
+            cfg.claude_path = fake.to_string_lossy().into();
+            cfg.routine_model = "claude-haiku-5-5".into();
+        }
+        let bot = crate::bots::create(&st, &crate::bots::NewBot { name: "Watcher".into(), ..Default::default() }).await.unwrap();
+        let r = crate::db::Routine {
+            id: "r1".into(),
+            bot_id: bot.id.clone(),
+            name: "Slots".into(),
+            prompt: "Tell me when an exam slot opens".into(),
+            schedule: json!({"kind":"daily","time":"08:00"}),
+            enabled: true,
+            ..Default::default()
+        };
+        st.db.upsert_routine(&r).unwrap();
+        let models = || std::fs::read_to_string(d.join("models.log")).unwrap_or_default().lines().map(str::to_string).collect::<Vec<_>>();
+        let mode = |m: &str| std::fs::write(d.join("mode"), m).unwrap();
+        let said = |st: &Shared| -> Vec<String> {
+            st.db.list_messages(&bot.id, None, 200).unwrap().into_iter().filter(|m| m.role == "bot").map(|m| m.text).collect()
+        };
+        let run = |test: bool| run_routine(&st, &bot.id, "r1", test, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let (sonnet, haiku) = ("claude-sonnet-5-5".to_string(), "claude-haiku-5-5".to_string());
+
+        // 1. No playbook yet: the Bot's model does it and writes one, without the checkpoint it never reached.
+        run(false).await;
+        assert_eq!(models(), vec![sonnet.clone()]);
+        let saved = st.db.get_routine("r1").unwrap().unwrap();
+        assert!(saved.playbook.contains("- site: good.example") && !saved.playbook.contains("never.example"));
+        assert_eq!(saved.playbook_prompt, r.prompt);
+        assert_eq!(said(&st), vec!["The slot opened."], "the playbook is hidden from the user");
+
+        // 2. The routine model follows it: nothing new, so nothing is posted.
+        mode("ok");
+        run(false).await;
+        assert_eq!(models()[1..], [haiku.clone()]);
+        assert_eq!(said(&st).len(), 1);
+        let last: Value = serde_json::from_str(&st.db.kv_get(&format!("{ROUTINE_LAST}r1")).unwrap()).unwrap();
+        assert_eq!((last["check"].as_str(), last["seen"].as_str()), (Some("ok"), Some("slots: none")));
+
+        // 3. Only the schedule changes: still the routine model.
+        let mut cur = st.db.get_routine("r1").unwrap().unwrap();
+        cur.schedule = json!({"kind":"daily","time":"09:00"});
+        st.db.upsert_routine(&cur).unwrap();
+        run(false).await;
+        assert_eq!(models()[2..], [haiku.clone()]);
+
+        // 4. The instruction changes: the Bot's model updates the playbook first.
+        cur.prompt = "Tell me when an exam slot or a lab slot opens".into();
+        st.db.upsert_routine(&cur).unwrap();
+        run(false).await;
+        assert_eq!(models()[3..], [sonnet.clone()]);
+        assert_eq!(st.db.get_routine("r1").unwrap().unwrap().playbook_prompt, cur.prompt);
+
+        // 5. The routine model leaves the route: its reply is dropped and the Bot's model redoes the run, once.
+        mode("off");
+        run(false).await;
+        assert_eq!(models()[4..], [haiku.clone(), sonnet.clone()]);
+        assert!(!said(&st).iter().any(|t| t.contains("Cheap model")), "the off-route reply isn't posted");
+        let events: Vec<String> = st.db.list_messages(&bot.id, None, 200).unwrap().into_iter().filter(|m| m.role == "event").map(|m| m.text).collect();
+        assert!(events.iter().any(|e| e.contains("Haiku 5.5 went off the playbook") && e.contains("skipped good.example; opened bad.example")), "{events:?}");
+
+        // 6. Three redos in a row: the routine moves to the Bot's model.
+        run(false).await;
+        run(false).await;
+        assert_eq!(models()[6..], [haiku.clone(), sonnet.clone(), haiku.clone(), sonnet.clone()]);
+        assert_eq!(st.db.get_routine("r1").unwrap().unwrap().model, sonnet);
+        run(false).await;
+        assert_eq!(models()[10..], [sonnet.clone()], "no more routine-model runs");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn the_bot_hears_about_the_users_device_only_when_it_changes() {

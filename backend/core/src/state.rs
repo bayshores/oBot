@@ -24,11 +24,16 @@ pub struct Job {
     /// Group turn started by another Bot's reply rather than the user: answer only if needed.
     pub winding_down: bool,
     /// A routine: it runs in a new, short conversation of its own instead of the Bot's main one
-    /// (see `runner::enqueue_side`). Its messages still go to the Bot's own chat.
+    /// (see `runner::enqueue_routine`). Its messages still go to the Bot's own chat.
     pub side: bool,
-    /// The scheduled routine this run is (not for "Test routine"). When the Bot posts nothing, the
-    /// run isn't counted as a result the user hasn't read.
-    pub routine: Option<String>,
+    /// The routine this run is. Its prompt is made when the run starts (`runner::run_routine`).
+    pub routine: Option<RoutineJob>,
+}
+
+pub struct RoutineJob {
+    pub id: String,
+    /// "Test" or "Try again": the user is waiting for it, and it isn't counted as a scheduled run.
+    pub test: bool,
 }
 
 /// A permission request waiting for the user to click Allow / Deny.
@@ -219,4 +224,33 @@ impl AppState {
         let cfg = self.config.read().await.clone();
         cfg.save(&self.config_path)
     }
+}
+
+/// A real app state in a scratch folder (for tests).
+#[cfg(test)]
+pub fn test_state(d: &std::path::Path) -> Shared {
+    let (events, _) = tokio::sync::broadcast::channel(16);
+    Arc::new(crate::state::AppState {
+        db: crate::db::Db::open(&d.join("obot.db")).unwrap(),
+        config: tokio::sync::RwLock::new(crate::config::Config::default()),
+        config_path: d.join("config.json"),
+        data_dir: d.to_path_buf(),
+        events,
+        queues: Default::default(),
+        runs: Default::default(),
+        approvals: Default::default(),
+        activity: Default::default(),
+        port: 0,
+        listen: String::new(),
+        self_exe: PathBuf::new(),
+        limiter: Default::default(),
+        device_seen: Default::default(),
+        pair_lock: Default::default(),
+        screens: Default::default(),
+        group_turns: Default::default(),
+        finishing: Default::default(),
+        helpers: Default::default(),
+        user_computers: Default::default(),
+        this_computer: Default::default(),
+    })
 }

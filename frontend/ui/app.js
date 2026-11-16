@@ -4494,6 +4494,8 @@
       { label: 'Delete', icon: 'trash', danger: true, action: () => deleteRoutine(r) },
     ]);
   }
+  // "Every 30 min · Haiku 5.5 · $0.01 last run"
+  const routineSub = (r, sched) => [sched, r.model && modelName(r.model), r.last && typeof r.last.cost === 'number' && usd(r.last.cost) + ' last run'].filter(Boolean).join(' · ');
   function paintRoutines(list) {
     const box = P.routines;
     box.textContent = '';
@@ -4524,7 +4526,7 @@
             }
           },
         },
-        h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, r.name || r.prompt || 'Routine'), h('div', { class: 'p-row-sub' }, r.enabled ? (r.paused_for_unread ? `${sched} · Paused until you read new messages` : sched) : 'Paused')),
+        h('div', { class: 'p-row-text' }, h('div', { class: 'p-row-title' }, r.name || r.prompt || 'Routine'), h('div', { class: 'p-row-sub' }, r.enabled ? (r.paused_for_unread ? `${sched} · Paused until you read new messages` : routineSub(r, sched)) : 'Paused')),
         sw
       );
       box.append(rowEl);
@@ -4539,6 +4541,19 @@
       const nameIn = h('input', { class: 'field', value: r.name || '', maxlength: '120', 'aria-label': 'Name' });
       const promptIn = h('textarea', { class: 'field', rows: '6', 'aria-label': 'Instruction' });
       promptIn.value = r.prompt || '';
+      const playbookIn = h('textarea', { class: 'field mono', rows: '8', maxlength: '4000', 'aria-label': 'Playbook' });
+      playbookIn.value = r.playbook || '';
+      const modelSel = selectEl(r.model || '', modelOptions('Same as Settings', r.model), async (v) => {
+        try {
+          const nr = await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body: { model: v } });
+          Object.assign(r, nr && nr.id ? nr : { model: v });
+          loadPanelLists('routines');
+        } catch (err) {
+          modelSel.value = r.model || '';
+          fail(err);
+        }
+      }, 'p-select');
+      modelSel.setAttribute('aria-label', 'Model');
       const running = routineRunning(r);
       box.append(
         h('button', { class: 'icon-btn dialog-close', onclick: () => close(), 'aria-label': 'Close' }, icon('x', 16)),
@@ -4547,6 +4562,15 @@
         editing ? promptIn : h('div', { class: 'rt-text' }, r.prompt || ''),
         h('div', { class: 'rt-label' }, 'When to run'),
         h('div', { class: 'rt-when' }, icon('clock', 15), h('span', null, r.schedule_text || 'On a schedule'), !r.enabled && h('span', { class: 'chip' }, 'Paused')),
+        h('div', { class: 'rt-label' }, 'Model'),
+        modelSel,
+        h('div', { class: 'rt-label' }, 'Playbook', r.playbook_stale && !editing && h('span', { class: 'chip rt-chip' }, 'Rewritten on the next run')),
+        editing
+          ? playbookIn
+          : r.playbook
+            ? h('div', { class: 'rt-text rt-playbook mono' }, r.playbook)
+            : h('div', { class: 'rt-sub' }, 'The Bot’s model writes the steps on the next run. A cheaper routine model then follows them.'),
+        routineLastRun(r),
         editing
           ? h(
               'div',
@@ -4570,9 +4594,12 @@
                     const name = nameIn.value.trim();
                     const prompt = promptIn.value.trim();
                     if (!name || !prompt) return (name ? promptIn : nameIn).focus();
+                    const body = { name, prompt };
+                    const playbook = playbookIn.value.trim();
+                    if (playbook !== (r.playbook || '').trim()) body.playbook = playbook;
                     e.currentTarget.disabled = true;
                     try {
-                      const nr = await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body: { name, prompt } });
+                      const nr = await api(`/api/routines/${encodeURIComponent(r.id)}`, { method: 'PATCH', body });
                       Object.assign(r, nr && nr.id ? nr : { name, prompt });
                       editing = false;
                       paint();
@@ -4620,6 +4647,23 @@
       if (editing) setTimeout(() => promptIn.focus(), 30);
     };
     paint();
+  }
+
+  // "$0.03", or "<$0.01" for less.
+  const usd = (c) => (c < 0.01 ? '<$0.01' : '$' + c.toFixed(2));
+  // How the routine's latest run went: the model, its cost, whether it kept to its playbook, and
+  // what the routine model saw at each checkpoint.
+  function routineLastRun(r) {
+    const l = r.last;
+    if (!l || !l.model) return null;
+    const check = l.check === 'ok' ? 'Followed its playbook' : l.check || '';
+    return h(
+      'div',
+      null,
+      h('div', { class: 'rt-label' }, 'Last run'),
+      h('div', { class: 'rt-sub' }, [modelName(l.model), typeof l.cost === 'number' && usd(l.cost), check].filter(Boolean).join(' · ')),
+      l.seen && h('div', { class: 'rt-sub rt-seen' }, 'What it saw: ' + l.seen)
+    );
   }
 
   // ── skills (Claude Code skills in the bot's folder) ──
@@ -5828,6 +5872,8 @@
           row('Timezone', tz),
           s ? row('Model', selectEl(s.default_model || '', modelOptions(modelName(s.model_default || 'claude-sonnet-5-5') + ' (default)', s.default_model), (v) => putSettings({ default_model: v }, 'model')), 'Used by every Bot that doesn’t pick its own', '', 'model') : row('Model', null, 'Connect to a computer to change this.'),
           s ? row('Effort', selectEl(s.effort || 'xhigh', EFFORTS, (v) => putSettings({ effort: v }, 'effort')), 'How hard Bots think before answering. Higher is smarter but slower and uses more of your plan', '', 'effort') : null,
+          s ? row('Routine model', selectEl(s.routine_model || '', modelOptions('Same as the Bot', s.routine_model), (v) => putSettings({ routine_model: v }, 'routine-model')), 'Used by routines that don’t pick their own. The Bot’s model writes each routine’s steps first, then this model follows them, and the Bot’s model takes over if it goes off track', '', 'routine-model') : null,
+          s ? row('Routine effort', selectEl(s.routine_effort || 'high', EFFORTS, (v) => putSettings({ routine_effort: v }, 'routine-effort')), 'How hard the routine model thinks. Lower is cheaper but misses more', '', 'routine-effort') : null,
           row(
             'Show Tool Activity',
             toggleEl(S.prefs.showTools === true, (v) => {

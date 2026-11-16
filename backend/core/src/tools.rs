@@ -107,7 +107,7 @@ pub fn definitions() -> Value {
         },
         {
             "name": "create_routine",
-            "description": "Create a recurring task you'll run on a schedule (e.g. a morning briefing every weekday at 8:00). Only create one when the user asks for it or agrees. Give \"bot\" to create it for another of the user's Bots (it then runs in that Bot's chat).",
+            "description": "Create a recurring task you'll run on a schedule (e.g. a morning briefing every weekday at 8:00). Only create one when the user asks for it or agrees. If one of your routines already does part of it, ask the user whether to change that one instead. Give \"bot\" to create it for another of the user's Bots (it then runs in that Bot's chat).",
             "inputSchema": {"type": "object", "properties": {
                 "name": {"type": "string"},
                 "prompt": {"type": "string", "description": "What to do each time"},
@@ -276,6 +276,7 @@ fn new_routine(bot_id: &str, name: &str, prompt: &str, schedule: &Value) -> Resu
         last_run_at: None,
         unread_runs: 0,
         created_at: now_ms(),
+        ..Default::default()
     };
     if r.name.is_empty() || r.prompt.is_empty() {
         return Err("A routine needs a name and a prompt".into());
@@ -628,6 +629,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
                 last_run_at: None,
                 unread_runs: 0,
                 created_at: now_ms(),
+                ..Default::default()
             };
             state.db.upsert_routine(&r).map_err(|e| e.to_string())?;
             state.emit("routines.updated", json!({"bot_id": bot_id}));

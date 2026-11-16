@@ -12,6 +12,9 @@ pub const DEFAULT_MODEL: &str = "claude-sonnet-5-5";
 /// Claude Code's effort level unless Settings says otherwise.
 pub const DEFAULT_EFFORT: &str = "xhigh";
 pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Effort for routine runs on the routine model (see routines.rs). Not lower: a cheap model at a low
+/// effort misses too much.
+pub const DEFAULT_ROUTINE_EFFORT: &str = "high";
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Secret {
@@ -62,6 +65,11 @@ pub struct Config {
     pub default_model: String,
     /// Claude Code effort level for every run: "low" | "medium" | "high" | "xhigh" | "max".
     pub effort: String,
+    /// Model for routines that don't pick their own (Settings › Bot › Routine model). "" = the
+    /// Bot's own model. Routines follow a playbook written by the Bot's model (routines.rs).
+    pub routine_model: String,
+    /// Effort for routine runs on the routine model. Runs on the Bot's own model use `effort`.
+    pub routine_effort: String,
     /// Folder that holds one sub-folder per bot.
     pub workspace_root: String,
     pub vault: Vec<Secret>,
@@ -119,6 +127,8 @@ impl Default for Config {
             allow_rules: vec![],
             default_model: String::new(),
             effort: DEFAULT_EFFORT.into(),
+            routine_model: String::new(),
+            routine_effort: DEFAULT_ROUTINE_EFFORT.into(),
             workspace_root: root.to_string_lossy().into_owned(),
             vault: vec![],
             connection: Connection::default(),
@@ -203,6 +213,8 @@ impl Config {
             "default_model": self.default_model,
             "model_default": DEFAULT_MODEL,
             "effort": self.effort,
+            "routine_model": self.routine_model,
+            "routine_effort": self.routine_effort,
             "workspace_root": self.workspace_root,
             "vault": self.vault.iter().map(|s| {
                 let locked = crate::vault::is_locked(&s.value);

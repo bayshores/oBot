@@ -1759,6 +1759,10 @@ textarea.field.rule-input { resize: none; min-height: 40px; line-height: 20px; p
 .rt-when { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .rt-when .ico { color: var(--icon-2); }
 .rt-foot { align-items: center; }
+.rt-sub { font-size: 13px; line-height: 19px; color: var(--text-2); overflow-wrap: anywhere; }
+.rt-seen { margin-top: 4px; white-space: pre-wrap; }
+.rt-playbook { font-size: 12.5px; line-height: 19px; max-height: 200px; }
+.rt-chip { margin-left: 8px; }
 .circle-btn.danger { color: var(--danger-text); }
 
 /* ───────────── 10c. onboarding · always-on computer setup · connection banners ───────────── */

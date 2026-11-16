@@ -1300,32 +1300,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// A real app state in a scratch folder.
     fn state(d: &Path) -> Shared {
-        let (events, _) = tokio::sync::broadcast::channel(16);
-        Arc::new(crate::state::AppState {
-            db: crate::db::Db::open(&d.join("obot.db")).unwrap(),
-            config: tokio::sync::RwLock::new(crate::config::Config::default()),
-            config_path: d.join("config.json"),
-            data_dir: d.to_path_buf(),
-            events,
-            queues: Default::default(),
-            runs: Default::default(),
-            approvals: Default::default(),
-            activity: Default::default(),
-            port: 0,
-            listen: String::new(),
-            self_exe: PathBuf::new(),
-            limiter: Default::default(),
-            device_seen: Default::default(),
-            pair_lock: Default::default(),
-            screens: Default::default(),
-            group_turns: Default::default(),
-            finishing: Default::default(),
-            helpers: Default::default(),
-            user_computers: Default::default(),
-            this_computer: Default::default(),
-        })
+        crate::state::test_state(d)
     }
 
     #[cfg(unix)]

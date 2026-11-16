@@ -155,7 +155,8 @@ Message = {
 //            optional, self, organizer}], repeat (text like "every week on Mon"), video (call link), link (opens the
 //            event), description, day_events: [{title, start, end, all_day}] (the user's other events that day) }
 //  event:    { kind, routine_id?, job_id?, bot_id? }   small centered line. kind: "routine-created" | "routine-run"
-//            | "routine-paused" | "memory-tidy" | "compacted" (older messages summarized) | "conversation-reset"
+//            | "routine-paused" | "routine-playbook" (playbook rewritten) | "routine-redo" (routine model went off its
+//            playbook; the Bot's model redid the run) | "routine-model" (moved to the Bot's model) | "memory-tidy" | "compacted" (older messages summarized) | "conversation-reset"
 //            | "retry" | "steered" (stopped by "Send now") | "job-started" | "job-done" | "job-failed" | "job-stopped" | bot-…
 // While an approval card is open, bot.activity = {kind:"waiting_for_you", label:"Waiting for your OK"}.
 // NOTE: "tool" rows are hidden by default; show bot.activity instead.
@@ -169,6 +170,8 @@ Settings = {
   default_model: string,                             // "" = model_default, or a model name / alias ("claude-opus-5-5", "opus"...)
   model_default: string,                             // the built-in default: "claude-sonnet-5-5"
   effort: "low" | "medium" | "high" | "xhigh" | "max", // Claude Code --effort for every run (default "xhigh")
+  routine_model: string,                             // "" = the Bot's own model; else the model routines follow their playbook with
+  routine_effort: "low" | … | "max",                 // --effort for runs on the routine model (default "high")
   workspace_root: string,
   vault: [{ name: string, hint: string,              // hint: "••••abcd" (last 4 only; "••••" for values of 8 characters or fewer)
             description: string,
@@ -267,7 +270,7 @@ Usage = {
 | GET | /api/bots/:id/files/*path | – | file bytes |
 | POST | /api/approvals/:approval_id | `{decision:"allow"|"always"|"deny"}` | `{ok:true}` |
 | GET | /api/settings | – | `Settings` |
-| PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, effort, workspace_root}` (`api_key:""` clears it) | `Settings` |
+| PUT | /api/settings | partial: `{auth_mode, api_key, permission_mode, allow_rules, default_model, effort, routine_model, routine_effort, workspace_root}` (`api_key:""` clears it) | `Settings` |
 | POST | /api/vault | `{name, value, description, bots}`, see below | `Settings` |
 | POST | /api/accounts/connect | `{provider:"google"\|"microsoft", redirect:"http://127.0.0.1:<port>/oauth/callback", reconnect?: account id}` | `{url}`: the sign-in page to open in the browser |
 | POST | /api/accounts/finish | `{state, code}` or `{url}` (the address the browser landed on) | `{ok, email}`; also emits `account.connected` and `settings.updated` |
@@ -295,7 +298,7 @@ Usage = {
 | GET | /api/search?q= | – | `{bots:[Bot], messages:[Message]}` (max 50) |
 | POST | /api/messages/:id/answer | `{value}` | `Message` (the user's answer, sent as a normal user message) |
 | GET | /api/bots/:id/routines | – | `[Routine]` |
-| PATCH | /api/routines/:id | any of `{name, prompt, schedule, enabled}` | `Routine` |
+| PATCH | /api/routines/:id | any of `{name, prompt, schedule, enabled, model, playbook}` (`playbook`: the user's edit, taken as right for the current instruction) | `Routine` |
 | DELETE | /api/routines/:id | – | `{ok}` |
 | POST | /api/routines/:id/run | – | `{ok}` ("Test routine": run once now) |
 | GET | /api/bots/:id/memories | – | `[{id, bot_id (null = about the user), text, created_at}]` |
@@ -356,7 +359,9 @@ push service removes the subscription. The VAPID private key is in `config.json`
 
 ```ts
 Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday at 08:00" */, enabled,
-            next_run_at /* ms|null */, last_run_at, paused_for_unread }
+            next_run_at /* ms|null */, last_run_at, paused_for_unread,
+            model /* "" = Settings › Routine model */, playbook, playbook_stale /* rewritten on the next run */,
+            last /* null | {at, model, cost /* USD */, check /* "ok" | "Redone by …: why" | "" */, seen?} */ }
 // schedule: {kind:"once",at:ms} | {kind:"interval",minutes} | {kind:"daily"|"weekdays",time:"HH:MM"}
 //         | {kind:"weekly",day:"monday",time} | {kind:"monthly",day:1..31,time}
 ```
@@ -415,7 +420,8 @@ computer is offline or the switch is off, the tool answers at once that nothing 
 
 ### How a turn runs
 
-* Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`).
+* Every run uses `--model` (the bot's model, else Settings, else `claude-sonnet-5-5`) and `--effort` (Settings, default `xhigh`),
+  except a routine's run on its routine model (see Playbooks below).
 * The current time is sent at the start of each message (`[oBot: It's Friday 2026-11-06 20:01 now.]`), not in the
   system prompt, so the system prompt stays the same between messages and the cached conversation is reused.
 * The same goes for where the user is writing from. A conversation assumes they are at the computer the Bots run on.
@@ -460,7 +466,23 @@ computer is offline or the switch is off, the tool answers at once that nothing 
   written before a `PASS` isn't posted either. The main
   conversation is told what routines posted at the start of its next message (`[oBot: Routines posted since your last
   turn in this conversation …]`). A check-in the Bot set for itself with `check_back_later` continues its work, so it
-  still runs in the main conversation.
+  still runs in the main conversation. Each routine run is a turn of its own (never merged with another routine).
+* **Playbooks and the routine model** (`runner::run_routine`, `routines.rs`). A routine's model is its own `model`, else
+  Settings › Routine model; when that is empty or the same as the Bot's, everything runs on the Bot's model.
+  * With no playbook, or one written for another instruction or Bot (`playbook_prompt` / `playbook_bot` differ), the run
+    is on the Bot's model with `<playbook_request>`: it ends its reply with a hidden `<playbook>` block (steps, then
+    `- site:` / `- tool:` / `- also:` checkpoints). oBot cuts it out, keeps only the checkpoints that run reached, and
+    saves it with the instruction and Bot the run started with (a playbook saved after an edit is already out of date).
+    An out-of-date playbook is passed along so the Bot keeps what still applies; the checkpoints of the Bot's other
+    routines are listed so a similar routine reuses them.
+  * With an up-to-date playbook, the routine model runs at `routine_effort` with `<playbook_rules>`: follow the steps,
+    reply `STUCK: why` when they don't match, and write a hidden `<seen>` line per checkpoint. Its replies and errors
+    are held. oBot then checks the run against the checkpoints (every `site` opened by a tool call's `url`, host or
+    subdomain; every `tool` called; no other host unless `also`). A clean run's replies are posted. Otherwise (stuck,
+    off route, or an error another model might fix) its replies are dropped and the Bot's model redoes the run once,
+    told what was already done so it doesn't repeat it, and fixes the playbook. After 3 redos in a row the routine's
+    `model` is set to the Bot's model.
+  * `last` (kv `routine_last:<id>`) records the latest run's model, cost, check and `<seen>` text.
   Their settings also set `autoCompactEnabled: true`, so turning summarizing off for your own Claude Code on the PC
   (`/config`, saved in `~/.claude.json`) doesn't turn it off for Bots.
 * Bots don't load any Claude Code settings files: runs use `--strict-mcp-config` and `--setting-sources=` (none). So the
