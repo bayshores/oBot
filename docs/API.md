@@ -373,7 +373,7 @@ Routine = { id, bot_id, name, prompt, schedule, schedule_text /* "Every weekday 
 
 ## Bot tools (the `oBot` MCP server)
 
-Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never need approval except `delete_bot` and the email/calendar actions marked below.
+Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never need approval except `delete_bot`, a looser `permission_rules` change and the email/calendar actions marked below.
 
 | Tool | What it does |
 |---|---|
@@ -391,6 +391,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 | `list_bots` · `get_bot {bot}` | see the user's bots (instructions, private memories, routines) |
 | `create_bot {name, instructions, label?, look?, memories?[], routines?[], briefing?}` | new bot, ready from its first message; it says hello in its own chat. Names must be unique; max 50 bots |
 | `update_bot {bot, name?, label?, look?, instructions?, add_instructions?}` | change a bot (or itself) |
+| `permission_rules {list: "auto_approve"\|"ask_first", add?, remove?}` | see or change the plain-language rules auto-review uses (`review_allow` / `review_ask`). Only `list`: the rules. A stricter change (add to ask_first, remove from auto_approve) is made at once; a looser one shows an Allow / Deny card ("Save rule" / "Don't save") whatever the permission mode, and waits |
 | `delete_bot {bot, reason?}` | retire a bot. Always shows an Allow / Deny card and waits, whatever the permission mode. Not the Main Bot, not itself |
 | `message_bot {bot, message}` | pass a task or question to another Bot: the message shows in both chats (`relay`) and starts a turn in that Bot, which works on it in its own chat. At most 4 messages between the same two Bots in 10 minutes. Each Bot's instructions list the user's other Bots, so it can say when a task fits another one better (`backend/core/src/relay.rs`) |
 | `react` | `{emoji, message_id?, remove?}` | React to one of the user's messages (default: their latest) with an emoji; shows as a pill on it |

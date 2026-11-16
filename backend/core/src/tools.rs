@@ -218,6 +218,15 @@ pub fn definitions() -> Value {
             }, "required": ["bot"]}
         },
         {
+            "name": "permission_rules",
+            "description": "See or change the user's plain-language permission rules, which decide which of your actions need their OK: auto_approve (done without asking) and ask_first (always ask). Use it when the user says what may happen without asking, or what to always check with them. Stricter changes (add to ask_first, remove from auto_approve) apply at once; looser ones show the user a card and wait for their answer. Give only list to see the rules.",
+            "inputSchema": {"type": "object", "properties": {
+                "list": {"type": "string", "enum": ["auto_approve", "ask_first"]},
+                "add": {"type": "string", "description": "One short rule, like 'Run git commands that only read, on proled'"},
+                "remove": {"type": "string", "description": "A rule's exact text"}
+            }, "required": ["list"]}
+        },
+        {
             "name": "set_status",
             "description": "Show a short status under your name while you work on something long (e.g. 'Comparing 12 flights').",
             "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
@@ -1057,6 +1066,8 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             Ok(format!("Updated {} ({list}). It applies from {} next message.", b.name, if b.id == bot_id { "your" } else { "its" }))
         }
 
+        "permission_rules" => crate::api::permission_rules(state, bot_id, args).await,
+
         "delete_bot" => {
             let b = find_bot(state, s(args, "bot"))?;
             if b.id == bot_id {
@@ -1168,6 +1179,53 @@ mod tests {
         assert!(out.starts_with("Moved to B"), "{out}");
         assert!(st.db.memories_for(&a.id).unwrap().iter().all(|m| m.text != "Lives in San Diego"));
         assert!(st.db.memories_for(&b.id).unwrap().iter().any(|m| m.text == "Lives in San Diego" && m.bot_id.as_deref() == Some(b.id.as_str())));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_bot_tightens_rules_itself_and_loosens_them_only_with_the_users_ok() {
+        let d = std::env::temp_dir().join(format!("ob-rules-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.workspace_root = d.join("bots").to_string_lossy().into();
+        let bot = crate::bots::create(&st, &crate::bots::NewBot { name: "A".into(), ..Default::default() }).await.unwrap();
+        // Answers the next card with `yes`; returns how many cards it saw.
+        let answer = |yes: bool| {
+            let st = st.clone();
+            tokio::spawn(async move {
+                for _ in 0..100 {
+                    let id = st.approvals.lock().await.keys().next().cloned();
+                    if let Some(id) = id {
+                        let _ = st.approvals.lock().await.remove(&id).unwrap().reply.send(yes);
+                        return 1;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                0
+            })
+        };
+        let rules = |args: Value| {
+            let (st, id) = (st.clone(), bot.id.clone());
+            async move { run(&st, &id, "permission_rules", &args).await }
+        };
+        assert!(rules(json!({"list": "auto_approve"})).await.unwrap().starts_with("No Auto-approve rules."));
+        // Stricter: no card.
+        rules(json!({"list": "ask_first", "add": "Deleting files on proled"})).await.unwrap();
+        assert_eq!(st.config.read().await.review_ask, vec!["Deleting files on proled".to_string()]);
+        assert!(st.approvals.lock().await.is_empty());
+        // Looser: a card; "no" changes nothing, "yes" saves it.
+        let no = answer(false);
+        assert!(rules(json!({"list": "auto_approve", "add": "Run git status on proled"})).await.is_err());
+        assert_eq!(no.await.unwrap(), 1);
+        assert!(st.config.read().await.review_allow.is_empty());
+        let yes = answer(true);
+        rules(json!({"list": "auto_approve", "add": "Run git status on proled"})).await.unwrap();
+        assert_eq!(yes.await.unwrap(), 1);
+        assert_eq!(st.config.read().await.review_allow, vec!["Run git status on proled".to_string()]);
+        // Removing an Auto-approve rule is stricter again; an unknown rule is refused.
+        rules(json!({"list": "auto_approve", "remove": "Run git status on proled"})).await.unwrap();
+        assert!(st.config.read().await.review_allow.is_empty());
+        assert!(rules(json!({"list": "ask_first", "remove": "nope"})).await.is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 

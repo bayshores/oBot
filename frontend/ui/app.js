@@ -3327,6 +3327,7 @@
     mcp__obot__my_computer_write: ['file', 'Your computer', 'write a file'],
     mcp__obot__my_computer_copy: ['file', 'Your computer', 'copy a file'],
     mcp__obot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
+    mcp__obot__permission_rules: ['shield', 'Permissions', 'change a permission rule'],
     mcp__obot__email_send: ['mail', 'Email', 'send an email'],
     mcp__obot__email_update: ['trash', 'Email', 'move email to the trash'],
     mcp__obot__calendar_create: ['calendar', 'Calendar', 'add an event and invite people'],
@@ -3584,9 +3585,10 @@
         return card;
       }
       const calAct = cal && CAL_ACTION[cal.action];
-      buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, calAct ? calAct.allow : rule ? 'Allow once' : 'Allow'));
+      const ruleChange = tool === 'mcp__obot__permission_rules';
+      buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, calAct ? calAct.allow : ruleChange ? 'Save rule' : rule ? 'Allow once' : 'Allow'));
       if (rule) buttons.push(h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'));
-      buttons.push(h('button', { class: 'btn ghost', onclick: () => decide('deny') }, calAct ? calAct.deny : shell ? 'Skip' : 'Deny'));
+      buttons.push(h('button', { class: 'btn ghost', onclick: () => decide('deny') }, calAct ? calAct.deny : ruleChange ? 'Don’t save' : shell ? 'Skip' : 'Deny'));
       card.append(h('div', { class: 'card-actions' }, buttons), errLine);
     } else {
       const calAct = cal && CAL_ACTION[cal.action];

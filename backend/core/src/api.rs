@@ -2142,6 +2142,61 @@ struct SettingsBody {
     timezone: Option<String>,
 }
 
+/// The `permission_rules` tool: a Bot reads the plain-language rules auto-review uses, or changes
+/// them for the user. A change that makes oBot stricter is made at once; one that makes it looser
+/// waits for the user's OK on a card, whatever the permission mode, so a Bot can't loosen them itself.
+pub(crate) async fn permission_rules(st: &Shared, bot_id: &str, args: &Value) -> Result<String, String> {
+    let arg = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let (list, add, remove) = (arg("list"), arg("add"), arg("remove"));
+    let (label, allow) = match list.as_str() {
+        "auto_approve" => ("Auto-approve", true),
+        "ask_first" => ("Ask first", false),
+        _ => return Err("list must be \"auto_approve\" or \"ask_first\".".into()),
+    };
+    let read = |cfg: &crate::config::Config| if allow { cfg.review_allow.clone() } else { cfg.review_ask.clone() };
+    let (current, on) = {
+        let cfg = st.config.read().await;
+        (read(&cfg), cfg.auto_review)
+    };
+    let off = if on { "" } else { " Auto-review is off (Settings › Permissions), so these rules do nothing until it's on." };
+    if add.is_empty() && remove.is_empty() {
+        let rows: Vec<String> = current.iter().map(|r| format!("- {r}")).collect();
+        return Ok(if rows.is_empty() { format!("No {label} rules.{off}") } else { format!("{label} rules:\n{}{off}", rows.join("\n")) });
+    }
+    if !add.is_empty() && !remove.is_empty() {
+        return Err("Add or remove one rule at a time.".into());
+    }
+    if !remove.is_empty() && !current.contains(&remove) {
+        return Err(format!("There is no {label} rule “{remove}”. Call with only list to see their exact text."));
+    }
+    let change = |mut v: Vec<String>| {
+        if add.is_empty() { v.retain(|r| *r != remove) } else { v.push(add.clone()) }
+        clean_rules(v).map_err(|e| e.1)
+    };
+    if change(current.clone())? == current {
+        return Ok(format!("“{add}” is already a {label} rule."));
+    }
+    // Looser: a new Auto-approve rule, or an Ask-first rule gone.
+    if allow == !add.is_empty() {
+        let summary = if allow { format!("Add to Auto-approve: “{add}”") } else { format!("Remove from Ask first: “{remove}”") };
+        let input = json!({ "list": list, "add": add, "remove": remove });
+        if !ask_approval(st, bot_id, "mcp__obot__permission_rules", &summary, &input, "", "", None).await.map_err(|e| e.to_string())? {
+            return Err("The user said no, so the rules are unchanged. Don't ask again unless they bring it up.".into());
+        }
+    }
+    {
+        // Applied to the rules as they are now: the user may have changed them while the card waited.
+        let mut cfg = st.config.write().await;
+        let next = change(read(&cfg))?;
+        if allow { cfg.review_allow = next } else { cfg.review_ask = next }
+    }
+    st.save_config().await.map_err(|e| e.to_string())?;
+    let settings = st.config.read().await.settings_json();
+    st.emit("settings.updated", json!({ "settings": settings }));
+    let done = if add.is_empty() { format!("Removed the {label} rule “{remove}”.") } else { format!("Added the {label} rule “{add}”.") };
+    Ok(format!("{done} The user sees all rules in Settings › Permissions.{off}"))
+}
+
 fn clean_rules(v: Vec<String>) -> Result<Vec<String>, ApiError> {
     let mut out: Vec<String> = vec![];
     for r in v {

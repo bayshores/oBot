@@ -743,6 +743,7 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__obot__react" => ("working", "Reacting".into()),
         "mcp__obot__update_bot" | "mcp__obot__move_routine" => ("working", "Updating your Bots".into()),
         "mcp__obot__delete_bot" => ("waiting_for_you", "Waiting for your OK".into()),
+        "mcp__obot__permission_rules" => ("working", "Updating your permission rules".into()),
         "mcp__obot__list_accounts" => ("thinking", "Checking accounts".into()),
         "mcp__obot__run_in_background" => ("running_commands", "Starting a background job".into()),
         "mcp__obot__my_computers" => ("reading_file", "Looking at your computers".into()),
@@ -1291,7 +1292,7 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     );
     s.push_str(
         "\noBot's tools (mcp__obot__*): ask_user (tap-to-answer buttons), send_file, send_message, show_page, \
-         remember / recall / update_memory / forget, search_chats, save_skill, close_card, check_back_later (wake yourself later), \
+         remember / recall / update_memory / forget, search_chats, save_skill, permission_rules (what may run without asking; the user confirms looser rules), close_card, check_back_later (wake yourself later), \
          run_in_background (commands over a few minutes; you're woken with the result. Use it instead of your \
          shell's own background option, which keeps you busy so the user's messages wait), create_routine / \
          list_routines / update_routine / delete_routine (recurring tasks) and set_status. Remember useful facts \
