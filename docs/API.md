@@ -489,8 +489,9 @@ computer is offline or the switch is off, the tool answers at once that nothing 
     `model` is set to the Bot's model.
   * A playbook may end with `Check: <command>`: one shell command that prints nothing when there's nothing new. Before
     a scheduled run with an up-to-date playbook, oBot runs it in the Bot's folder (approved like any command the Bot
-    runs, at most a minute). It prints nothing → no model runs and `last` says "Skipped: its check found nothing new".
-    It prints something → the run gets that output in `<check_output>`. Not allowed, failed or too slow → the run goes
+    runs, at most a minute). It prints nothing (a failing exit with no output at all, like grep finding nothing, counts
+    too) → no model runs and `last` says "Skipped: its check found nothing new".
+    It prints something → the run gets that output in `<check_output>`. Not allowed, an error message, or too slow → the run goes
     ahead as usual. Test runs skip the check.
   * `last` (kv `routine_last:<id>`) records the latest run's model, cost, check and `<seen>` text.
   Their settings also set `autoCompactEnabled: true`, so turning summarizing off for your own Claude Code on the PC

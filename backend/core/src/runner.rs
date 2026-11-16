@@ -3076,8 +3076,12 @@ mod tests {
         assert_eq!(runs(), 1);
         assert!(std::fs::read_to_string(d.join("prompt.txt")).unwrap().contains("2 new emails from Ana"));
 
-        // A failing check doesn't stop the routine.
-        save("exit 3");
+        // grep finding nothing (exit 1, no output at all) is "nothing new" too.
+        save("grep -q zebra /dev/null");
+        go().await;
+        assert_eq!(runs(), 1);
+        // A check that fails with an error doesn't stop the routine.
+        save("ls /no/such/folder");
         go().await;
         assert_eq!(runs(), 2);
         let _ = std::fs::remove_dir_all(&d);

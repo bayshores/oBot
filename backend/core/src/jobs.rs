@@ -185,10 +185,14 @@ pub(crate) async fn run_check(st: &Shared, bot: &Bot, command: &str) -> Result<S
         .await
         .map_err(|_| "took over a minute".to_string())?
         .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!("exit code {}", out.status.code().unwrap_or(-1)));
+    let printed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    // A failing exit with no output at all is how grep and similar say "nothing found"; a check
+    // that wrote an error message is broken, and the routine runs as usual.
+    if !out.status.success() && !(printed.is_empty() && error.is_empty()) {
+        return Err(format!("exit code {}: {}", out.status.code().unwrap_or(-1), truncate_chars(&error, 200)));
     }
-    Ok(truncate_chars(String::from_utf8_lossy(&out.stdout).trim(), 8000))
+    Ok(truncate_chars(&printed, 8000))
 }
 
 /// The command in the same kind of shell the Bot uses (bash where there is one).

@@ -190,8 +190,8 @@ const PLAYBOOK_FORMAT: &str = "<playbook>\n\
      - tool: <each tool every run calls, e.g. list_email>\n\
      - also: <host a run may open but doesn't always need; \"also: any\" when the sites differ every run>\n\
      Check: <optional: one shell command, run in your working folder before each run, that prints nothing when \
-     there's nothing new and prints what's new otherwise (like a script that compares a page or file with last time). \
-     Leave this line out unless one command can tell.>\n\
+     there's nothing new and prints what's new otherwise (like a script that compares a page or file with last time); \
+     on an error it must print the error. Leave this line out unless one command can tell.>\n\
      </playbook>";
 
 /// A playbook's `Check:` command, if it has one.
