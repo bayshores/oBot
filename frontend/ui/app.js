@@ -2207,7 +2207,7 @@
   const openWidget = (list) => {
     for (let i = list.length - 1; i >= 0; i--) {
       const m = list[i];
-      if (m.role === 'widget') return m.meta && m.meta.answer == null && m.status !== 'answered' ? m : null;
+      if (m.role === 'widget') return m.meta && m.meta.answer == null && m.status === 'done' ? m : null;
       if (m.role === 'form') return m.status === 'pending' ? m : null;
       if (m.role === 'user') return null;
     }
@@ -2899,10 +2899,19 @@
   }
 
   // ── widget (question with quick replies)
+  // "Closed by <Bot>", with the Bot's note when it gave one (close_card).
+  function closedNote(m) {
+    const meta = m.meta || {};
+    const who = S.bots.get(meta.speaker) || S.bots.get(m.bot_id);
+    const by = `Closed by ${who ? who.name : 'the Bot'}`;
+    return meta.close_note ? `${by}: ${meta.close_note}` : `${by}.`;
+  }
   function widgetCard(m) {
     const meta = m.meta || {};
     const opts = Array.isArray(meta.options) ? meta.options : [];
-    const answered = meta.answer != null;
+    // Skipped (the user wrote a message instead) or closed by the Bot: it can't be answered any more.
+    const shut = meta.answer == null && (m.status === 'skipped' || m.status === 'closed');
+    const answered = meta.answer != null || shut;
     const card = h('div', { class: 'card widget' + (answered ? ' answered' : ''), role: 'group', 'aria-label': meta.question || 'Question' });
     const ask = mdBlock({ html: m.html, text: meta.question || m.text || 'Question' });
     // A one-line question reads as a title; a longer one reads like a message, so its bold parts stand out.
@@ -2979,7 +2988,8 @@
       list.append(other, customRow);
     }
     card.append(list);
-    if (answered && !opts.some((o) => String(o) === String(meta.answer))) card.append(h('div', { class: 'answer-note' }, `You answered: ${meta.answer}`));
+    if (shut) card.append(h('div', { class: 'answer-note' }, m.status === 'skipped' ? 'You moved on without answering.' : closedNote(m)));
+    else if (answered && !opts.some((o) => String(o) === String(meta.answer))) card.append(h('div', { class: 'answer-note' }, `You answered: ${meta.answer}`));
     card._answer = answer;
     card._opts = opts;
     return card;
@@ -2996,6 +3006,7 @@
     if (!pending) {
       let done;
       if (m.status === 'dismissed') done = 'You closed this form.';
+      else if (m.status === 'closed') done = closedNote(m);
       else if (m.status === 'replaced') done = 'The Bot asked again with a newer form.';
       else {
         done = `Filled in ${(meta.filled || []).join(', ')} on ${meta.host}.`;
@@ -3778,7 +3789,7 @@
     else if (m.role === 'attachment' && created) maybeNotify(b, 'done', m.text || `Sent ${(m.meta && m.meta.name) || 'a file'}`, 'd:' + m.id);
     else if (m.role === 'visualization' && created) maybeNotify(b, 'done', (m.meta && m.meta.title) || 'Made a page', 'd:' + m.id);
     else if (m.role === 'approval' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.summary) || m.text, 'a:' + m.id);
-    else if (m.role === 'widget' && m.meta && m.meta.answer == null) maybeNotify(b, 'needs', m.meta.question || m.text, 'w:' + m.id);
+    else if (m.role === 'widget' && m.meta && m.meta.answer == null && m.status === 'done') maybeNotify(b, 'needs', m.meta.question || m.text, 'w:' + m.id);
     else if (m.role === 'form' && m.status === 'pending') maybeNotify(b, 'needs', (m.meta && m.meta.title) || m.text, 'f:' + m.id);
   }
 

@@ -130,11 +130,12 @@ Message = {
 //            crashed are retried automatically 3 times (after 5, 20 and 60 s; bot.activity kind "retrying")
 //            before the card appears.
 //  system:   {}
-//  widget:   { question, options: string[], allow_custom: bool, answer: string|null }   quick-reply buttons;
-//            answer with POST /api/messages/:id/answer {value}
+//  widget:   { question, options: string[], allow_custom: bool, answer: string|null, close_note? }   quick-reply buttons;
+//            answer with POST /api/messages/:id/answer {value}. status done (open) | skipped (the user sent a message
+//            instead; every open question in that chat is skipped) | closed (the Bot closed it with close_card)
 //  form:     { title, reason, host, fields: [{id, label, type: "text"|"email"|"tel"|"password"|"code", target}],
 //              save_available: bool, filled: string[], missing: string[], saved: "added"|"updated"|string|null }
-//            a secure form (request_form). status pending|filled|dismissed|replaced (a newer form from the Bot closes older open ones). Fill it with
+//            a secure form (request_form). status pending|filled|dismissed|replaced (a newer form from the Bot closes older open ones)|closed (close_card). Fill it with
 //            POST /api/messages/:id/form; the values go into the page on the Bot's screen and are never saved here.
 //  attachment: { name, path, mime, size, url }   a file the bot sent; text = optional caption
 //  visualization: { title, url }   url like "/pages/<id>" (no token needed): show in <iframe sandbox="allow-scripts">
@@ -372,7 +373,8 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 
 | Tool | What it does |
 |---|---|
-| `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message) |
+| `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message); the result gives its card id |
+| `close_card {id, note?}` | close one of the bot's own open question cards or secure forms that no longer applies; the card shows "Closed by <Bot>" and the note |
 | `send_message {text}` | a chat message while the Bot keeps working (a `bot` message with `meta.update`; no notification) |
 | `send_file {path, caption?}` · `show_page {title, html \| path, emoji_ok?}` | file in the chat · sandboxed page (a summary, diagram, chart, table or small app). `html` is content only and gets oBot's look. Pictures (`<img src>` with a web address or a file path) are saved with the page. The call is refused, with a message telling the bot what to fix, when the page has emoji (unless `emoji_ok`, for when the user asked for them), an icon name that doesn't exist, a picture that can't be loaded (or more than 40 pictures), or `html` that is a whole document. To show pictures inside a reply, bots write markdown images instead (see `html` above) |
 | `remember {fact, tier: "profile"\|"log", about?: "me"\|"user", bot?}` | save a fact of at most 500 characters (a longer one is refused with a hint to keep only the fact and put steps in a skill; it used to be cut silently). `profile` (standing instructions and rules like "never ask me to sign in to X", core identity) is in the bot's prompt every turn; `log` (everything else) is searched with `recall`, and only its newest 15 entries are in the prompt, each cut to its first 200 characters. A fact is the bot's own unless `about:"user"` (shared by all bots, for what every bot needs); `bot` saves a private fact for another bot |

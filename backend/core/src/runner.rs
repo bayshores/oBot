@@ -721,6 +721,7 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__obot__send_message" => ("working", "Writing to you".into()),
         "mcp__obot__remember" | "mcp__obot__recall" | "mcp__obot__forget" | "mcp__obot__update_memory" => ("thinking", "Remembering".into()),
         "mcp__obot__save_skill" => ("working", "Saving a skill".into()),
+        "mcp__obot__close_card" => ("working", "Closing a question".into()),
         "mcp__obot__list_bots" | "mcp__obot__get_bot" => ("reading_file", "Looking at your Bots".into()),
         "mcp__obot__create_bot" => ("working", "Setting up a Bot".into()),
         "mcp__obot__message_bot" => ("working", "Messaging another Bot".into()),

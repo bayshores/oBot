@@ -100,8 +100,9 @@ pub async fn tool(st: &Shared, bot_id: &str, args: &Value) -> Result<String, Str
     st.db.upsert_message(&m).map_err(|e| e.to_string())?;
     st.emit_message(true, &m);
     Ok(format!(
-        "The secure form is showing in the chat, tied to {host}. End your turn now. When the user fills it in, oBot types \
-         it into the page on {host} and you'll get a message saying which boxes were filled."
+        "The secure form is showing in the chat (card id {}), tied to {host}. End your turn now. When the user fills it in, \
+         oBot types it into the page on {host} and you'll get a message saying which boxes were filled.",
+        m.id
     ))
 }
 
@@ -122,6 +123,9 @@ pub async fn submit(st: &Shared, msg_id: &str, b: Submit) -> Result<Message, Str
     let mut m = st.db.get_message(msg_id).map_err(|e| e.to_string())?.filter(|m| m.role == "form").ok_or("No such form")?;
     if m.status == "replaced" {
         return Err("The Bot asked again with a newer form. Use that one.".into());
+    }
+    if m.status == "closed" {
+        return Err("The Bot closed this form.".into());
     }
     if m.status != "pending" {
         return Err("This form was already used".into());

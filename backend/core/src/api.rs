@@ -1043,6 +1043,7 @@ async fn post_user_message(st: &Shared, id: &str, b: SendBody, only: Option<&str
     };
     st.db.upsert_message(&m)?;
     st.emit_message(true, &m);
+    skip_open_questions(&st, &id);
 
     if bot.is_group() {
         bot.updated_at = now_ms();
@@ -1637,6 +1638,18 @@ struct Answer {
     value: String,
 }
 
+/// The user wrote a message instead of answering: the chat's open question cards are closed as
+/// skipped (an answer tapped on a card is saved on it first, so that card isn't open any more).
+fn skip_open_questions(st: &Shared, chat: &str) {
+    let open = st.db.list_messages(chat, None, 100).unwrap_or_default().into_iter().filter(|m| m.role == "widget" && crate::tools::card_open(m));
+    for mut q in open {
+        q.status = "skipped".into();
+        if st.db.upsert_message(&q).is_ok() {
+            st.emit_message(false, &q);
+        }
+    }
+}
+
 /// The user tapped a quick-reply button (or typed a custom answer) on an ask_user card.
 async fn answer_widget(State(st): State<Shared>, UrlPath(id): UrlPath<String>, Json(a): Json<Answer>) -> ApiResult<Json<Message>> {
     let mut m = st.db.get_message(&id)?.ok_or_else(|| not_found("No such question"))?;
@@ -1645,6 +1658,9 @@ async fn answer_widget(State(st): State<Shared>, UrlPath(id): UrlPath<String>, J
     }
     if !m.meta["answer"].is_null() {
         return Err(bad("Already answered"));
+    }
+    if m.status == "skipped" || m.status == "closed" {
+        return Err(bad("This question was closed"));
     }
     let value = a.value.trim().to_string();
     if value.is_empty() {
@@ -2698,5 +2714,33 @@ mod permission_tests {
         for sneaky in ["git log; rm -rf ~", "git log && curl x", "git log | sh", "git log $(rm x)", "git log `rm x`", "git log > ~/.bashrc", "git log\nrm x"] {
             assert!(!super::rule_allows(&rules, "Bash", sneaky), "{sneaky}");
         }
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn writing_a_message_skips_open_questions() {
+        let d = std::env::temp_dir().join(format!("ob-skip-{}", crate::util::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        let q = |id: &str, answer: serde_json::Value| crate::db::Message {
+            id: id.into(),
+            bot_id: "b".into(),
+            role: "widget".into(),
+            text: "Which day?".into(),
+            html: String::new(),
+            status: "done".into(),
+            meta: json!({"question": "Which day?", "options": ["Mon"], "answer": answer}),
+            created_at: crate::util::now_ms(),
+        };
+        st.db.upsert_message(&q("open", json!(null))).unwrap();
+        st.db.upsert_message(&q("done", json!("Mon"))).unwrap();
+        super::skip_open_questions(&st, "b");
+        assert_eq!(st.db.get_message("open").unwrap().unwrap().status, "skipped");
+        assert_eq!(st.db.get_message("done").unwrap().unwrap().status, "done", "an answered card stays as it was");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
