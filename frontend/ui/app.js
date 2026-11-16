@@ -2215,7 +2215,7 @@
   };
   function sigOf(m) {
     const meta = m.meta || {};
-    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, (m.role === 'tool' || m.role === 'relay') && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? approvalAnswers.get(meta.approval_id) || '' : '', reactionsOf(m).map((r) => r.emoji + r.by).join(',')].join('|');
+    return [m.role, m.status, m.text ? m.text.length : 0, m.html ? m.html.length : 0, meta.answer == null ? '' : meta.answer, m._tmp ? 1 : 0, (m.role === 'tool' || m.role === 'relay') && S.expanded.has(m.id) ? 1 : 0, m.role === 'approval' ? (approvalAnswers.get(meta.approval_id) || '') + (meta.where && meta.where.open && S.thisComputer ? ':here' : '') : '', reactionsOf(m).map((r) => r.emoji + r.by).join(',')].join('|');
   }
 
   let renderQueued = false;
