@@ -28,6 +28,17 @@ The repo root holds only: `README.md`, `CLAUDE.md`, `LICENSE`, `Cargo.toml`, `Ca
 7. **No secrets** (tokens, API keys, pairing codes, recovery keys) in any tracked file.
 8. **Commits:** one topic per commit, plain-English message. No AI attribution lines.
 
+## Build lean
+
+Applies to the backend and the UI/UX alike. Plans follow it too.
+
+1. **Fix it where everything passes through**, once, not in every caller.
+2. **Add nothing the feature can work without:** no new crate, file, setting, API route, screen, toggle or dialog. Reuse the helpers and dependencies already here.
+3. **Nothing "for later":** no unused options, layers, flags or config.
+4. **Look for the simple clever fix first**, for example letting the OS or an existing check do the work, before writing new machinery.
+5. **Every fix gets a real test** that fails without it.
+6. **Skip what isn't worth it:** when a reported issue gives no real gain or is already covered, skip it and write down why.
+
 ## Before you commit
 
 ```bash
