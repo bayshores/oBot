@@ -182,7 +182,7 @@ mod tests {
         assert!(long.contains(&"x".repeat(MESSAGE_CHARS)) && !long.contains(&"x".repeat(MESSAGE_CHARS + 2)));
         assert!(prompt(&cfg, "Shop Bot", "/bots/shop", None, &[], "Bash", &json!({})).contains("oldest first:\n(none)"));
         // An action on the user's own computer names it and its folders.
-        let place = crate::api::Place { name: "proled".into(), kind: "Mac".into(), folders: vec!["/Users/sam/oBot/Shop Bot".into(), "/Users/sam/Code/site".into()] };
+        let place = crate::api::Place { name: "proled".into(), kind: "Mac".into(), folders: vec!["/Users/sam/oBot/Shop Bot".into(), "/Users/sam/Code/site".into()], open: None };
         let there = prompt(&cfg, "Shop Bot", "/bots/shop", Some(&place), &[], "mcp__obot__my_computer_run", &json!({"command": "ls"}));
         assert!(there.contains("Bot's working folder: /bots/shop\nThis action runs on the user's own Mac \"proled\", not on the bot's computer. There, the bot's working folders are: /Users/sam/oBot/Shop Bot, /Users/sam/Code/site\n\n"));
     }

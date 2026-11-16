@@ -148,6 +148,30 @@ pub fn check_folder(path: &str, data_dir: &Path) -> Result<PathBuf, String> {
     Ok(real)
 }
 
+/// The folder a card's "Open folder and allow" opens for `path`: a file's own folder, and a folder
+/// that doesn't exist yet is made when the one above it exists, so a Bot can start something new
+/// there. `check_folder` judges it after.
+fn folder_to_add(path: &str, data_dir: &Path) -> Result<String, String> {
+    let p = PathBuf::from(path.trim());
+    if !p.is_absolute() {
+        return Err("Give the folder's full path.".into());
+    }
+    if p.is_file() {
+        return Ok(p.parent().unwrap_or(&p).to_string_lossy().into_owned());
+    }
+    if !p.exists() {
+        let missing = || format!("There is no folder {}.", p.display());
+        let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else { return Err(missing()) };
+        let new = parent.canonicalize().map_err(|_| missing())?.join(name);
+        let data = data_dir.canonicalize().unwrap_or_else(|_| data_dir.to_path_buf());
+        if new.starts_with(&data) {
+            return Err(format!("{} holds oBot's own settings, so it can't be opened to Bots.", p.display()));
+        }
+        std::fs::create_dir(&new).map_err(|e| format!("Couldn't make {}: {e}", p.display()))?;
+    }
+    Ok(p.to_string_lossy().into_owned())
+}
+
 /// The real path a Bot means, if it is inside the folders. A path that doesn't start at the disk's
 /// root is inside the Bot's own folder. The file doesn't have to exist yet.
 fn resolve(r: &Roots, bot: &str, path: &str) -> Result<PathBuf, String> {
@@ -193,7 +217,7 @@ fn resolve(r: &Roots, bot: &str, path: &str) -> Result<PathBuf, String> {
     if !inside(&r.all, &out) {
         return Err(format!(
             "{} is outside the folders the user opened to Bots on this computer ({}). Nothing was done. \
-             Use one of those folders, or ask the user to add the folder in the oBot app on this computer: Settings › Computer.",
+             Use one of those folders, or give the folder's full path (as cwd for a command): oBot then asks the user to open it to you.",
             out.display(),
             r.all.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
         ));
@@ -485,7 +509,8 @@ fn this_name() -> String {
 fn sandbox_hint(output: &str) -> &'static str {
     if has_sandbox() && (output.contains("Operation not permitted") || output.contains("operation not permitted")) {
         "\n[oBot: Commands on this computer can write only in the folders the user opened to Bots and in temp folders, \
-         and can't read the user's other folders or keys. \"Operation not permitted\" usually means the command reached outside them.]"
+         and can't read the user's other folders or keys. \"Operation not permitted\" usually means the command reached outside them. \
+         To work in another folder, run the command again with that folder as cwd: oBot asks the user to open it to you.]"
     } else {
         ""
     }
@@ -1062,9 +1087,14 @@ pub async fn update(st: &Shared, body: &Value) -> Result<Value, String> {
         std::fs::create_dir_all(&home).map_err(|e| format!("Couldn't make {home}: {e}"))?;
         share.home = check_folder(&home, &st.data_dir)?.to_string_lossy().into_owned();
     }
-    if let Some(list) = body.get("folders").and_then(Value::as_array) {
+    let mut list: Option<Vec<String>> = body.get("folders").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect());
+    if let Some(add) = body.get("add_folder").and_then(Value::as_str) {
+        let folder = folder_to_add(add, &st.data_dir)?;
+        list.get_or_insert_with(|| share.folders.clone()).push(folder);
+    }
+    if let Some(list) = list {
         let mut folders: Vec<String> = vec![];
-        for f in list.iter().filter_map(Value::as_str) {
+        for f in &list {
             let real = check_folder(f, &st.data_dir)?.to_string_lossy().into_owned();
             if real != share.home && !folders.contains(&real) {
                 folders.push(real);
@@ -1134,6 +1164,36 @@ mod tests {
         }
         // A Bot's name can't lead out of the Bots' folder.
         assert_eq!(resolve(&r, "../../secret", "a").unwrap(), home.join("secret/a"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn a_card_opens_its_folder_here() {
+        let d = scratch("add");
+        let (data, work) = (d.join("data"), d.join("work"));
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(work.join("project")).unwrap();
+        std::fs::write(work.join("project/notes.md"), "x").unwrap();
+        let st = crate::state::test_state(&data);
+        let add = |p: PathBuf| {
+            let st = st.clone();
+            async move { update(&st, &json!({ "add_folder": p.to_string_lossy() })).await }
+        };
+        let folders = |v: Value| v["folders"].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let project = work.join("project").to_string_lossy().into_owned();
+        // A file opens its own folder; opening it again changes nothing.
+        assert_eq!(folders(add(work.join("project/notes.md")).await.unwrap()), vec![project.clone()]);
+        assert_eq!(folders(add(work.join("project")).await.unwrap()), vec![project.clone()]);
+        // A folder that doesn't exist yet is made, when the one above it exists.
+        let fresh = work.join("TESCstuff");
+        assert_eq!(folders(add(fresh.clone()).await.unwrap()), vec![project.clone(), fresh.to_string_lossy().into_owned()]);
+        assert!(fresh.is_dir());
+        assert!(add(work.join("nope/deeper")).await.is_err());
+        assert!(!work.join("nope").exists());
+        // Nothing is made inside oBot's own settings.
+        assert!(add(data.join("new")).await.is_err());
+        assert!(!data.join("new").exists());
+        assert_eq!(st.config.read().await.this_computer.folders.len(), 2);
         let _ = std::fs::remove_dir_all(&d);
     }
 

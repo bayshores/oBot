@@ -3323,6 +3323,7 @@
     WebFetch: ['globe', 'Web', 'open a web page'],
     WebSearch: ['globe', 'Web', 'search the web'],
     mcp__obot__my_computer_run: ['terminal', 'Your computer', 'run a command'],
+    mcp__obot__my_computer_read: ['file', 'Your computer', 'read a file'],
     mcp__obot__my_computer_write: ['file', 'Your computer', 'write a file'],
     mcp__obot__my_computer_copy: ['file', 'Your computer', 'copy a file'],
     mcp__obot__delete_bot: ['trash', 'Bots', 'delete a Bot'],
@@ -3335,6 +3336,18 @@
   };
   // Approval card
   const approvalAnswers = new Map(); // approval_id → 'allow' | 'always' | 'deny' | 'expired'
+  // Which computer this app is, for cards that open a folder on one: asked once, when such a card shows.
+  let thisComputerAsked = null;
+  function isThisComputer(name, m) {
+    if (!sharesThisComputer()) return false;
+    if (!S.thisComputer && !thisComputerAsked) {
+      thisComputerAsked = home('/api/this-computer')
+        .then((t) => (S.thisComputer = t))
+        .catch(() => null)
+        .then(() => upsertMessage(Object.assign({}, m)));
+    }
+    return !!S.thisComputer && S.thisComputer.name === name;
+  }
   function cutMiddle(text, max = 340) {
     if (text.length <= max) return text;
     const keep = Math.floor((max - 30) / 2);
@@ -3490,6 +3503,8 @@
     const [ic, , verb] = APPROVAL_VERB[tool] || (mcp ? ['bolt', '', `use ${mcp[2].replace(/_/g, ' ')}`] : ['bolt', '', `use ${tool || 'a tool'}`]);
     // An action on one of your own computers (not the Bots' computer) names it: "On proled (your Mac)".
     const there = meta.where && meta.where.name ? meta.where : null;
+    // A folder there that isn't open to Bots yet: only the oBot app on that computer can open it.
+    const opens = there && there.open ? there.open : '';
     const yours = there ? (/^(Mac|Windows PC|Linux PC)$/.test(there.kind || '') ? `your ${there.kind}` : 'your computer') : '';
     const source = there ? `On ${there.name} (${yours})` : shell ? 'Terminal' : APPROVAL_VERB[tool] ? APPROVAL_VERB[tool][1] : mcp ? mcp[1].replace(/[_-]/g, ' ') : 'Auto-review';
     const input = meta.input && typeof meta.input === 'object' ? meta.input : null;
@@ -3539,10 +3554,35 @@
             return;
           }
           buttons.forEach((x) => (x.disabled = false));
+          errLine.textContent = 'Your answer didn’t go through. Make sure you’re online, then retry.';
           errLine.hidden = false;
         }
       };
       if (rule) card.append(h('div', { class: 'rule-notice' }, h('div', { class: 'rule-notice-title' }, 'This will be added to your auto-approve rules'), h('div', { class: 'rule-notice-text' }, rule)));
+      if (opens) {
+        if (isThisComputer(there.name, m)) {
+          // Open the folder here first, then allow: the action runs once the card is answered.
+          const openAndAllow = async () => {
+            buttons.forEach((x) => (x.disabled = true));
+            errLine.hidden = true;
+            try {
+              S.thisComputer = await home('/api/this-computer', { method: 'PUT', body: { add_folder: opens } });
+            } catch (e) {
+              buttons.forEach((x) => (x.disabled = false));
+              errLine.textContent = `Couldn’t open the folder: ${(e && e.message) || 'unknown error'}`;
+              errLine.hidden = false;
+              return;
+            }
+            decide('allow');
+          };
+          buttons.push(h('button', { class: 'btn primary', onclick: openAndAllow }, 'Open folder and allow'));
+        } else {
+          card.append(h('div', { class: 'card-desc' }, `Answer this in the oBot app on ${there.name}: only it can open its folders.`));
+        }
+        buttons.push(h('button', { class: 'btn ghost', onclick: () => decide('deny') }, 'Deny'));
+        card.append(h('div', { class: 'card-actions' }, buttons), errLine);
+        return card;
+      }
       const calAct = cal && CAL_ACTION[cal.action];
       buttons.push(h('button', { class: 'btn primary', onclick: () => decide('allow') }, calAct ? calAct.allow : rule ? 'Allow once' : 'Allow'));
       if (rule) buttons.push(h('button', { class: 'btn', onclick: () => decide('always') }, 'Always allow'));
@@ -3557,7 +3597,7 @@
           'div',
           { class: 'card-settled' },
           h('span', { class: 'settled-pill ' + (ok ? 'ok' : status === 'denied' ? 'no' : '') }, ok ? icon('check', 13, '', 2.2) : status === 'denied' ? icon('x', 13, '', 2.2) : null, label),
-          status === 'skipped' ? h('span', { class: 'settled-note' }, 'You moved on without answering') : decided === 'always' && rule ? h('span', { class: 'settled-note' }, `Allowed from now on: ${rule}`) : decided === 'deny' ? h('span', { class: 'settled-note' }, `${botName} won’t do this`) : null
+          status === 'skipped' ? h('span', { class: 'settled-note' }, 'You moved on without answering') : ok && opens ? h('span', { class: 'settled-note' }, `Opened ${opens} to Bots`) : decided === 'always' && rule ? h('span', { class: 'settled-note' }, `Allowed from now on: ${rule}`) : decided === 'deny' ? h('span', { class: 'settled-note' }, `${botName} won’t do this`) : null
         )
       );
     }

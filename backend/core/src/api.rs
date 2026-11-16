@@ -1311,16 +1311,26 @@ pub struct Place {
     pub kind: String,
     /// The folders the Bot may use there; the first is its own.
     pub folders: Vec<String>,
+    /// A folder there that isn't open to Bots yet and that this action needs: the card opens it.
+    pub open: Option<String>,
 }
 
 /// `check_permission` for an action that runs at `place` (None = on this computer).
 pub(crate) async fn check_permission_at(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, always_ask: bool, place: Option<&Place>) -> anyhow::Result<bool> {
     let cfg = st.config.read().await.clone();
     let command = input.get("command").and_then(Value::as_str).unwrap_or("");
-    match cfg.permission_mode.as_str() {
-        "allow_all" => return Ok(true),
-        "never" => return Ok(false),
-        _ => {}
+    if cfg.permission_mode == "never" {
+        return Ok(false);
+    }
+    // Only the user, in the oBot app on that computer, can open a folder there: no rule or setting
+    // can, so this always shows the card.
+    if let Some((p, folder)) = place.and_then(|p| p.open.as_deref().map(|f| (p, f))) {
+        let summary = runner::tool_summary(tool_name, input, false);
+        let reason = format!("{folder} isn't open to Bots on {} yet. Allowing opens it to every Bot there.", p.name);
+        return ask_approval(st, bot_id, tool_name, &summary, input, "", &reason, place).await;
+    }
+    if cfg.permission_mode == "allow_all" {
+        return Ok(true);
     }
     if always_ask {
         let summary = runner::tool_summary(tool_name, input, false);
@@ -1401,7 +1411,7 @@ pub(crate) async fn ask_approval(
             "input": trim_value(input),
             "proposed_rule": proposed_rule,
             "reason": reason,
-            "where": place.map(|p| json!({ "name": p.name, "kind": p.kind })),
+            "where": place.map(|p| json!({ "name": p.name, "kind": p.kind, "open": p.open })),
         }),
         created_at: now_ms(),
     };

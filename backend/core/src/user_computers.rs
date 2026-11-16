@@ -255,7 +255,7 @@ pub fn note_for(st: &Shared, device: &str, bot_name: &str) -> String {
     match lock(&st.user_computers.computers).get(device).map(|s| s.info.clone()) {
         Some(i) if i.enabled => {
             let others = if i.folders.is_empty() { String::new() } else { format!(" Other folders there: {}.", i.folders.join(", ")) };
-            format!(" You can work there with the my_computer tools. Your folder there: {}.{others}", bot_folder(&i, bot_name))
+            format!(" You can work there with the my_computer tools. Your folder there: {}.{others} Another folder there: use its full path, and oBot asks the user to open it.", bot_folder(&i, bot_name))
         }
         Some(_) => " You can't work there: \"Let Bots work on this computer\" is off in its oBot app (Settings › Computer).".into(),
         None => String::new(),
@@ -274,7 +274,7 @@ pub fn tool_definitions() -> Vec<Value> {
                "description": "Run a shell command on the user's own computer (not yours), for work that belongs there: their files and projects on their Mac or PC. Runs in your folder on that computer unless you give cwd. Returns the exit code and output. For anything over a couple of minutes use background: true (you're woken up when it ends).",
                "inputSchema": {"type": "object", "properties": {
                    "command": {"type": "string"},
-                   "cwd": {"type": "string", "description": "Folder to run in: one the user opened to Bots there"},
+                   "cwd": {"type": "string", "description": "Folder to run in (full path). A folder not open to you yet: oBot asks the user to open it"},
                    "timeout_s": {"type": "integer", "description": "Default 120, max 600"},
                    "background": {"type": "boolean"},
                    "name": {"type": "string", "description": "Short name for a background command"},
@@ -439,19 +439,77 @@ async fn request(st: &Shared, device: &str, info: &Info, bot: &Bot, mut payload:
     }
 }
 
-fn place(info: &Info, bot: &Bot) -> Place {
+fn place(info: &Info, bot: &Bot, open: Option<String>) -> Place {
     let mut folders = vec![bot_folder(info, &bot.name)];
     folders.extend(info.folders.iter().cloned());
-    Place { name: info.name.clone(), kind: if info.platform.is_empty() { "computer".into() } else { info.platform.clone() }, folders }
+    Place { name: info.name.clone(), kind: if info.platform.is_empty() { "computer".into() } else { info.platform.clone() }, folders, open }
+}
+
+/// The folder to open to Bots on the user's computer for a full `path` that isn't in its open
+/// folders yet, so the card asking for the action can open it too. Judged from the text alone (this
+/// computer can't look at that disk), so it leaves anything unclear to that computer, as before: a
+/// relative or `~` path, `..` above the disk, the disk itself.
+/// `is_file`: Some(true) opens the file's folder, Some(false) the path itself, None guesses
+/// (a trailing slash or no dot in the last name is a folder).
+fn needs_folder(info: &Info, path: &str, is_file: Option<bool>) -> Option<String> {
+    let windows = path.contains('\\');
+    let plain = path.trim().replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "").replace('\\', "/");
+    let unix = plain.starts_with('/');
+    let drive = plain.as_bytes().get(1) == Some(&b':') && plain.as_bytes()[0].is_ascii_alphabetic() && matches!(plain.as_bytes().get(2), Some(b'/') | None);
+    if !unix && !drive {
+        return None;
+    }
+    let parts = |p: &str| -> Option<Vec<String>> {
+        let mut out: Vec<String> = vec![];
+        for c in p.split('/').filter(|c| !c.is_empty() && *c != ".") {
+            if c == ".." {
+                out.pop()?;
+            } else {
+                out.push(c.to_string());
+            }
+        }
+        Some(out)
+    };
+    let mut want = parts(&plain)?;
+    // Folders on a Mac or Windows PC ignore upper and lower case.
+    let fold = |v: &[String]| -> Vec<String> { if info.platform.starts_with("Linux") { v.to_vec() } else { v.iter().map(|c| c.to_lowercase()).collect() } };
+    let open = std::iter::once(&info.home).chain(&info.folders).filter_map(|f| parts(&f.replace("\\\\?\\UNC\\", "\\\\").replace("\\\\?\\", "").replace('\\', "/")));
+    let target = fold(&want);
+    if open.into_iter().any(|f| !f.is_empty() && target.starts_with(&fold(&f))) {
+        return None;
+    }
+    let file = is_file.unwrap_or_else(|| !path.trim_end().ends_with(['/', '\\']) && want.last().is_some_and(|n| n.contains('.')));
+    if file {
+        want.pop();
+    }
+    // Never offer a whole disk ("/", "C:").
+    if want.len() < if drive { 2 } else { 1 } {
+        return None;
+    }
+    Some(if windows { want.join("\\") } else if drive { want.join("/") } else { format!("/{}", want.join("/")) })
 }
 
 /// The usual permission check, for an action on the user's computer. A computer that can't keep
-/// commands inside its folders (no sandbox) always asks before a command.
-async fn allowed(st: &Shared, bot: &Bot, info: &Info, tool: &str, input: &Value, is_command: bool) -> Result<(), String> {
-    let ok = crate::api::check_permission_at(st, &bot.id, &format!("mcp__obot__{tool}"), input, is_command && !info.sandbox, Some(&place(info, bot)))
+/// commands inside its folders (no sandbox) always asks before a command. With `open` (a folder that
+/// isn't open to Bots there yet) the card also opens it; the action then runs there.
+async fn allowed(st: &Shared, bot: &Bot, device: &str, info: &Info, tool: &str, input: &Value, is_command: bool, open: Option<String>) -> Result<(), String> {
+    let place = place(info, bot, open);
+    let ok = crate::api::check_permission_at(st, &bot.id, &format!("mcp__obot__{tool}"), input, is_command && !info.sandbox, Some(&place))
         .await
         .map_err(|e| e.to_string())?;
-    if ok { Ok(()) } else { Err(DENIED.into()) }
+    if !ok {
+        return Err(DENIED.into());
+    }
+    // That computer opened the folder before the card was answered. Its own word on it comes a moment
+    // later; until then, note it here so the Bot's next action there doesn't ask again.
+    if let Some(folder) = place.open {
+        if let Some(slot) = lock(&st.user_computers.computers).get_mut(device) {
+            if !slot.info.folders.contains(&folder) {
+                slot.info.folders.push(folder);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<String, String> {
@@ -485,12 +543,17 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
             if background {
                 input["background"] = json!(true);
             }
-            allowed(st, bot, &info, name, &input, true).await?;
+            allowed(st, bot, &device, &info, name, &input, true, needs_folder(&info, cwd, Some(false))).await?;
             let payload = json!({ "kind": "run", "command": command, "cwd": cwd, "timeout_s": secs, "background": background, "name": s(args, "name") });
             request(st, &device, &info, bot, payload, Duration::from_secs(if background { 60 } else { secs + 30 }), None).await
         }
         "my_computer_read" => {
-            let payload = json!({ "kind": "read", "path": s(args, "path"), "offset": args.get("offset"), "limit": args.get("limit") });
+            let path = s(args, "path");
+            // Reading asks only when it needs a folder opened first.
+            if let Some(open) = needs_folder(&info, path, None) {
+                allowed(st, bot, &device, &info, name, &json!({ "path": path, "computer": info.name }), false, Some(open)).await?;
+            }
+            let payload = json!({ "kind": "read", "path": path, "offset": args.get("offset"), "limit": args.get("limit") });
             request(st, &device, &info, bot, payload, Duration::from_secs(60), None).await
         }
         "my_computer_write" => {
@@ -498,7 +561,8 @@ pub async fn tool(st: &Shared, bot: &Bot, name: &str, args: &Value) -> Result<St
             if path.is_empty() {
                 return Err("Give a path.".into());
             }
-            allowed(st, bot, &info, name, &json!({ "path": path, "content": content, "computer": info.name }), false).await?;
+            let input = json!({ "path": path, "content": content, "computer": info.name });
+            allowed(st, bot, &device, &info, name, &input, false, needs_folder(&info, path, Some(true))).await?;
             request(st, &device, &info, bot, json!({ "kind": "write", "path": path, "content": content }), Duration::from_secs(60), None).await
         }
         "my_computer_copy" => copy(st, bot, &device, &info, args).await,
@@ -533,7 +597,7 @@ async fn copy(st: &Shared, bot: &Bot, device: &str, info: &Info, args: &Value) -
                 return Err(format!("{} is too big to copy ({} bytes; the limit is {} MB).", src.display(), meta.len(), MAX_FILE_BYTES / 1024 / 1024));
             }
             let input = json!({ "to": "computer", "source": src.to_string_lossy(), "destination": destination, "computer": info.name });
-            allowed(st, bot, info, "my_computer_copy", &input, false).await?;
+            allowed(st, bot, device, info, "my_computer_copy", &input, false, needs_folder(info, destination, None)).await?;
             let name = src.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             let payload = json!({ "kind": "receive", "path": destination, "name": name });
             let saved = request(st, device, info, bot, payload, Duration::from_secs(600), Some(FileJob::FromBot { path: src.clone(), workdir })).await?;
@@ -553,6 +617,11 @@ async fn copy(st: &Shared, bot: &Bot, device: &str, info: &Info, args: &Value) -
             let dir = dest.parent().ok_or("That destination has no folder.")?.to_path_buf();
             std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make {}: {e}", dir.display()))?;
             let dest = in_workdir(&workdir, &dest)?;
+            // Copying from there asks only when it needs a folder opened first.
+            if let Some(open) = needs_folder(info, source, Some(true)) {
+                let input = json!({ "to": "bot", "path": source, "source": source, "destination": dest.to_string_lossy(), "computer": info.name });
+                allowed(st, bot, device, info, "my_computer_copy", &input, false, Some(open)).await?;
+            }
             let got = request(st, device, info, bot, json!({ "kind": "send", "path": source }), Duration::from_secs(600), Some(FileJob::ToBot { path: dest.clone(), workdir })).await?;
             Ok(format!("Copied {got} to {} in your working folder.", dest.display()))
         }
@@ -589,6 +658,76 @@ mod tests {
         assert!(in_workdir(&work, &work.join("link")).is_err());
         symlink(&other, work.join("dir")).unwrap();
         assert!(in_workdir(&work, &work.join("dir/secret")).is_err());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_full_path_outside_the_open_folders_names_the_folder_to_open() {
+        let mac = Info { platform: "Mac".into(), home: "/Users/sam/oBot".into(), folders: vec!["/Users/sam/Code/site".into()], ..Default::default() };
+        // Inside: the Bots' folder, an added folder (any case), and a path that only looks outside.
+        assert_eq!(needs_folder(&mac, "/Users/sam/oBot/Life Admin/a.md", Some(true)), None);
+        assert_eq!(needs_folder(&mac, "/users/SAM/code/site/x/y.md", Some(true)), None);
+        assert_eq!(needs_folder(&mac, "/Users/sam/Other/../Code/site/a.md", Some(true)), None);
+        // Left to that computer: relative, `~`, above the disk, the disk itself.
+        for p in ["notes/a.md", "~/Code/x.md", "/../x", "/", ""] {
+            assert_eq!(needs_folder(&mac, p, None), None, "{p}");
+        }
+        // Outside: a file opens its folder, a command's folder opens itself.
+        assert_eq!(needs_folder(&mac, "/Users/sam/Code/TESCstuff/plan.md", Some(true)).as_deref(), Some("/Users/sam/Code/TESCstuff"));
+        assert_eq!(needs_folder(&mac, "/Users/sam/Code/TESCstuff", Some(false)).as_deref(), Some("/Users/sam/Code/TESCstuff"));
+        assert_eq!(needs_folder(&mac, "/Users/sam/Code/sitemap", Some(false)).as_deref(), Some("/Users/sam/Code/sitemap"), "a name that starts like an open folder");
+        // Reading guesses: a dot in the last name is a file, a trailing slash a folder.
+        assert_eq!(needs_folder(&mac, "/Users/sam/Docs/tax.pdf", None).as_deref(), Some("/Users/sam/Docs"));
+        assert_eq!(needs_folder(&mac, "/Users/sam/Docs", None).as_deref(), Some("/Users/sam/Docs"));
+        assert_eq!(needs_folder(&mac, "/Users/sam/proj.v2/", None).as_deref(), Some("/Users/sam/proj.v2"));
+        // A Windows PC keeps its folders as \\?\C:\..., and its paths come either way round.
+        let pc = Info { platform: "Windows PC".into(), home: "\\\\?\\C:\\Users\\sam\\oBot".into(), folders: vec!["\\\\?\\C:\\Users\\sam\\Code".into()], ..Default::default() };
+        assert_eq!(needs_folder(&pc, "C:\\Users\\Sam\\Code\\x.txt", Some(true)), None);
+        assert_eq!(needs_folder(&pc, "C:/Users/sam/oBot/a.txt", Some(true)), None);
+        assert_eq!(needs_folder(&pc, "C:\\Users\\sam\\Docs\\a.txt", Some(true)).as_deref(), Some("C:\\Users\\sam\\Docs"));
+        assert_eq!(needs_folder(&pc, "C:\\a.txt", Some(true)), None, "never the whole disk");
+    }
+
+    #[tokio::test]
+    async fn opening_a_folder_always_asks_and_is_remembered() {
+        let d = std::env::temp_dir().join(format!("obot-uc-open-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.permission_mode = "allow_all".into();
+        let info = Info { name: "proled".into(), platform: "Mac".into(), enabled: true, home: "/Users/sam/oBot".into(), ..Default::default() };
+        lock(&st.user_computers.computers).insert("dev".into(), Slot { info: info.clone(), last_poll: now_ms(), queue: VecDeque::new(), cancels: vec![], wake: Arc::new(Notify::new()) });
+        let cfg = crate::config::Config { workspace_root: d.join("bots").to_string_lossy().into(), ..Default::default() };
+        let bot = crate::bots::build(&st.db, &cfg, &crate::bots::NewBot { name: "Life Admin".into(), ..Default::default() }).unwrap();
+        // The user answers the card: "Always allow" for everything still shows it, naming the folder.
+        let answer = {
+            let st = st.clone();
+            tokio::spawn(async move {
+                loop {
+                    let id = st.approvals.lock().await.keys().next().cloned();
+                    if let Some(id) = id {
+                        let p = st.approvals.lock().await.remove(&id).unwrap();
+                        let card = st.db.get_message(&p.message_id).unwrap().unwrap();
+                        let _ = p.reply.send(true);
+                        return card.meta;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+        };
+        let input = json!({ "path": "/Users/sam/Code/TESCstuff/plan.md", "computer": "proled" });
+        let open = needs_folder(&info, "/Users/sam/Code/TESCstuff/plan.md", Some(true));
+        allowed(&st, &bot, "dev", &info, "my_computer_write", &input, false, open.clone()).await.unwrap();
+        let meta = tokio::time::timeout(Duration::from_secs(2), answer).await.expect("a card was shown").unwrap();
+        assert_eq!(meta["where"]["open"], "/Users/sam/Code/TESCstuff");
+        assert_eq!(meta["proposed_rule"], "", "no \"Always allow\" on a folder card");
+        // The next action there doesn't ask again before that computer says hello.
+        let known = lock(&st.user_computers.computers)["dev"].info.clone();
+        assert_eq!(known.folders, vec!["/Users/sam/Code/TESCstuff".to_string()]);
+        assert_eq!(needs_folder(&known, "/Users/sam/Code/TESCstuff/b.md", Some(true)), None);
+        // "Never allow" still says no, without a card.
+        st.config.write().await.permission_mode = "never".into();
+        assert!(allowed(&st, &bot, "dev", &info, "my_computer_write", &input, false, open).await.is_err());
+        assert!(st.approvals.lock().await.is_empty());
         let _ = std::fs::remove_dir_all(&d);
     }
 
