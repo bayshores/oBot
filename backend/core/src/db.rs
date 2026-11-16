@@ -482,13 +482,24 @@ impl Db {
         Ok(())
     }
 
-    pub fn search_messages(&self, q: &str, limit: i64) -> anyhow::Result<Vec<Message>> {
+    /// The user's and Bots' messages that contain every one of `parts`, newest first; only one
+    /// chat's when `chat` is given.
+    pub fn search_messages(&self, parts: &[&str], chat: Option<&str>, limit: i64) -> anyhow::Result<Vec<Message>> {
         let c = self.c();
-        let like = format!("%{}%", q.replace('%', "\\%").replace('_', "\\_"));
-        let mut st = c.prepare(
-            "SELECT * FROM messages WHERE role IN ('user','bot') AND text LIKE ?1 ESCAPE '\\' ORDER BY created_at DESC LIMIT ?2",
-        )?;
-        let v = st.query_map(params![like, limit], row_to_msg)?.collect::<Result<Vec<_>, _>>()?;
+        let mut sql = String::from("SELECT * FROM messages WHERE role IN ('user','bot')");
+        let mut args: Vec<String> = vec![];
+        if let Some(chat) = chat {
+            args.push(chat.to_string());
+            sql.push_str(&format!(" AND bot_id = ?{}", args.len()));
+        }
+        for p in parts {
+            args.push(format!("%{}%", p.replace('%', "\\%").replace('_', "\\_")));
+            sql.push_str(&format!(" AND text LIKE ?{} ESCAPE '\\'", args.len()));
+        }
+        args.push(limit.to_string());
+        sql.push_str(&format!(" ORDER BY created_at DESC LIMIT ?{}", args.len()));
+        let mut st = c.prepare(&sql)?;
+        let v = st.query_map(rusqlite::params_from_iter(args.iter()), row_to_msg)?.collect::<Result<Vec<_>, _>>()?;
         Ok(v)
     }
 

@@ -374,6 +374,7 @@ Every bot gets these tools from oBot (`backend/core/src/tools.rs`); they never n
 | Tool | What it does |
 |---|---|
 | `ask_user {question, options[], allow_custom?}` | tap-to-answer card (a `widget` message); the result gives its card id |
+| `search_chats {query}` | search the bot's own chat (every message the user and the bot wrote, also from before a summary or a fresh chat): messages with all the words, newest 20, each with its time and up to 300 characters around the first word |
 | `close_card {id, note?}` | close one of the bot's own open question cards or secure forms that no longer applies; the card shows "Closed by <Bot>" and the note |
 | `send_message {text}` | a chat message while the Bot keeps working (a `bot` message with `meta.update`; no notification) |
 | `send_file {path, caption?}` · `show_page {title, html \| path, emoji_ok?}` | file in the chat · sandboxed page (a summary, diagram, chart, table or small app). `html` is content only and gets oBot's look. Pictures (`<img src>` with a web address or a file path) are saved with the page. The call is refused, with a message telling the bot what to fix, when the page has emoji (unless `emoji_ok`, for when the user asked for them), an icon name that doesn't exist, a picture that can't be loaded (or more than 40 pictures), or `html` that is a whole document. To show pictures inside a reply, bots write markdown images instead (see `html` above) |

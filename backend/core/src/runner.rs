@@ -722,6 +722,7 @@ pub fn activity_for(name: &str) -> (&'static str, String) {
         "mcp__obot__remember" | "mcp__obot__recall" | "mcp__obot__forget" | "mcp__obot__update_memory" => ("thinking", "Remembering".into()),
         "mcp__obot__save_skill" => ("working", "Saving a skill".into()),
         "mcp__obot__close_card" => ("working", "Closing a question".into()),
+        "mcp__obot__search_chats" => ("thinking", "Searching past chats".into()),
         "mcp__obot__list_bots" | "mcp__obot__get_bot" => ("reading_file", "Looking at your Bots".into()),
         "mcp__obot__create_bot" => ("working", "Setting up a Bot".into()),
         "mcp__obot__message_bot" => ("working", "Messaging another Bot".into()),
@@ -1258,15 +1259,15 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
     );
     s.push_str(
         "\noBot's tools (mcp__obot__*): ask_user (tap-to-answer buttons), send_file, send_message, show_page, \
-         remember / recall / update_memory / forget, save_skill, check_back_later (wake yourself later), \
+         remember / recall / update_memory / forget, search_chats, save_skill, close_card, check_back_later (wake yourself later), \
          run_in_background (commands over a few minutes; you're woken with the result. Use it instead of your \
          shell's own background option, which keeps you busy so the user's messages wait), create_routine / \
          list_routines / update_routine / delete_routine (recurring tasks) and set_status. Remember useful facts \
          about the user without being asked, send files instead of pasting long content, and when you promise to \
          follow up, schedule it with check_back_later.\n\
          Memory: your profile (standing rules and core facts, below) and your log (everything else; only the \
-         newest entries are below, so search it with recall before saying you don't know something the user told \
-         you). Facts are yours alone unless saved with about:'user', which every one of the user's Bots sees: only \
+         newest entries are below, so search it with recall, and past chats with search_chats, before saying you \
+         don't know something the user told you). Facts are yours alone unless saved with about:'user', which every one of the user's Bots sees: only \
          for what every Bot needs. Steps for doing a task go in a skill, not in memory.\n\
          \nThe user's other Bots: list_bots and get_bot (see them), create_bot (with its instructions, private \
          memories and routines), update_bot, delete_bot (the user always confirms), move_routine, and the \"bot\" \

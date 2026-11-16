@@ -2613,7 +2613,7 @@ async fn search(State(st): State<Shared>, Query(q): Query<HashMap<String, String
         .into_iter()
         .filter(|b| b.name.to_lowercase().contains(&lower))
         .collect();
-    let messages = st.db.search_messages(&q, 50)?;
+    let messages = st.db.search_messages(&[q.as_str()], None, 50)?;
     Ok(Json(json!({ "bots": bots, "messages": messages })))
 }
 

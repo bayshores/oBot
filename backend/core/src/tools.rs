@@ -98,6 +98,13 @@ pub fn definitions() -> Value {
             "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}
         },
         {
+            "name": "search_chats",
+            "description": "Search your whole chat with the user, including older conversations that were summarized or started fresh, and what your routines posted. Give a few words: messages with all of them are listed, newest first. Search before saying you don't remember something the user told you or something you did.",
+            "inputSchema": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "A few words, like 'dentist appointment'"}
+            }, "required": ["query"]}
+        },
+        {
             "name": "close_card",
             "description": "Close a question card (ask_user) or secure form (request_form) you posted that is still open, when it no longer applies: the user answered another way, you found the answer yourself, or the task changed. The user sees it closed, with your note.",
             "inputSchema": {"type": "object", "properties": {
@@ -413,6 +420,28 @@ pub fn card_open(m: &Message) -> bool {
     }
 }
 
+/// One search hit: when, who, and up to 300 characters around the first word found.
+fn chat_hit(m: &Message, word: &str) -> String {
+    let when = crate::util::local_time(m.created_at).format("%Y-%m-%d %H:%M");
+    let who = if m.role == "user" { "User" } else { "You" };
+    let text = m.text.replace('\n', " ");
+    let chars: Vec<char> = text.chars().collect();
+    // Lowercase letter by letter, so positions match the original text.
+    let low: Vec<char> = chars.iter().map(|c| c.to_lowercase().next().unwrap_or(*c)).collect();
+    let w: Vec<char> = word.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect();
+    let at = (!w.is_empty()).then(|| low.windows(w.len()).position(|x| x == w.as_slice())).flatten().unwrap_or(0);
+    let start = at.saturating_sub(100);
+    let end = (start + 300).min(chars.len());
+    let mut snip: String = chars[start..end].iter().collect();
+    if start > 0 {
+        snip = format!("…{snip}");
+    }
+    if end < chars.len() {
+        snip.push('…');
+    }
+    format!("[{when}] {who}: {snip}")
+}
+
 /// A Bot changes or deletes only its own facts and the shared ones, never another Bot's private
 /// facts (it could be talked into it by a page it read).
 fn mine_or_shared(state: &Shared, bot_id: &str, id: &str) -> Result<(), String> {
@@ -681,6 +710,18 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             } else {
                 Err("No memory with that id".into())
             }
+        }
+
+        "search_chats" => {
+            let words: Vec<&str> = s(args, "query").split_whitespace().take(8).collect();
+            if words.is_empty() {
+                return Err("search_chats needs a few words".into());
+            }
+            let found = state.db.search_messages(&words, Some(bot_id), 20).map_err(|e| e.to_string())?;
+            if found.is_empty() {
+                return Ok(format!("No message in your chat has all of: {}. Try fewer or other words.", words.join(" ")));
+            }
+            Ok(found.iter().map(|m| chat_hit(m, words[0])).collect::<Vec<_>>().join("\n"))
         }
 
         "close_card" => {
@@ -1127,6 +1168,33 @@ mod tests {
         assert!(out.starts_with("Moved to B"), "{out}");
         assert!(st.db.memories_for(&a.id).unwrap().iter().all(|m| m.text != "Lives in San Diego"));
         assert!(st.db.memories_for(&b.id).unwrap().iter().any(|m| m.text == "Lives in San Diego" && m.bot_id.as_deref() == Some(b.id.as_str())));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn search_chats_finds_only_this_bots_messages_with_every_word() {
+        let d = std::env::temp_dir().join(format!("ob-search-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.workspace_root = d.join("bots").to_string_lossy().into();
+        let a = crate::bots::create(&st, &crate::bots::NewBot { name: "A".into(), ..Default::default() }).await.unwrap();
+        let b = crate::bots::create(&st, &crate::bots::NewBot { name: "B".into(), ..Default::default() }).await.unwrap();
+        let say = |bot: &str, role: &str, text: &str, at: i64| {
+            st.db.upsert_message(&Message { id: new_id(), bot_id: bot.into(), role: role.into(), text: text.into(), html: String::new(), status: "done".into(), meta: json!({}), created_at: at }).unwrap();
+        };
+        say(&a.id, "user", "Book the Dentist for Friday please", 1_000);
+        say(&a.id, "bot", "Booked the dentist cleaning on Friday at 9.", 2_000);
+        say(&a.id, "user", "dentist was fine", 3_000);
+        say(&b.id, "user", "Dentist on Friday?", 4_000);
+        let out = run(&st, &a.id, "search_chats", &json!({"query": "friday DENTIST"})).await.unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "{out}");
+        assert!(lines[0].contains("You: Booked the dentist") && lines[1].contains("User: Book the Dentist"), "{out}");
+        assert!(run(&st, &a.id, "search_chats", &json!({"query": "zebra"})).await.unwrap().starts_with("No message"));
+        // A long message shows the part around the word.
+        let long = format!("{} the ÉCOLE address is 5 Main St {}", "ä".repeat(400), "x".repeat(400));
+        let hit = chat_hit(&Message { id: "m".into(), bot_id: a.id.clone(), role: "user".into(), text: long, html: String::new(), status: "done".into(), meta: json!({}), created_at: 0 }, "école");
+        assert!(hit.contains("ÉCOLE address") && hit.contains('…'), "{hit}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
