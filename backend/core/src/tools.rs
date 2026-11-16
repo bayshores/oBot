@@ -413,6 +413,17 @@ pub fn card_open(m: &Message) -> bool {
     }
 }
 
+/// A Bot changes or deletes only its own facts and the shared ones, never another Bot's private
+/// facts (it could be talked into it by a page it read).
+fn mine_or_shared(state: &Shared, bot_id: &str, id: &str) -> Result<(), String> {
+    let mems = state.db.memories_for(bot_id).map_err(|e| e.to_string())?;
+    if mems.iter().any(|m| m.id == id) {
+        Ok(())
+    } else {
+        Err("No memory of yours with that id. Another Bot's private facts can only be changed by that Bot.".into())
+    }
+}
+
 /// Most characters in one memory.
 pub const MAX_FACT: usize = 500;
 
@@ -644,6 +655,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
             if !fact.is_empty() {
                 fact_fits(fact)?;
             }
+            mine_or_shared(state, bot_id, id)?;
             let fact = (!fact.is_empty()).then(|| fact.to_string());
             // Handing a fact to one Bot is a move, not a copy and a forget, so it can't get lost halfway.
             let to = if s(args, "bot").is_empty() { None } else { Some(find_bot(state, s(args, "bot"))?) };
@@ -662,6 +674,7 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
         }
 
         "forget" => {
+            mine_or_shared(state, bot_id, s(args, "id"))?;
             if state.db.delete_memory(s(args, "id")).map_err(|e| e.to_string())? {
                 state.emit("memories.updated", json!({"bot_id": bot_id}));
                 Ok("Forgotten.".into())
@@ -1101,6 +1114,12 @@ mod tests {
         assert_eq!(st.db.memories_for(&a.id).unwrap().len(), 2);
         let id = st.db.memories_for(&a.id).unwrap()[0].id.clone();
         assert!(run(&st, &a.id, "update_memory", &json!({"id": id, "fact": "y".repeat(MAX_FACT + 1)})).await.is_err());
+
+        // B can't change or delete A's private fact.
+        let private = st.db.memories_for(&a.id).unwrap().into_iter().find(|m| m.bot_id.is_some()).unwrap();
+        assert!(run(&st, &b.id, "update_memory", &json!({"id": private.id, "fact": "Changed"})).await.is_err());
+        assert!(run(&st, &b.id, "forget", &json!({"id": private.id})).await.is_err());
+        assert!(st.db.memories_for(&a.id).unwrap().iter().any(|m| m.id == private.id && m.text == private.text));
 
         // A shared fact handed to one Bot moves in one step: only B sees it now, nothing is lost.
         let shared = st.db.memories_for(&a.id).unwrap().into_iter().find(|m| m.bot_id.is_none()).unwrap();
