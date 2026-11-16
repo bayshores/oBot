@@ -412,10 +412,16 @@
   const MODEL_CHOICES = [
     ['claude-sonnet-5-5', 'Sonnet 5.5'],
     ['claude-opus-5-5', 'Opus 5.5'],
-    ['claude-fable-5-1', 'Fable 5.1'],
+    ['claude-fable-5-2', 'Fable 5.2'],
     ['claude-haiku-5-5', 'Haiku 5.5'],
   ];
-  const OLD_MODELS = { opus: 'Opus (latest)', sonnet: 'Sonnet (latest)', haiku: 'Haiku (latest)', fable: 'Fable (latest)' };
+  const OLD_MODELS = {
+    opus: 'Opus (latest)',
+    sonnet: 'Sonnet (latest)',
+    haiku: 'Haiku (latest)',
+    fable: 'Fable (latest)',
+    'claude-fable-5-1': 'Fable 5.1',
+  };
   const EFFORTS = [
     ['low', 'Low'],
     ['medium', 'Medium'],
