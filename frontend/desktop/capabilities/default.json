@@ -7,7 +7,6 @@
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
-    "notification:default",
     "dialog:allow-open",
     "allow-notify",
     "allow-set-badge",

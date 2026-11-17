@@ -671,8 +671,8 @@
     S.lastNotify.set(bot.id, Date.now());
     let text = String(body || '').replace(/\s+/g, ' ').trim();
     if (text.length > 140) text = text.slice(0, 139) + '…';
-    if (kind === 'done') invoke('notify', { title: bot.name, body: text || 'Open oBot to see what it did' });
-    else invoke('notify', { title: `${bot.name} is waiting for you`, body: text || 'Waiting for you' });
+    if (kind === 'done') invoke('notify', { title: bot.name, body: text || 'Open oBot to see what it did', botId: bot.id });
+    else invoke('notify', { title: `${bot.name} is waiting for you`, body: text || 'Waiting for you', botId: bot.id });
   }
 
   // ───────────────────────────── toasts + tooltips ─────────────────────────────
@@ -5595,6 +5595,8 @@
   const USAGE_URL = 'https://claude.ai/settings/usage';
   // The desktop app's menu bar (oBot › Settings…, Connect to Remote Computer…) calls this.
   window.obotOpenSettings = (tab) => openSettings(tab);
+  // A notification was clicked (desktop app): open its Bot.
+  window.obotOpenBot = (id) => S.booted && S.bots.has(id) && selectBot(id);
   function openSettings(tab) {
     tab = TAB_ALIAS[tab] || tab;
     if (S.settingsUI) {

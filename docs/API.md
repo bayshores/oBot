@@ -593,7 +593,7 @@ The app's viewer (noVNC) is view-only until the user chooses Use screen.
 ## Desktop bridge (only inside the oBot desktop app)
 
 When `window.__TAURI_INTERNALS__` exists, the UI can call:
-* `invoke('notify', {title, body})` → OS notification (send when a bot finishes or needs you and the window isn't focused)
+* `invoke('notify', {title, body, botId})` → OS notification (send when a bot finishes or needs you and the window isn't focused). On a Mac, clicking it opens that Bot (the app calls `window.obotOpenBot(id)`), and closing the window only hides the app, so notifications keep coming; clicking the Dock icon brings it back
 * `invoke('set_badge', {count})` → Dock/taskbar number = total unread across bots
 * `invoke('is_focused')` → boolean
 * `invoke('open_url', {url})` → opens an http(s) link in the default browser

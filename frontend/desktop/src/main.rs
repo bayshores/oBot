@@ -11,12 +11,104 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::webview::NewWindowResponse;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_notification::NotificationExt;
 
-/// Show an OS notification (called by the UI when a bot finishes or needs you).
+/// Show an OS notification (called by the UI when a bot finishes or needs you). On a Mac, clicking it
+/// opens that Bot.
 #[tauri::command]
-fn notify(app: tauri::AppHandle, title: String, body: String) {
-    let _ = app.notification().builder().title(title).body(body).show();
+#[cfg_attr(target_os = "macos", allow(unused_variables))]
+fn notify(app: tauri::AppHandle, title: String, body: String, bot_id: Option<String>) {
+    #[cfg(target_os = "macos")]
+    mac_notify::show(&title, &body, bot_id.as_deref().unwrap_or(""));
+    #[cfg(not(target_os = "macos"))]
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app.notification().builder().title(title).body(body).show();
+    }
+}
+
+/// Notifications on a Mac, through Apple's UserNotifications framework. Each Bot's notifications are
+/// grouped together, and clicking one opens that Bot.
+#[cfg(target_os = "macos")]
+mod mac_notify {
+    use std::sync::OnceLock;
+
+    use block2::{DynBlock, RcBlock};
+    use objc2::rc::Retained;
+    use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject};
+    use objc2::{define_class, msg_send, AllocAnyThread};
+    use objc2_foundation::{NSError, NSString};
+    use objc2_user_notifications::{
+        UNAuthorizationOptions, UNMutableNotificationContent, UNNotification, UNNotificationPresentationOptions, UNNotificationRequest,
+        UNNotificationResponse, UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    };
+
+    static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+    define_class!(
+        #[unsafe(super(NSObject))]
+        #[name = "OBotNotificationDelegate"]
+        struct Delegate;
+
+        unsafe impl NSObjectProtocol for Delegate {}
+
+        unsafe impl UNUserNotificationCenterDelegate for Delegate {
+            // Also while oBot is in front: the page already stays quiet about the Bot you're looking at.
+            #[unsafe(method(userNotificationCenter:willPresentNotification:withCompletionHandler:))]
+            fn will_present(&self, _center: &UNUserNotificationCenter, _n: &UNNotification, done: &DynBlock<dyn Fn(UNNotificationPresentationOptions)>) {
+                done.call((UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::List | UNNotificationPresentationOptions::Sound,));
+            }
+
+            #[unsafe(method(userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:))]
+            fn did_receive(&self, _center: &UNUserNotificationCenter, response: &UNNotificationResponse, done: &DynBlock<dyn Fn()>) {
+                let bot = response.notification().request().content().threadIdentifier().to_string();
+                if let Some(app) = APP.get() {
+                    super::open_bot(app, &bot);
+                }
+                done.call(());
+            }
+        }
+    );
+
+    /// Take the clicks, and ask once to show notifications (macOS asks the user only the first time).
+    pub fn init(app: &tauri::AppHandle) {
+        let _ = APP.set(app.clone());
+        let center = UNUserNotificationCenter::currentNotificationCenter();
+        let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(), init] };
+        center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        // The center holds it weakly: it lives as long as the app.
+        std::mem::forget(delegate);
+        let answered = RcBlock::new(|_allowed: Bool, _err: *mut NSError| {});
+        center.requestAuthorizationWithOptions_completionHandler(UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound | UNAuthorizationOptions::Badge, &answered);
+    }
+
+    pub fn show(title: &str, body: &str, bot_id: &str) {
+        let content = UNMutableNotificationContent::new();
+        content.setTitle(&NSString::from_str(title));
+        content.setBody(&NSString::from_str(body));
+        content.setThreadIdentifier(&NSString::from_str(bot_id));
+        content.setSound(Some(&UNNotificationSound::defaultSound()));
+        let id = format!("{bot_id}-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let request = UNNotificationRequest::requestWithIdentifier_content_trigger(&NSString::from_str(&id), &content, None);
+        UNUserNotificationCenter::currentNotificationCenter().addNotificationRequest_withCompletionHandler(&request, None);
+    }
+}
+
+/// Bring the oBot window forward (it may be hidden or minimized).
+fn show_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    let w = app.get_webview_window("main")?;
+    let _ = w.unminimize();
+    let _ = w.show();
+    let _ = w.set_focus();
+    Some(w)
+}
+
+/// A notification was clicked: show the window on that Bot.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn open_bot(app: &tauri::AppHandle, bot_id: &str) {
+    let Some(w) = show_window(app) else { return };
+    if !bot_id.is_empty() && bot_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        let _ = w.eval(format!("window.obotOpenBot && window.obotOpenBot('{bot_id}')"));
+    }
 }
 
 /// A page sent with the "Send to oBot" bookmark (obot://share#<page>) that the window hasn't
@@ -221,8 +313,10 @@ fn main() {
 
     let url = format!("http://127.0.0.1:{}/?token={}", server.addr.port(), server.token);
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
+    let builder = tauri::Builder::default();
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_notification::init());
+    builder
         // The folder picker for Settings › Computer › "Let Bots work on this Mac".
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().pubkey(obot_core::update::PUBLIC_KEY).build())
@@ -252,7 +346,18 @@ fn main() {
                 let _ = w.eval(call);
             }
         })
+        // On a Mac, closing the window keeps oBot running, as Mac apps do, so Bots can still notify you.
+        // The Dock icon brings the window back; ⌘Q quits.
+        .on_window_event(|_w, _e| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _e {
+                api.prevent_close();
+                let _ = _w.hide();
+            }
+        })
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            mac_notify::init(app.handle());
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
                 .title("oBot")
                 .inner_size(1040.0, 760.0)
@@ -293,13 +398,15 @@ fn main() {
                     if let Ok(mut s) = SHARED.lock() {
                         *s = Some(page);
                     }
-                    if let Some(w) = _app.get_webview_window("main") {
-                        let _ = w.unminimize();
-                        let _ = w.show();
-                        let _ = w.set_focus();
+                    if let Some(w) = show_window(_app) {
                         let _ = w.eval("window.obotShare && window.obotShare()");
                     }
                 }
+            }
+            // The Dock icon was clicked while the window was closed.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = _event {
+                show_window(_app);
             }
         });
 }

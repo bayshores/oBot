@@ -11,10 +11,20 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 obot-core = { path = "../../backend/core" }
 tauri = { version = "2", features = [] }
-tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 ureq = "2"
 serde_json = "1"
 url = "2"
 dirs = "6"
+
+# Notifications: Apple's UserNotifications on a Mac, so clicking one can open its Bot; the plugin
+# elsewhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSError", "NSObject", "NSString"] }
+objc2-user-notifications = { version = "0.3", features = ["bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+tauri-plugin-notification = "2"
