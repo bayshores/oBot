@@ -237,7 +237,7 @@ Usage = {
 | Method | Path | Body | Returns |
 |---|---|---|---|
 | GET | /api/connection | – | `{mode,url,token}` (home only) |
-| PUT | /api/connection | `{mode,url,token}` | same (home only). 403 for a paired device: only the computer's own app changes this |
+| PUT | /api/connection | `{mode,url,token}` | same (home only). 403 for a paired device: only the computer's own app changes this. `mode:"local"` keeps the saved `url` and `token`, so the app can switch back to that computer without a new pairing code |
 | POST | /api/connection/test | `{url,token}` | `{ok:bool, error?:string, computer?:Computer}` (home only) |
 | POST | /api/connection/pair | `{url, code}` | `{ok, token?, computer?, error?}` (home only, not from a paired device): sends the code to `{url}/api/pair` with this computer's name. Then PUT /api/connection `{mode:"remote", url, token}` |
 | POST | /api/pair | `{code, device_name, platform?}` (**no token**; `platform` = "Mac" / "Windows PC" / "Linux PC" when the device is a computer running the oBot app) | `{token, device_id, computer}`; 401 `{error}` for a wrong/expired code ("Wrong code. N tries left.") |

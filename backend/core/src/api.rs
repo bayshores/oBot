@@ -489,11 +489,14 @@ async fn put_connection(
         return Err(ApiError(StatusCode::FORBIDDEN, "Change this on the computer itself.".into()));
     }
     if c.mode != "remote" {
-        c.mode = "local".into();
-    }
-    c.url = c.url.trim().trim_end_matches('/').to_string();
-    if c.mode == "remote" && !(c.url.starts_with("http://") || c.url.starts_with("https://")) {
-        return Err(bad("The address must start with http:// or https://"));
+        // Switching to this computer keeps the other computer's address and sign-in,
+        // so switching back later needs no new pairing code.
+        c = Connection { mode: "local".into(), ..st.config.read().await.connection.clone() };
+    } else {
+        c.url = c.url.trim().trim_end_matches('/').to_string();
+        if !(c.url.starts_with("http://") || c.url.starts_with("https://")) {
+            return Err(bad("The address must start with http:// or https://"));
+        }
     }
     st.config.write().await.connection = c.clone();
     st.save_config().await?;
@@ -2852,6 +2855,25 @@ mod card_tests {
         super::skip_open_questions(&st, "b");
         assert_eq!(st.db.get_message("open").unwrap().unwrap().status, "skipped");
         assert_eq!(st.db.get_message("done").unwrap().unwrap().status, "done", "an answered card stays as it was");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn switching_to_this_computer_keeps_the_pairing() {
+        let d = std::env::temp_dir().join(format!("ob-conn-{}", crate::util::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        let put = |mode: &str, url: &str, token: &str| {
+            let body = axum::Json(crate::config::Connection { mode: mode.into(), url: url.into(), token: token.into() });
+            super::put_connection(axum::extract::State(st.clone()), axum::Extension(super::AuthDevice(None)), body)
+        };
+        assert!(put("remote", "https://pc.example.ts.net/", "obd_abc").await.is_ok());
+        // the app sends an empty address and token when it switches to this computer
+        let Ok(axum::Json(local)) = put("local", "", "").await else { panic!("switching failed") };
+        assert_eq!(local.mode, "local");
+        assert_eq!(local.url, "https://pc.example.ts.net", "the other computer's address is kept");
+        assert_eq!(local.token, "obd_abc", "its sign-in is kept, so switching back needs no new code");
+        assert_eq!(st.config.read().await.connection.token, "obd_abc", "and it's saved");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

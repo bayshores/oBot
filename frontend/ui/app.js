@@ -995,7 +995,7 @@
         if (!status.isConnected) return;
         if (left <= 0) {
           status.textContent = 'Trying again…';
-          const ok = await fetch(S.conn.url.replace(/\/+$/, '') + '/api/hello').then((r) => r.ok, () => false);
+          const ok = await fetch((remote ? S.conn.url.replace(/\/+$/, '') : '') + '/api/hello').then((r) => r.ok, () => false);
           if (!status.isConnected) return;
           if (ok) return boot();
           return offlineScreen(err);
@@ -6207,7 +6207,7 @@
           )
         : row(
             h('span', { class: 'comp-name' }, icon('monitor', 16), ThisDevice()),
-            pillBtn('Set up an always-on computer', () => openSetupWizard()),
+            savedComputer() ? pillBtn(`Switch to ${savedComputer()}`, useSavedComputer) : pillBtn('Set up an always-on computer', () => openSetupWizard()),
             `Your Bots live here. They pause when ${thisDevice()} sleeps.`
           );
     const runsOn = card(current, row('Your Bots live on', seg, conn.mode === 'remote' ? `Connected to ${hostOf(conn.url)}` : `Bots are using ${thisDevice()}.`));
@@ -8700,6 +8700,31 @@
       S.link = 'ok';
       await boot();
       if (!quiet) toast(`Bots now run on ${thisDevice()}`);
+    } catch (e) {
+      fail(e);
+    }
+  }
+  // The always-on computer this app was paired with before switching to this one (its sign-in is kept).
+  function savedComputer() {
+    if (S.conn.mode === 'remote' || !S.conn.url || !S.conn.token) return '';
+    return ((S.prefs.remoteNames || {})[S.conn.url]) || prettyHost(S.conn.url);
+  }
+  async function useSavedComputer() {
+    const { url, token } = S.conn;
+    try {
+      const r = await home('/api/connection/test', { method: 'POST', body: { url, token } });
+      if (!r || !r.ok) {
+        const rejected = /rejected/.test((r && r.error) || '');
+        toast(rejected ? `${savedComputer()} doesn’t know ${thisDevice()} anymore. Pair again with a new code.` : (r && r.error) || 'Couldn’t connect', 'error');
+        if (rejected) openSetupWizard({ step: 2, url });
+        return;
+      }
+      S.conn = await home('/api/connection', { method: 'PUT', body: { mode: 'remote', url, token } });
+      S.connDraft = null;
+      S.current = null;
+      S.link = 'ok';
+      await boot();
+      toast(`Bots now run on ${computerName()}`);
     } catch (e) {
       fail(e);
     }
