@@ -533,7 +533,38 @@ pub struct ToolOut {
     pub image: Option<(String, String)>, // (base64, mime)
 }
 
-async fn screenshot(cfg: &Config, display: u16) -> Result<(String, String), String> {
+const NOT_SHIELDED: &str = "A page on one of the user's protected sites couldn't be covered safely, so no screenshot was taken. Try again in a moment.";
+
+/// Covers code, pictures and files in every tab on the user's protected sites (browser.js SHIELD).
+/// Ok(true) = a page didn't have the cover yet (it has now).
+async fn shield(cfg: &Config, display: u16, bot_id: &str) -> Result<bool, String> {
+    let v = browser_run(cfg, display, bot_id, json!({"mode": "shield", "sites": cfg.protected_sites})).await.map_err(|e| format!("{NOT_SHIELDED} ({e})"))?;
+    Ok(v["fresh"].as_bool().unwrap_or(true))
+}
+
+/// The Bot's screen as a picture. With protected sites set, every capture sits between two cover
+/// checks: if a page arrived without its cover meanwhile (it loaded during the capture), the picture
+/// may show it, so it's thrown away and taken again. It never fails open.
+async fn screenshot(cfg: &Config, display: u16, bot_id: &str) -> Result<(String, String), String> {
+    if cfg.protected_sites.is_empty() {
+        return capture(cfg, display).await;
+    }
+    let mut fresh = shield(cfg, display, bot_id).await?;
+    for _ in 0..3 {
+        if fresh {
+            // Let the page draw itself with the cover first.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let img = capture(cfg, display).await?;
+        fresh = shield(cfg, display, bot_id).await?;
+        if !fresh {
+            return Ok(img);
+        }
+    }
+    Err(NOT_SHIELDED.into())
+}
+
+async fn capture(cfg: &Config, display: u16) -> Result<(String, String), String> {
     let bytes = run(cfg, "export DISPLAY=\":$OB_DISPLAY\"; import -silent -window root -quality 75 jpg:-", &[("OB_DISPLAY", display.to_string())], 20).await?;
     if bytes.len() < 100 {
         return Err("The screenshot came back empty".into());
@@ -586,7 +617,7 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
     };
     let done = match name {
         "computer_screenshot" => {
-            let img = screenshot(&cfg, info.display).await?;
+            let img = screenshot(&cfg, info.display, bot_id).await?;
             return Ok(ToolOut { text: format!("Your screen ({WIDTH} x {HEIGHT})."), image: Some(img) });
         }
         "computer_click" => {
@@ -701,7 +732,10 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
             format!("Tabs, most recently used first:\n{}\n", tabs.join("\n"))
         }
         "computer_images" => {
-            let v = browser_run(&cfg, info.display, bot_id, json!({"mode": "images"})).await?;
+            let v = browser_run(&cfg, info.display, bot_id, json!({"mode": "images", "sites": cfg.protected_sites})).await?;
+            if v["protected"] == json!(true) {
+                return Ok(ToolOut { text: format!("{} is one of the user's protected sites: its pictures are hidden from Bots.", v["url"].as_str().unwrap_or("This page")), image: None });
+            }
             state.screens.touch(bot_id, 0).await;
             let lines: Vec<String> = v["images"]
                 .as_array()
@@ -735,8 +769,10 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
     state.screens.touch(bot_id, 0).await;
     // After every action, show the bot what its screen looks like now.
     tokio::time::sleep(Duration::from_millis(500)).await;
-    let image = screenshot(&cfg, info.display).await.ok();
-    Ok(ToolOut { text: format!("{done} This is your screen now."), image })
+    match screenshot(&cfg, info.display, bot_id).await {
+        Ok(img) => Ok(ToolOut { text: format!("{done} This is your screen now."), image: Some(img) }),
+        Err(e) => Ok(ToolOut { text: format!("{done} {e}"), image: None }),
+    }
 }
 
 /// MCP definitions for the screen tools.
@@ -785,4 +821,72 @@ pub async fn proxy(state: Shared, bot_id: String, mut socket: axum::extract::ws:
         }
     }
     state.screens.viewer_left(&bot_id).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BROWSER_JS;
+    use serde_json::{json, Value};
+
+    /// Runs browser.js's page helpers in Node (needs `node` on PATH) and returns what `check` prints.
+    fn node(check: &str) -> Value {
+        let out = std::process::Command::new("node").arg("-e").arg(format!("{BROWSER_JS}\n{check}")).output().expect("this test needs Node.js on PATH");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice(&out.stdout).expect("JSON from node")
+    }
+
+    #[test]
+    fn protected_sites_hide_code_but_not_chat() {
+        let code = [
+            "def add(a, b):\n    return a + b",
+            "const rows = await fetch(url);",
+            "SELECT name FROM users WHERE id = 5",
+            "git push origin main",
+            "sudo systemctl restart nginx",
+            "Traceback (most recent call last):\n  File \"app.py\", line 3, in <module>",
+            "    at Object.<anonymous> (/srv/app/index.js:10:5)",
+            "{\"key\": \"value\", \"n\": 2}",
+            "print(\"hello\")",
+            "x = 5",
+            "public static void main(String[] args) {",
+            "import pandas as pd",
+            "user.save()",
+            "TypeError: cannot read properties of undefined",
+            "Here's what I ran:\nfor (let i = 0; i < n; i++) total += i",
+        ];
+        let chat = [
+            "can you check the ticket from yesterday?",
+            "meeting at 3?",
+            "https://example.com/page?id=5&x=2",
+            "Thanks! See you Monday.",
+            "for example: we could move it to Friday",
+            "let me know if that works",
+            "import the file into the sheet when you get a chance",
+            "class starts at 3 pm",
+            "Hey (quick question) can we talk?",
+            "return the laptop by Friday",
+            "UPDATE: the meeting moved to 4",
+        ];
+        let v = node(&format!(
+            "console.log(JSON.stringify({{code: {}.map(looksLikeCode), chat: {}.map(looksLikeCode)}}))",
+            json!(code),
+            json!(chat)
+        ));
+        for (i, s) in code.iter().enumerate() {
+            assert_eq!(v["code"][i], json!(true), "should be hidden: {s}");
+        }
+        for (i, s) in chat.iter().enumerate() {
+            assert_eq!(v["chat"][i], json!(false), "should be shown: {s}");
+        }
+    }
+
+    #[test]
+    fn protected_sites_match_their_subdomains_only() {
+        let v = node(
+            r#"const s = ['microsoft.com', 'slack.com'];
+console.log(JSON.stringify(['https://teams.microsoft.com/v2/', 'http://microsoft.com', 'https://app.slack.com/client',
+  'https://notmicrosoft.com/', 'https://microsoft.com.evil.io/', 'about:blank'].map((u) => protectedHost(u, s))))"#,
+        );
+        assert_eq!(v, json!([true, true, true, false, false, false]));
+    }
 }

@@ -19,6 +19,11 @@ to for something you asked, and only for the Bots you allow in Settings › Conn
 
 Sending email, inviting people to events and deleting always ask you first.
 
+Bots can also look at websites in their own browser. On the sites you list in **Settings ›
+Permissions › Protected sites**, oBot hides code, pictures and files before a Bot sees the page.
+Code pasted as plain text is found by how it looks, so a short command inside a sentence can still
+show, and other text on those pages is not hidden.
+
 ## Where your data goes
 
 - **Your computer.** oBot runs on a computer you control. The sign-in it keeps for your account

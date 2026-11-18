@@ -6686,10 +6686,23 @@
   }
 
   // ── Permissions ──
+  const RULE = { noun: 'rule', max: 20, label: 'Applies to', hint: 'Say what the action is and who it involves, for example “Messages to sam@example.org”' };
   const RULE_LISTS = [
-    { key: 'review_ask', title: 'Ask first', explain: 'Check with me before any matching action', example: 'Spending more than $25' },
-    { key: 'review_allow', title: 'Auto-approve', explain: 'Run matching actions without asking', example: 'Messages to coworkers at example.org' },
+    { key: 'review_ask', title: 'Ask first', explain: 'Check with me before any matching action', example: 'Spending more than $25', ...RULE },
+    { key: 'review_allow', title: 'Auto-approve', explain: 'Run matching actions without asking', example: 'Messages to coworkers at example.org', ...RULE },
   ];
+  // Pages where code, pictures and files are covered before a Bot's screenshot (screen.rs).
+  const PROTECTED_SITES = {
+    key: 'protected_sites',
+    title: 'Protected sites',
+    explain: 'Bots can’t see code, pictures or files on these sites',
+    example: 'teams.microsoft.com',
+    noun: 'site',
+    max: 50,
+    label: 'Site',
+    hint: 'Its subdomains are protected too. Add the sites its files open on as well. Code pasted as plain text is found by its look, so a short command inside a sentence can still show.',
+    check: (v) => (/^\S+\.\S+$/.test(v) ? '' : 'Enter a website like example.com'),
+  };
   function tabPermissions() {
     const s = S.settings;
     const ui = S.settingsUI;
@@ -6718,53 +6731,9 @@
       );
     }
     const lists = h('div', { class: 'rule-lists' + (on ? '' : ' dim') });
-    for (const L of RULE_LISTS) {
-      const rules = s[L.key] || [];
-      const ed = ui.ruleEdit && ui.ruleEdit.list === L.key ? ui.ruleEdit : null;
-      const full = rules.length >= 20;
-      const addBtn = pillBtn('Add Rule', () => {
-        ui.ruleEdit = { list: L.key, index: -1, text: '' };
-        rerenderSettings(true);
-      }, { 'aria-label': `Add Rule to ${L.title}`, disabled: full || !!ui.ruleEdit || !!ui.ruleBusy });
-      const head = h(
-        'div',
-        { class: 'set-head', id: 'set-' + (L.key === 'review_ask' ? 'ask-first-rules' : 'auto-approve-rules') },
-        h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, L.title), h('div', { class: 'set-explain' }, L.explain)),
-        full && h('span', { class: 'chip' }, 'max 20 rules'),
-        addBtn
-      );
-      const rowsEl = [];
-      rules.forEach((r, i) => {
-        if (ed && ed.index === i) rowsEl.push(ruleEditor(L, rules, ed));
-        else
-          rowsEl.push(
-            h(
-              'div',
-              { class: 'set-row rule-row' },
-              h('div', { class: 'set-row-text' }, h('div', { class: 'rule-text' }, r)),
-              h(
-                'div',
-                { class: 'set-row-ctl' },
-                h('button', { class: 'ghost-btn', 'aria-label': `Edit ${L.title} rule ${i + 1}`, 'data-tip': 'Edit', disabled: !!ui.ruleEdit, onclick: () => ((ui.ruleEdit = { list: L.key, index: i, text: r }), rerenderSettings(true)) }, icon('pencil', 15)),
-                h(
-                  'button',
-                  {
-                    class: 'ghost-btn danger',
-                    'aria-label': `Delete ${L.title} rule ${i + 1}`,
-                    'data-tip': 'Delete',
-                    disabled: !!ui.ruleEdit,
-                    onclick: () => saveRules(L.key, rules.filter((_, j) => j !== i)),
-                  },
-                  icon('trash', 15)
-                )
-              )
-            )
-          );
-      });
-      if (ed && ed.index === -1) rowsEl.push(ruleEditor(L, rules, ed));
-      lists.append(h('div', { class: 'set-section' }, head, rowsEl.length ? card(rowsEl) : null));
-    }
+    for (const L of RULE_LISTS) lists.append(ruleList(L));
     out.append(lists);
+    out.append(ruleList(PROTECTED_SITES));
 
     // Claude Code's own allow rules (added by "Always allow"), oBot-specific
     const tr = s.allow_rules || [];
@@ -6779,17 +6748,67 @@
     }
     return out;
   }
-  async function saveRules(key, list) {
+  const anchorOf = (L) => ({ review_ask: 'ask-first-rules', review_allow: 'auto-approve-rules' })[L.key] || L.key.replace(/_/g, '-');
+  // One editable list on the Permissions page: plain-language rules, or protected sites.
+  function ruleList(L) {
+    const ui = S.settingsUI;
+    const rules = S.settings[L.key] || [];
+    const Noun = L.noun[0].toUpperCase() + L.noun.slice(1);
+    const ed = ui.ruleEdit && ui.ruleEdit.list === L.key ? ui.ruleEdit : null;
+    const full = rules.length >= L.max;
+    const addBtn = pillBtn(`Add ${Noun}`, () => {
+      ui.ruleEdit = { list: L.key, index: -1, text: '' };
+      rerenderSettings(true);
+    }, { 'aria-label': `Add ${Noun} to ${L.title}`, disabled: full || !!ui.ruleEdit || !!ui.ruleBusy });
+    const head = h(
+      'div',
+      { class: 'set-head', id: 'set-' + anchorOf(L) },
+      h('div', { class: 'set-head-text' }, h('h3', { class: 'set-h3' }, L.title), h('div', { class: 'set-explain' }, L.explain)),
+      full && h('span', { class: 'chip' }, `max ${L.max} ${L.noun}s`),
+      addBtn
+    );
+    const rowsEl = [];
+    rules.forEach((r, i) => {
+      if (ed && ed.index === i) rowsEl.push(ruleEditor(L, rules, ed));
+      else
+        rowsEl.push(
+          h(
+            'div',
+            { class: 'set-row rule-row' },
+            h('div', { class: 'set-row-text' }, h('div', { class: 'rule-text' }, r)),
+            h(
+              'div',
+              { class: 'set-row-ctl' },
+              h('button', { class: 'ghost-btn', 'aria-label': `Edit ${L.title} ${L.noun} ${i + 1}`, 'data-tip': 'Edit', disabled: !!ui.ruleEdit, onclick: () => ((ui.ruleEdit = { list: L.key, index: i, text: r }), rerenderSettings(true)) }, icon('pencil', 15)),
+              h(
+                'button',
+                {
+                  class: 'ghost-btn danger',
+                  'aria-label': `Delete ${L.title} ${L.noun} ${i + 1}`,
+                  'data-tip': 'Delete',
+                  disabled: !!ui.ruleEdit,
+                  onclick: () => saveRules(L, rules.filter((_, j) => j !== i)),
+                },
+                icon('trash', 15)
+              )
+            )
+          )
+        );
+    });
+    if (ed && ed.index === -1) rowsEl.push(ruleEditor(L, rules, ed));
+    return h('div', { class: 'set-section' }, head, rowsEl.length ? card(rowsEl) : null);
+  }
+  async function saveRules(L, list) {
     const ui = S.settingsUI;
     ui.ruleBusy = true;
-    const ok = await putSettings({ [key]: list }, key === 'review_ask' ? 'ask-first-rules' : 'auto-approve-rules');
+    const ok = await putSettings({ [L.key]: list }, anchorOf(L));
     ui.ruleBusy = false;
     if (ok) ui.ruleEdit = null;
     rerenderSettings(true);
   }
   function ruleEditor(L, rules, ed) {
     const ui = S.settingsUI;
-    const ta = h('textarea', { class: 'field rule-input', rows: '1', maxlength: '1000', placeholder: L.example, 'aria-label': 'Applies to' });
+    const ta = h('textarea', { class: 'field rule-input', rows: '1', maxlength: '1000', placeholder: L.example, 'aria-label': L.label });
     ta.value = ed.text || '';
     const err = h('div', { class: 'f-err', role: 'alert', hidden: true });
     const grow = () => {
@@ -6807,13 +6826,15 @@
         err.hidden = false;
         ta.focus();
       };
-      if (!v) return bad('Enter a rule');
-      if (rules.some((r, i) => i !== ed.index && r.trim().toLowerCase() === v.toLowerCase())) return bad('That rule is already in the list');
-      if (ed.index === -1 && rules.length >= 20) return bad('You can have up to 20 rules');
+      if (!v) return bad(`Enter a ${L.noun}`);
+      const problem = L.check && L.check(v);
+      if (problem) return bad(problem);
+      if (rules.some((r, i) => i !== ed.index && r.trim().toLowerCase() === v.toLowerCase())) return bad(`That ${L.noun} is already in the list`);
+      if (ed.index === -1 && rules.length >= L.max) return bad(`You can have up to ${L.max} ${L.noun}s`);
       const next = rules.slice();
       if (ed.index === -1) next.push(v);
       else next[ed.index] = v;
-      saveRules(L.key, next);
+      saveRules(L, next);
     };
     ta.addEventListener('input', () => {
       ed.text = ta.value;
@@ -6838,11 +6859,11 @@
     return h(
       'div',
       { class: 'set-row stack rule-editor' },
-      h('label', { class: 'f-label' }, 'Applies to'),
+      h('label', { class: 'f-label' }, L.label),
       ta,
       err,
-      h('div', { class: 'f-hint' }, 'Say what the action is and who it involves, for example “Messages to sam@example.org”'),
-      h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(ed.index === -1 ? 'Add rule' : 'Save rule', submit, 'primary'))
+      h('div', { class: 'f-hint' }, L.hint),
+      h('div', { class: 'row-actions' }, btn('Cancel', cancel), btn(`${ed.index === -1 ? 'Add' : 'Save'} ${L.noun}`, submit, 'primary'))
     );
   }
 

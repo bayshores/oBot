@@ -2139,6 +2139,7 @@ struct SettingsBody {
     auto_update: Option<bool>,
     review_allow: Option<Vec<String>>,
     review_ask: Option<Vec<String>>,
+    protected_sites: Option<Vec<String>>,
     timezone: Option<String>,
 }
 
@@ -2297,6 +2298,9 @@ async fn put_settings(State(st): State<Shared>, Json(b): Json<SettingsBody>) -> 
         }
         if let Some(v) = b.review_ask {
             cfg.review_ask = clean_rules(v)?;
+        }
+        if let Some(v) = b.protected_sites {
+            cfg.protected_sites = crate::logins::clean_sites(&v).map_err(|e| bad(&e))?;
         }
         if let Some(v) = b.timezone {
             let v = v.trim().to_string();

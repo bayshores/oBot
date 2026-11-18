@@ -81,6 +81,25 @@ pub fn normalize_site(input: &str) -> Result<String, String> {
     Ok(host.to_string())
 }
 
+/// Most Protected sites (Settings › Permissions) a user can list.
+pub const MAX_PROTECTED_SITES: usize = 50;
+
+/// Tidies the Protected sites list: each entry becomes a host (see `normalize_site`), blanks and
+/// repeats are dropped. Err = a sentence for the user.
+pub fn clean_sites(list: &[String]) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in list.iter().filter(|s| !s.trim().is_empty()) {
+        let host = normalize_site(s)?;
+        if !out.contains(&host) {
+            out.push(host);
+        }
+    }
+    if out.len() > MAX_PROTECTED_SITES {
+        return Err(format!("You can protect at most {MAX_PROTECTED_SITES} sites."));
+    }
+    Ok(out)
+}
+
 /// The host of an https:// page address (None for anything else, including http://).
 pub fn https_host(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://")?;
@@ -510,6 +529,16 @@ mod tests {
         assert!(ok("https://sso.ucsd.edu/idp/login") && ok("https://ucsd.edu"));
         assert!(!ok("http://sso.ucsd.edu/login"), "never over plain http");
         assert!(!ok("https://ucsd.edu.evil.com/login") && !ok("https://evilucsd.edu/") && !ok("https://ucsd.edu@evil.com/"));
+    }
+
+    #[test]
+    fn protected_sites_are_tidied() {
+        let list = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let got = clean_sites(&list(&["https://Teams.Microsoft.com/v2/", "teams.microsoft.com", " ", "*.slack.com"])).unwrap();
+        assert_eq!(got, list(&["teams.microsoft.com", "slack.com"]));
+        assert!(clean_sites(&list(&["not a site"])).is_err());
+        let many: Vec<String> = (0..=MAX_PROTECTED_SITES).map(|i| format!("site{i}.com")).collect();
+        assert!(clean_sites(&many).is_err());
     }
 
     #[test]

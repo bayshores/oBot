@@ -85,6 +85,9 @@ pub struct Config {
     pub review_allow: Vec<String>,
     /// "Ask first" rules (plain language). These win over allow rules.
     pub review_ask: Vec<String>,
+    /// Protected sites (Settings › Permissions), tidied hosts like "teams.microsoft.com". On these sites
+    /// and their subdomains, code, pictures and files are covered before a Bot's screenshot (screen.rs).
+    pub protected_sites: Vec<String>,
     /// Extra MCP servers for every bot: {name, type:"http"|"stdio", url, headers, command, args, env}.
     pub mcp_servers: Vec<Value>,
     /// IANA timezone for routines, e.g. "America/Los_Angeles". "" = this computer's timezone.
@@ -138,6 +141,7 @@ impl Default for Config {
             auto_update: true,
             review_allow: vec![],
             review_ask: vec![],
+            protected_sites: vec![],
             mcp_servers: vec![],
             timezone: String::new(),
             devices: vec![],
@@ -231,6 +235,7 @@ impl Config {
             "auto_update": self.auto_update,
             "review_allow": self.review_allow,
             "review_ask": self.review_ask,
+            "protected_sites": self.protected_sites,
             "mcp_servers": self.mcp_servers.iter().map(mask_mcp).collect::<Vec<_>>(),
             "timezone": self.timezone,
             "runner": self.runner,

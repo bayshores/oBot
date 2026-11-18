@@ -10,7 +10,10 @@
 //     {mode: "fill", host, fields: [{target, value}]} -> {url, filled: [targets], missing: [targets]}
 //         target: "username" | "password" | "new_password" | "one_time_code" | "focused" | a CSS selector
 //     {mode: "navigate", url}                    -> {url}   (in the tab in front)
-//     {mode: "images"}                           -> {url, images: [{src, alt, w, h, link}]}  pictures on the page
+//     {mode: "images", sites}                    -> {url, images: [{src, alt, w, h, link}], protected}  pictures on the page
+//                                                   (none on a protected site: `sites` = Settings › Protected sites)
+//     {mode: "shield", sites}                    -> {fresh}  covers code, pictures and files in every tab on a
+//                                                   protected site; fresh = a page didn't have the cover yet
 //     {mode: "tabs"}                             -> {tabs: [{id, title, url, front}]}  most recently used first
 //     {mode: "switch", id} / {mode: "close", id} -> {tabs}
 //     {mode: "close_others"}                     -> {tabs}
@@ -144,13 +147,142 @@ const IMAGES = function () {
   return out;
 };
 
+// Is this page on one of the protected sites (or a subdomain of one)?
+const protectedHost = (url, sites) => {
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {}
+  return !!host && (sites || []).some((s) => host === s || host.endsWith('.' + s));
+};
+
+// Does this text look like program code, a command, data or an error trace? Used on protected sites
+// to hide code pasted as plain text. When unsure it says yes: hiding a normal line costs little.
+// Runs inside the page too, so it uses nothing from outside itself.
+const looksLikeCode = function (text) {
+  const SIGNS = [
+    /[;{}]\s*$/, // a statement or block ends the line
+    /^\s*[{}[\]]/, // a line opens or closes a block, list or object
+    /=>|===?|!==?|&&|\|\||::|->|<\/?[a-z][\w-]*(\s[^>]*)?\/?>/i, // operators, markup tags
+    /^\s*(def|func|fn|function|class|interface|struct|enum|impl|module)\s+[\w$]+\s*[(<:{]/,
+    /^\s*(const|let|var|val|local|my)\s+[\w$[\]{},\s]+=/,
+    /^\s*(import\s+(\{|\*|[\w.]+\s*(;|,|$|\s+as\s|\s+from\s))|from\s+[\w.]+\s+import\s|#include\s*[<"]|package\s+[\w.]+;?\s*$|using\s+[\w.]+;)/,
+    /^\s*(if|for|while|switch|catch|elif|else\s+if)\s*\(.*\)/,
+    /^\s*[\w$.[\]'"]+\s*(=|\+=|-=|\*=|\/=|:=)\s*\S/, // assignment
+    /^\s*[\w$.]+\(.*\)\s*;?\s*$/, // the whole line is a call
+    /\b[\w$]+\.[\w$]+\(/, // method call
+    /^\s*(SELECT|INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM|CREATE\s+(TABLE|INDEX|VIEW|DATABASE)|ALTER\s+TABLE|DROP\s+(TABLE|INDEX))\b/,
+    /^\s*(\$|>>>|PS [A-Z]:\\[^>]*>|[\w.-]+@[\w.-]+:[~/][^$]*\$)\s/, // shell prompts
+    /^\s*(sudo|npm|npx|pnpm|yarn|pip3?|git|curl|wget|docker|kubectl|ssh|scp|chmod|chown|cargo|mvn|gradle|brew|apt(-get)?)\s+-{0,2}[\w./~$-]/,
+    /^\s*at\s+[\w$.<>]+\s*\(.*:\d+(:\d+)?\)\s*$/, // JavaScript / Java stack trace
+    /Traceback \(most recent call last\)|^\s*File ".+", line \d+/, // Python stack trace
+    /\b\w+(Error|Exception):\s/,
+    /^\s*["'][\w-]+["']\s*:/, // JSON
+  ];
+  const lines = String(text || '').split('\n').filter((l) => l.trim());
+  for (const line of lines) {
+    if (SIGNS.some((r) => r.test(line))) return true;
+    const t = line.replace(/\s/g, '');
+    const n = (t.match(/[{}[\]();=<>]/g) || []).length;
+    if (n >= 6 && n / t.length >= 0.12) return true;
+  }
+  // Pasted code whose indentation survived.
+  const indented = lines.filter((l) => /^( {2,}|\t)\S/.test(l)).length;
+  return indented >= 2 && indented / lines.length >= 0.5;
+};
+
+// Runs inside a page on a protected site: covers code, pictures and files with a grey box, now and
+// whenever the page changes (a MutationObserver runs before the page is drawn again). Returns true
+// when it was put in just now, false when the page already had it (it then checks the page again).
+const SHIELD = function (looksLikeCode) {
+  const KEY = '__obotShield';
+  if (window[KEY]) {
+    window[KEY]();
+    return false;
+  }
+  const MARK = 'data-obot-hidden';
+  const NOBG = 'data-obot-nobg';
+  const GREY = '#6b7280';
+  const style = document.createElement('style');
+  style.textContent = `
+pre, code, kbd, samp, [${MARK}] {
+  color: transparent !important; -webkit-text-fill-color: transparent !important; text-shadow: none !important;
+  background: ${GREY} !important; border-radius: 4px !important;
+}
+pre *, code *, kbd *, samp *, [${MARK}] * { visibility: hidden !important; }
+pre::after, [${MARK}]::after {
+  content: 'Hidden from Bots'; visibility: visible !important; color: #fff !important;
+  -webkit-text-fill-color: #fff !important; font: 12px/1.6 system-ui, sans-serif !important; padding: 0 6px;
+}
+img, input[type=image] { object-position: -99999px -99999px !important; background: ${GREY} !important; }
+video, canvas, iframe, frame, embed, object, svg image { visibility: hidden !important; }
+[style*="url(" i], [${NOBG}] { background-image: none !important; }`;
+  const CODE_CLASS = /(^|[\s_-])(code|codeblock|snippet|hljs|prism|codemirror|cm-editor|monaco-editor|(language|lang)-[\w+#-]+)($|[\s_-])/i;
+  const FILE_LINK = /\.(pdf|docx?|xlsx?|pptx?|csv|tsv|txt|rtf|zip|gz|tar|7z|rar|log|json|xml|ya?ml|sql|py|ipynb|js|ts|java|cs|cpp|c|h|go|rb|rs|php|sh|ps1|bat)$/i;
+  const SKIP = 'script, style, noscript, template, textarea, input, select';
+  const mark = (el) => el.hasAttribute(MARK) || el.setAttribute(MARK, '');
+  const checkEl = (el) => {
+    if (CODE_CLASS.test(el.getAttribute('class') || '') || el.hasAttribute('data-language')) mark(el);
+    if (el.tagName === 'A' && (el.hasAttribute('download') || FILE_LINK.test(el.pathname || ''))) mark(el);
+    const bg = getComputedStyle(el).backgroundImage;
+    if (bg && bg.includes('url(') && !el.hasAttribute(NOBG)) el.setAttribute(NOBG, '');
+  };
+  const display = new WeakMap();
+  const isBlock = (el) => {
+    if (!display.has(el)) {
+      const d = getComputedStyle(el).display;
+      display.set(el, d !== 'contents' && !d.startsWith('inline'));
+    }
+    return display.get(el);
+  };
+  // Text is judged per block (a paragraph, a message), so a code line hides the block around it.
+  // A hidden block stays hidden: its covered text no longer counts, so judging it again could show it.
+  const checkText = (root) => {
+    const blocks = new Set();
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const p = n.parentElement;
+      if (!p || !n.nodeValue.trim() || p.closest(SKIP)) continue;
+      let b = p;
+      while (b.parentElement && b !== document.body && !isBlock(b)) b = b.parentElement;
+      blocks.add(b);
+    }
+    for (const b of blocks) if (!b.hasAttribute(MARK) && looksLikeCode(b.innerText)) mark(b);
+  };
+  const scan = (root) => {
+    if (!root || root.nodeType !== 1 || !root.isConnected) return;
+    checkEl(root);
+    for (const el of root.querySelectorAll('*')) checkEl(el);
+    checkText(root);
+  };
+  const place = () => style.isConnected || document.documentElement.appendChild(style);
+  const all = () => {
+    place();
+    scan(document.documentElement);
+  };
+  new MutationObserver((list) => {
+    place();
+    const roots = new Set();
+    for (const m of list) {
+      if (m.type === 'childList') m.addedNodes.forEach((n) => roots.add(n.nodeType === 1 ? n : n.parentElement));
+      else roots.add(m.type === 'characterData' ? m.target.parentElement : m.target);
+    }
+    roots.forEach(scan);
+  }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'href', 'download'] });
+  Object.defineProperty(window, KEY, { value: all });
+  all();
+  return true;
+};
+
 const short = (id) => id.slice(0, 6).toLowerCase();
 const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
 
-(async () => {
+// Only run when screen.rs asks for something (the tests load this file just for the functions above).
+if (process.env.OB_REQ) (async () => {
   if (typeof WebSocket !== 'function') done({ error: 'Controlling the browser needs Node.js 22 or newer inside Linux.' });
   const req = JSON.parse(process.env.OB_REQ || '{}');
-  const portFile = `${os.homedir()}/.obot/screens/${process.env.OB_BOT}/profile/DevToolsActivePort`;
+  const profile = `${os.homedir()}/.obot/screens/${process.env.OB_BOT}/profile`;
+  const portFile = `${profile}/DevToolsActivePort`;
   const http = (port, path, method = 'GET') => fetch(`http://127.0.0.1:${port}${path}`, { method });
   // A browser that just started may still be writing its port or restoring tabs: wait a little.
   let port = '';
@@ -164,8 +296,34 @@ const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
       await new Promise((r) => setTimeout(r, 1000));
     }
   }
-  if (!pages) done({ error: NOT_OPEN });
+  if (!pages) {
+    // No browser running means nothing to cover. A running browser that can't be reached is an error,
+    // so a protected page is never shown without its cover.
+    if (req.mode === 'shield') {
+      let running = true;
+      try {
+        execFileSync('pgrep', ['-f', '--', `--user-data-dir=${profile}`], { timeout: 3000 });
+      } catch (e) {
+        running = e.status !== 1; // pgrep's "no such process"
+      }
+      if (!running) done({ fresh: false });
+    }
+    done({ error: NOT_OPEN });
+  }
   pages = pages.filter((p) => p.type === 'page' && p.webSocketDebuggerUrl);
+
+  if (req.mode === 'shield') {
+    let fresh = false;
+    for (const p of pages.filter((p) => protectedHost(p.url, req.sites))) {
+      const c = await connect(p.webSocketDebuggerUrl);
+      try {
+        if (await evaluate(c, `(${SHIELD})(${looksLikeCode})`)) fresh = true;
+      } finally {
+        c.close();
+      }
+    }
+    done({ fresh });
+  }
 
   // The tab in front is the visible one. With several browser windows, the window title decides.
   let front = [];
@@ -233,7 +391,10 @@ const BLANK = /^(about:blank|chrome:\/\/newtab|chrome:\/\/new-tab-page)/;
   }
   const url = await evaluate(c, 'location.href');
   if (req.mode === 'inspect') done({ url, title: p.title });
-  if (req.mode === 'images') done({ url, images: await evaluate(c, `(${IMAGES})()`) });
+  if (req.mode === 'images') {
+    if (protectedHost(url, req.sites)) done({ url, images: [], protected: true });
+    done({ url, images: await evaluate(c, `(${IMAGES})()`), protected: false });
+  }
 
   // Only fill the page oBot checked: same https website as when it decided.
   let host = '';

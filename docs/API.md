@@ -200,6 +200,8 @@ Settings = {
   auto_update: boolean,                              // Settings › Updates › Update automatically (default true)
   review_ask: string[],   // "Ask first" plain-language rules (max 20, 1000 chars each; wins over allow)
   review_allow: string[], // "Auto-approve" rules
+  protected_sites: string[], // Settings › Permissions › Protected sites: hosts like "teams.microsoft.com" (max 50; PUT tidies
+                          // addresses to hosts, drops "www." and repeats). Code, pictures and files there are hidden from Bots (see Bot screens)
   mcp_servers: [{ name, type: "http"|"stdio", url?, headers?, command?, args?, env? }]  // header/env values masked
   timezone: string,      // IANA name like "America/Los_Angeles"; "" = the computer's timezone. Routine times use it. PUT accepts it.
   runner: "native"|"wsl", // where bots run Claude Code. "wsl" (Windows hosts only) runs it inside WSL with its sandbox on. PUT accepts it.
@@ -310,7 +312,7 @@ Usage = {
 | DELETE | /api/memories/:id | – | `{ok}` |
 | GET | /pages/:id | – | A page made by a bot (sandboxed by CSP). A bot gives only the content; the server adds oBot's look (`frontend/ui/page.css`, in a CSS layer so the page's own styles win), the icons (`<i data-icon="name">`) and a script that posts `{type:'obot:height', height}` to the parent. A page that is a whole HTML document (an existing .html file) is sent as it is, plus the icons and the script. See `backend/core/src/pages.rs`. |
 | GET | /pages/:id/:file | – | A picture saved with that page. When a page is made, each `<img src>` (a web address or a file path) is saved in `<data>/pages/<id>/` and pointed here, so pictures load on every device without the outside website. |
-| PUT | /api/settings | also `{auto_review, auto_update, review_ask, review_allow}` | `Settings` |
+| PUT | /api/settings | also `{auto_review, auto_update, review_ask, review_allow, protected_sites}` | `Settings` (400 `{error}` for an entry that isn't a website) |
 | POST | /api/vault | `{name, value, description, bots}`: adds or edits a secret. Empty `value` = keep the saved one. `bots`: null = every Bot, else a non-empty list of Bot ids. 400 for reserved names (see `vault_reserved`), values over 4 KiB, or an empty `bots` list. Saved values are replaced with `••••` in chats and memories from then on, including older ones. | `Settings` |
 | POST | /api/bots/:id/make-main | – | `{ok}` ("Replace with different Bot") |
 | DELETE | /api/bots/:id | – | 400 for the Main Bot |
@@ -589,6 +591,18 @@ or with several windows the one whose title matches the active window. Filling n
 inside Linux (installed with the screen setup).
 
 The app's viewer (noVNC) is view-only until the user chooses Use screen.
+
+**Protected sites** (`protected_sites`, screen.rs + browser.js `SHIELD`): before every screenshot a Bot gets,
+oBot puts a cover into every tab whose host is a protected site or a subdomain of one, through the debugging port.
+The cover turns these into grey "Hidden from Bots" boxes: `pre`, `code`, `kbd`, `samp`, elements whose class says
+code (`code`, `snippet`, `hljs`, `language-…`), pictures (`img`, `video`, `canvas`, `iframe`, `svg image`,
+background pictures), links to files (`download`, or a file name like `.pdf`/`.py`), and any paragraph or message
+whose text looks like code, a command, JSON or an error trace (`looksLikeCode`; when unsure it hides). A
+MutationObserver covers new messages before they are drawn. Each screenshot sits between two cover checks: if a
+page arrived without the cover in between, the picture is thrown away and taken again (3 tries), and if the cover
+can't be put in, the Bot gets no screenshot. `computer_images` lists no pictures there. Limits: a short command
+inside a normal sentence can still show, other text on the page is not hidden, and the user's own view of the
+screen shows the cover too.
 
 ## Desktop bridge (only inside the oBot desktop app)
 
