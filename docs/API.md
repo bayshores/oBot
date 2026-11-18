@@ -600,7 +600,8 @@ background pictures), links to files (`download`, or a file name like `.pdf`/`.p
 whose text looks like code, a command, JSON or an error trace (`looksLikeCode`; when unsure it hides). A
 MutationObserver covers new messages before they are drawn. Each screenshot sits between two cover checks: if a
 page arrived without the cover in between, the picture is thrown away and taken again (3 tries), and if the cover
-can't be put in, the Bot gets no screenshot. `computer_images` lists no pictures there. Limits: a short command
+can't be put in, the Bot gets no screenshot. When a protected page is on screen, the screenshot's text tells the Bot the
+gray boxes are hidden on purpose and not to try to reveal them. `computer_images` lists no pictures there. Limits: a short command
 inside a normal sentence can still show, other text on the page is not hidden, and the user's own view of the
 screen shows the cover too.
 

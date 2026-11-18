@@ -12,8 +12,9 @@
 //     {mode: "navigate", url}                    -> {url}   (in the tab in front)
 //     {mode: "images", sites}                    -> {url, images: [{src, alt, w, h, link}], protected}  pictures on the page
 //                                                   (none on a protected site: `sites` = Settings › Protected sites)
-//     {mode: "shield", sites}                    -> {fresh}  covers code, pictures and files in every tab on a
-//                                                   protected site; fresh = a page didn't have the cover yet
+//     {mode: "shield", sites}                    -> {fresh, shown}  covers code, pictures and files in every tab on a
+//                                                   protected site; fresh = a page didn't have the cover yet,
+//                                                   shown = a covered page is the one on screen
 //     {mode: "tabs"}                             -> {tabs: [{id, title, url, front}]}  most recently used first
 //     {mode: "switch", id} / {mode: "close", id} -> {tabs}
 //     {mode: "close_others"}                     -> {tabs}
@@ -192,13 +193,14 @@ const looksLikeCode = function (text) {
 };
 
 // Runs inside a page on a protected site: covers code, pictures and files with a grey box, now and
-// whenever the page changes (a MutationObserver runs before the page is drawn again). Returns true
-// when it was put in just now, false when the page already had it (it then checks the page again).
+// whenever the page changes (a MutationObserver runs before the page is drawn again). Returns
+// {fresh: true} when it was put in just now, false when the page already had it (it then checks the
+// page again), and shown = this page is the one on screen.
 const SHIELD = function (looksLikeCode) {
   const KEY = '__obotShield';
   if (window[KEY]) {
     window[KEY]();
-    return false;
+    return { fresh: false, shown: document.visibilityState === 'visible' };
   }
   const MARK = 'data-obot-hidden';
   const NOBG = 'data-obot-nobg';
@@ -271,7 +273,7 @@ video, canvas, iframe, frame, embed, object, svg image { visibility: hidden !imp
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'href', 'download'] });
   Object.defineProperty(window, KEY, { value: all });
   all();
-  return true;
+  return { fresh: true, shown: document.visibilityState === 'visible' };
 };
 
 const short = (id) => id.slice(0, 6).toLowerCase();
@@ -306,7 +308,7 @@ if (process.env.OB_REQ) (async () => {
       } catch (e) {
         running = e.status !== 1; // pgrep's "no such process"
       }
-      if (!running) done({ fresh: false });
+      if (!running) done({ fresh: false, shown: false });
     }
     done({ error: NOT_OPEN });
   }
@@ -314,15 +316,18 @@ if (process.env.OB_REQ) (async () => {
 
   if (req.mode === 'shield') {
     let fresh = false;
+    let shown = false;
     for (const p of pages.filter((p) => protectedHost(p.url, req.sites))) {
       const c = await connect(p.webSocketDebuggerUrl);
       try {
-        if (await evaluate(c, `(${SHIELD})(${looksLikeCode})`)) fresh = true;
+        const r = await evaluate(c, `(${SHIELD})(${looksLikeCode})`);
+        fresh = fresh || r.fresh;
+        shown = shown || r.shown;
       } finally {
         c.close();
       }
     }
-    done({ fresh });
+    done({ fresh, shown });
   }
 
   // The tab in front is the visible one. With several browser windows, the window title decides.

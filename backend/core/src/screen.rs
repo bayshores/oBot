@@ -535,31 +535,53 @@ pub struct ToolOut {
 
 const NOT_SHIELDED: &str = "A page on one of the user's protected sites couldn't be covered safely, so no screenshot was taken. Try again in a moment.";
 
+/// Told to the Bot with a screenshot of a protected site, so it knows the gray boxes are on purpose.
+const PROTECTED_NOTE: &str = "Gray boxes on this page are code, pictures or files the user hid from Bots (Settings › Protected sites). \
+    Don't try to reveal them; work with the rest of the page.";
+
+/// A screenshot, and whether a page on a protected site is on it.
+struct Shot {
+    image: (String, String),
+    protected: bool,
+}
+
+impl Shot {
+    /// The tool's text: `text`, plus PROTECTED_NOTE when a protected page is on screen.
+    fn text(&self, text: &str) -> String {
+        if self.protected {
+            format!("{text} {PROTECTED_NOTE}")
+        } else {
+            text.to_string()
+        }
+    }
+}
+
 /// Covers code, pictures and files in every tab on the user's protected sites (browser.js SHIELD).
-/// Ok(true) = a page didn't have the cover yet (it has now).
-async fn shield(cfg: &Config, display: u16, bot_id: &str) -> Result<bool, String> {
+/// Ok((fresh, shown)): fresh = a page didn't have the cover yet (it has now); shown = a covered page is on screen.
+async fn shield(cfg: &Config, display: u16, bot_id: &str) -> Result<(bool, bool), String> {
     let v = browser_run(cfg, display, bot_id, json!({"mode": "shield", "sites": cfg.protected_sites})).await.map_err(|e| format!("{NOT_SHIELDED} ({e})"))?;
-    Ok(v["fresh"].as_bool().unwrap_or(true))
+    Ok((v["fresh"].as_bool().unwrap_or(true), v["shown"].as_bool().unwrap_or(true)))
 }
 
 /// The Bot's screen as a picture. With protected sites set, every capture sits between two cover
 /// checks: if a page arrived without its cover meanwhile (it loaded during the capture), the picture
 /// may show it, so it's thrown away and taken again. It never fails open.
-async fn screenshot(cfg: &Config, display: u16, bot_id: &str) -> Result<(String, String), String> {
+async fn screenshot(cfg: &Config, display: u16, bot_id: &str) -> Result<Shot, String> {
     if cfg.protected_sites.is_empty() {
-        return capture(cfg, display).await;
+        return Ok(Shot { image: capture(cfg, display).await?, protected: false });
     }
-    let mut fresh = shield(cfg, display, bot_id).await?;
+    let (mut fresh, mut shown) = shield(cfg, display, bot_id).await?;
     for _ in 0..3 {
         if fresh {
             // Let the page draw itself with the cover first.
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        let img = capture(cfg, display).await?;
-        fresh = shield(cfg, display, bot_id).await?;
-        if !fresh {
-            return Ok(img);
+        let image = capture(cfg, display).await?;
+        let (fresh_after, shown_after) = shield(cfg, display, bot_id).await?;
+        if !fresh_after {
+            return Ok(Shot { image, protected: shown || shown_after });
         }
+        (fresh, shown) = (fresh_after, shown_after);
     }
     Err(NOT_SHIELDED.into())
 }
@@ -617,8 +639,8 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
     };
     let done = match name {
         "computer_screenshot" => {
-            let img = screenshot(&cfg, info.display, bot_id).await?;
-            return Ok(ToolOut { text: format!("Your screen ({WIDTH} x {HEIGHT})."), image: Some(img) });
+            let shot = screenshot(&cfg, info.display, bot_id).await?;
+            return Ok(ToolOut { text: shot.text(&format!("Your screen ({WIDTH} x {HEIGHT}).")), image: Some(shot.image) });
         }
         "computer_click" => {
             let (x, y) = xy(args, "x", "y")?;
@@ -770,7 +792,7 @@ async fn computer_action(state: &Shared, bot_id: &str, info: &Info, name: &str, 
     // After every action, show the bot what its screen looks like now.
     tokio::time::sleep(Duration::from_millis(500)).await;
     match screenshot(&cfg, info.display, bot_id).await {
-        Ok(img) => Ok(ToolOut { text: format!("{done} This is your screen now."), image: Some(img) }),
+        Ok(shot) => Ok(ToolOut { text: shot.text(&format!("{done} This is your screen now.")), image: Some(shot.image) }),
         Err(e) => Ok(ToolOut { text: format!("{done} {e}"), image: None }),
     }
 }
@@ -878,6 +900,15 @@ mod tests {
         for (i, s) in chat.iter().enumerate() {
             assert_eq!(v["chat"][i], json!(false), "should be shown: {s}");
         }
+    }
+
+    #[test]
+    fn a_protected_page_on_screen_comes_with_a_note() {
+        let img = (String::new(), String::new());
+        let on = super::Shot { image: img.clone(), protected: true };
+        let off = super::Shot { image: img, protected: false };
+        assert!(on.text("Your screen.").starts_with("Your screen. ") && on.text("x").contains("Protected sites"));
+        assert_eq!(off.text("Your screen."), "Your screen.");
     }
 
     #[test]
