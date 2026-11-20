@@ -228,8 +228,13 @@ Computer = {
 Usage = {
   rate_limit: null | { utilization: number /*0..1*/, resets_at: number /*unix s*/, window: string /*"seven_day"|"five_hour"*/, status: string },
   week_cost_usd: number, total_cost_usd: number,
-  per_bot: [{ bot_id, cost_usd, turns }]
+  per_bot: [{ bot_id, cost_usd, turns, chat_turns, routine_runs }],
+  // Per kind of work and model. kind: "chat" (the Bot's own model) | "routine" | "check"
+  // (Auto-Review, picking who answers in a group) | "" (saved before models were recorded).
+  // Tokens are what Claude Code reports per model; week = the last 7 days.
+  by_model: [{ kind, model, week: UsageSum, total: UsageSum }]
 }
+UsageSum = { cost_usd, input, output, cache_read, cache_write, runs }
 ```
 
 ## Routes

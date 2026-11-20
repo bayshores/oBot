@@ -12,6 +12,8 @@ use tokio::process::Command;
 
 use crate::computer::find_claude;
 use crate::config::Config;
+use crate::db::Bot;
+use crate::state::AppState;
 use crate::util::{hide_console, truncate_chars};
 
 pub struct Verdict {
@@ -92,20 +94,20 @@ fn prompt(cfg: &Config, bot_name: &str, workdir: &str, place: Option<&crate::api
 /// `recent`: the user's newest messages in the chat the Bot is answering in, oldest first.
 pub async fn review(
     cfg: &Config,
-    data_dir: &std::path::Path,
-    bot_name: &str,
-    workdir: &str,
+    st: &AppState,
+    bot: &Bot,
     place: Option<&crate::api::Place>,
     recent: &[String],
     tool: &str,
     input: &Value,
 ) -> Option<Verdict> {
-    parse(&quick_answer(cfg, data_dir, &prompt(cfg, bot_name, workdir, place, recent, tool, input), 45).await?)
+    parse(&quick_answer(cfg, st, &bot.id, &prompt(cfg, &bot.name, &bot.workdir, place, recent, tool, input), 45).await?)
 }
 
 /// One short answer from a fast Claude model, with no tools or personal settings (used by
 /// Auto-Review and by group chats to pick who answers). None if it fails or takes over `secs`.
-pub async fn quick_answer(cfg: &Config, data_dir: &std::path::Path, prompt: &str, secs: u64) -> Option<String> {
+/// Its usage is saved as a "check" of `chat` (the Bot or group it was for).
+pub async fn quick_answer(cfg: &Config, st: &AppState, chat: &str, prompt: &str, secs: u64) -> Option<String> {
     let claude = find_claude(&cfg.claude_path)?;
     let mut cmd = Command::new(&claude);
     cmd.args([
@@ -131,7 +133,7 @@ pub async fn quick_answer(cfg: &Config, data_dir: &std::path::Path, prompt: &str
         // Nothing reads these one-answer conversations again, so they aren't saved to disk.
         "--no-session-persistence",
     ])
-    .current_dir(data_dir)
+    .current_dir(&st.data_dir)
     .stdin(Stdio::piped())
     .stdout(Stdio::piped())
     .stderr(Stdio::null())
@@ -151,6 +153,7 @@ pub async fn quick_answer(cfg: &Config, data_dir: &std::path::Path, prompt: &str
     }
     let out = tokio::time::timeout(Duration::from_secs(secs), child.wait_with_output()).await.ok()?.ok()?;
     let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    crate::runner::record_usage(st, chat, &v, "check", "haiku", false);
     let text = v.get("result").and_then(Value::as_str)?;
     Some(text.to_string())
 }
@@ -168,6 +171,29 @@ pub fn verdict_json(v: &Verdict) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_quick_answer_saves_its_usage_as_a_check() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("ob-quick-{}", crate::util::new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let fake = d.join("claude");
+        std::fs::write(
+            &fake,
+            "#!/bin/sh\ncat >/dev/null\necho '{\"result\":\"yes\",\"session_id\":\"q1\",\"total_cost_usd\":0.001,\"modelUsage\":{\"claude-haiku-5-5\":{\"inputTokens\":900,\"outputTokens\":12,\"costUSD\":0.001}}}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let st = crate::state::test_state(&d);
+        let cfg = Config { claude_path: fake.to_string_lossy().into(), ..Config::default() };
+        assert_eq!(quick_answer(&cfg, &st, "b1", "Allow?", 10).await.as_deref(), Some("yes"));
+        let by = st.db.usage_by_model(0).unwrap();
+        assert_eq!(by.len(), 1);
+        assert_eq!((by[0].kind.as_str(), by[0].model.as_str(), by[0].input, by[0].output), ("check", "claude-haiku-5-5", 900, 12));
+        assert_eq!(st.db.kv_get("usage:q1"), None, "one-answer checks keep no totals");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn prompt_shows_recent_messages_oldest_first() {
