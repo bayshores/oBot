@@ -298,7 +298,7 @@ async fn pick(st: &Shared, group: &Bot, text: &str, among: &[String]) -> Vec<Str
         if chat.is_empty() { format!("The user: {}", truncate_chars(text, 300)) } else { chat.join("\n") },
     );
     let cfg = st.config.read().await.clone();
-    let Some(reply) = crate::review::quick_answer(&cfg, &st.data_dir, &prompt, 30).await else {
+    let Some(reply) = crate::review::quick_answer(&cfg, st, &group.id, &prompt, 30).await else {
         tracing::warn!("group {}: couldn't pick who answers; the last Bot to speak does", group.id);
         return fallback();
     };

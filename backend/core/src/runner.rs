@@ -45,6 +45,79 @@ pub async fn enqueue_routine(state: &Shared, bot_id: &str, routine_id: &str, tes
     push(state, bot_id, String::new(), None, None, false, true, Some(RoutineJob { id: routine_id.to_string(), test })).await;
 }
 
+/// Saves what a Claude Code result used, one usage row per model, and tells the app. Returns the
+/// cost (USD). `kind`: "chat", "routine" or "check" (see `db::Usage`). `model`: the model asked
+/// for, used only when Claude Code doesn't say which models answered. `resumable`: the
+/// conversation can go on (its totals are kept to subtract next time); one-answer checks aren't.
+pub fn record_usage(state: &crate::state::AppState, bot_id: &str, v: &Value, kind: &str, model: &str, resumable: bool) -> f64 {
+    let Some(sid) = v.get("session_id").and_then(Value::as_str) else { return 0.0 };
+    let (key, old_key) = (format!("usage:{sid}"), format!("cost:{sid}"));
+    let prev: Value = if resumable { state.db.kv_get(&key).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(Value::Null) } else { Value::Null };
+    // A conversation that started before models were recorded: only its old cost total is known.
+    let old_cost = if prev.is_null() && resumable { state.db.kv_get(&old_key).and_then(|s| s.parse::<f64>().ok()) } else { None };
+    let rows = new_usage(v, &prev, old_cost, kind, model);
+    if resumable {
+        let keep = json!({"modelUsage": v.get("modelUsage").cloned().unwrap_or(Value::Null), "total_cost_usd": v.get("total_cost_usd").cloned().unwrap_or(Value::Null)});
+        state.db.kv_set(&key, &keep.to_string());
+    }
+    let at = now_ms();
+    for r in &rows {
+        let _ = state.db.add_usage(bot_id, r, at);
+    }
+    let usage = crate::api::usage_json(state);
+    state.emit("usage.updated", json!({ "usage": usage }));
+    rows.iter().map(|r| r.cost_usd).sum()
+}
+
+/// The new part of a result's usage, one row per model that did something. Claude Code reports
+/// running totals for the whole conversation, also across `--resume`, so `prev` (the totals the
+/// conversation's last result reported) is taken off; a total below `prev` means it started
+/// counting again, so all of it is new. Without "modelUsage" (an older Claude Code), or for a
+/// conversation whose earlier turns were saved only as `old_cost`, one row has the cost and this
+/// turn's tokens ("usage").
+pub fn new_usage(v: &Value, prev: &Value, old_cost: Option<f64>, kind: &str, model: &str) -> Vec<crate::db::Usage> {
+    let num = |x: &Value, k: &str| x.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+    let by_model = v.get("modelUsage").and_then(Value::as_object).filter(|m| !m.is_empty());
+    let Some(by_model) = by_model.filter(|_| old_cost.is_none()) else {
+        let total = num(v, "total_cost_usd");
+        let before = old_cost.unwrap_or_else(|| num(prev, "total_cost_usd"));
+        let u = v.get("usage").cloned().unwrap_or(Value::Null);
+        let tokens = |k: &str| num(&u, k) as i64;
+        let row = crate::db::Usage {
+            kind: kind.into(),
+            model: by_model.and_then(|m| m.keys().next()).map_or(model, |k| k.as_str()).into(),
+            cost_usd: if total >= before { total - before } else { total },
+            input: tokens("input_tokens"),
+            output: tokens("output_tokens"),
+            cache_read: tokens("cache_read_input_tokens"),
+            cache_write: tokens("cache_creation_input_tokens"),
+            runs: 1,
+        };
+        return if row.cost_usd > 0.0 || row.input + row.output > 0 { vec![row] } else { vec![] };
+    };
+    let mut rows = vec![];
+    for (name, now) in by_model {
+        let was = prev.get("modelUsage").and_then(|m| m.get(name)).cloned().unwrap_or(Value::Null);
+        const FIELDS: [&str; 5] = ["costUSD", "inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens"];
+        let restarted = FIELDS.iter().any(|f| num(now, f) < num(&was, f));
+        let d = |f: &str| if restarted { num(now, f) } else { num(now, f) - num(&was, f) };
+        let row = crate::db::Usage {
+            kind: kind.into(),
+            model: now.get("canonicalModel").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or(name).into(),
+            cost_usd: d("costUSD"),
+            input: d("inputTokens") as i64,
+            output: d("outputTokens") as i64,
+            cache_read: d("cacheReadInputTokens") as i64,
+            cache_write: d("cacheCreationInputTokens") as i64,
+            runs: 1,
+        };
+        if row.cost_usd > 0.0 || row.input + row.output + row.cache_read + row.cache_write > 0 {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
 /// A routine run on its way through `run_turn`: the model it runs on, and what it did.
 pub struct RoutineRun {
     pub model: String,
@@ -2857,21 +2930,13 @@ impl Turn {
         self.got_result = true;
         self.set_session(v);
 
-        if let (Some(sid), Some(total)) = (
-            v.get("session_id").and_then(Value::as_str),
-            v.get("total_cost_usd").and_then(Value::as_f64),
-        ) {
-            // Claude Code reports the whole conversation's total; store only the new part.
-            let key = format!("cost:{sid}");
-            let prev: f64 = self.state.db.kv_get(&key).and_then(|s| s.parse().ok()).unwrap_or(0.0);
-            let delta = if total >= prev { total - prev } else { total };
-            if let Some(rt) = &self.rt {
-                rt.log().cost += delta;
-            }
-            self.state.db.kv_set(&key, &total.to_string());
-            let _ = self.state.db.add_usage(&self.bot_id, delta, now_ms());
-            let usage = crate::api::usage_json(&self.state);
-            self.state.emit("usage.updated", json!({ "usage": usage }));
+        let (kind, model) = match &self.rt {
+            Some(rt) => ("routine", rt.model.as_str()),
+            None => ("chat", ""),
+        };
+        let cost = record_usage(&self.state, &self.bot_id, v, kind, model, true);
+        if let Some(rt) = &self.rt {
+            rt.log().cost += cost;
         }
 
         let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false)
@@ -3018,6 +3083,37 @@ mod tests {
         let (now, later) = split_turn(vec![queued(None, true), queued(Some("a"), false), queued(None, true)]);
         assert_eq!((now.len(), later.len()), (2, 1));
         assert!(now.iter().all(|j| j.routine.is_none()));
+    }
+
+    #[test]
+    fn usage_saves_only_the_new_part_of_each_models_running_total() {
+        let mu = |cost: f64, inp: u64, out: u64| json!({"inputTokens": inp, "outputTokens": out, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0, "costUSD": cost});
+        let first = json!({"total_cost_usd": 0.3, "modelUsage": {"claude-opus-5-5": mu(0.2, 100, 10), "claude-haiku-5-5": mu(0.1, 50, 5)}});
+        let rows = new_usage(&first, &Value::Null, None, "chat", "");
+        assert_eq!(rows.iter().map(|r| (r.model.as_str(), r.input, r.output)).collect::<Vec<_>>(), [("claude-haiku-5-5", 50, 5), ("claude-opus-5-5", 100, 10)]);
+
+        // The next turn: Opus did more, Haiku nothing new (no row for it).
+        let second = json!({"total_cost_usd": 0.5, "modelUsage": {"claude-opus-5-5": mu(0.4, 130, 25), "claude-haiku-5-5": mu(0.1, 50, 5)}});
+        let rows = new_usage(&second, &first, None, "chat", "");
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].model.as_str(), rows[0].input, rows[0].output), ("claude-opus-5-5", 30, 15));
+        assert!((rows[0].cost_usd - 0.2).abs() < 1e-9);
+
+        // Claude Code started counting again: all of it is new.
+        let restarted = json!({"modelUsage": {"claude-opus-5-5": mu(0.05, 20, 2)}});
+        assert_eq!(new_usage(&restarted, &second, None, "chat", "")[0].input, 20);
+
+        // A conversation saved before models were recorded: its old cost total comes off, once.
+        let rows = new_usage(&second, &Value::Null, Some(0.45), "routine", "claude-haiku-5-5");
+        assert_eq!(rows.len(), 1);
+        assert!((rows[0].cost_usd - 0.05).abs() < 1e-9, "{rows:?}");
+
+        // An older Claude Code without modelUsage: the cost, this turn's tokens and the model asked for.
+        let old = json!({"total_cost_usd": 0.02, "usage": {"input_tokens": 7, "output_tokens": 3}});
+        assert_eq!(
+            new_usage(&old, &Value::Null, None, "routine", "claude-haiku-5-5"),
+            [crate::db::Usage { kind: "routine".into(), model: "claude-haiku-5-5".into(), cost_usd: 0.02, input: 7, output: 3, runs: 1, ..Default::default() }]
+        );
     }
 
     #[test]
@@ -3190,7 +3286,7 @@ case "$input" in
     if [ "$(cat "$DIR/mode")" = off ]; then open 1 "https://bad.example/x"; say 2 'Cheap model says hi'
     else open 1 "https://good.example/slots"; say 2 '<seen>slots: none</seen>\nPASS'; fi ;;
 esac
-echo '{"type":"result","subtype":"success","is_error":false,"session_id":"'$sid'","total_cost_usd":0.01}'
+echo '{"type":"result","subtype":"success","is_error":false,"session_id":"'$sid'","total_cost_usd":0.01,"modelUsage":{"'$model'":{"inputTokens":10,"outputTokens":5,"cacheReadInputTokens":100,"cacheCreationInputTokens":20,"costUSD":0.01}}}'
 "#
             .replace("__DIR__", &d.to_string_lossy()),
         )
@@ -3267,6 +3363,14 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"'$sid'
         assert_eq!(st.db.get_routine("r1").unwrap().unwrap().model, sonnet);
         run(false).await;
         assert_eq!(models()[10..], [sonnet.clone()], "no more routine-model runs");
+
+        // Usage is saved per kind of work and model: 6 routine runs on the Bot's model, 5 on the
+        // routine model, and a chat message on the Bot's model.
+        run_turn(&st, &bot.id, None, false, "hi", true, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)), None).await;
+        let by: Vec<(String, String, i64, i64)> = st.db.usage_by_model(0).unwrap().into_iter().map(|u| (u.kind, u.model, u.runs, u.output)).collect();
+        assert!(by.contains(&("routine".into(), sonnet.clone(), 6, 30)), "{by:?}");
+        assert!(by.contains(&("routine".into(), haiku.clone(), 5, 25)), "{by:?}");
+        assert!(by.contains(&("chat".into(), sonnet.clone(), 1, 5)), "{by:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 

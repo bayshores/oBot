@@ -804,8 +804,29 @@ pub fn usage_json(st: &AppState) -> Value {
         "rate_limit": rate_limit,
         "week_cost_usd": week,
         "total_cost_usd": total,
-        "per_bot": per.into_iter().map(|(b, c, t)| json!({"bot_id": b, "cost_usd": c, "turns": t})).collect::<Vec<_>>(),
+        "per_bot": per
+            .into_iter()
+            .map(|(b, c, chats, routines)| json!({"bot_id": b, "cost_usd": c, "turns": chats + routines, "chat_turns": chats, "routine_runs": routines}))
+            .collect::<Vec<_>>(),
+        "by_model": usage_by_model(&st.db, week_start),
     })
+}
+
+/// Usage per kind of work ("chat", "routine", "check") and model, this week and all time.
+fn usage_by_model(db: &crate::db::Db, week_start: i64) -> Vec<Value> {
+    let sums = |u: Option<&crate::db::Usage>| {
+        let u = u.cloned().unwrap_or_default();
+        json!({"cost_usd": u.cost_usd, "input": u.input, "output": u.output, "cache_read": u.cache_read, "cache_write": u.cache_write, "runs": u.runs})
+    };
+    let week = db.usage_by_model(week_start).unwrap_or_default();
+    db.usage_by_model(0)
+        .unwrap_or_default()
+        .iter()
+        .map(|t| {
+            let w = week.iter().find(|w| w.kind == t.kind && w.model == t.model);
+            json!({"kind": t.kind, "model": t.model, "week": sums(w), "total": sums(Some(t))})
+        })
+        .collect()
 }
 
 async fn bootstrap(
@@ -1363,7 +1384,7 @@ async fn decide(st: &Shared, bot_id: &str, tool_name: &str, input: &Value, place
             runner::set_activity(&st, &b.bot_id, Some(("thinking", "Checking the action"))).await;
             // What the user said in the chat this turn is in: the group's when the Bot answers there.
             let recent = st.db.recent_user_texts(&st.chat_of(&b.bot_id).0, crate::review::RECENT_MESSAGES);
-            verdict = crate::review::review(&cfg, &st.data_dir, &bot.name, &bot.workdir, place, &recent, &b.tool_name, &b.input).await;
+            verdict = crate::review::review(&cfg, &st, &bot, place, &recent, &b.tool_name, &b.input).await;
             if let Some(v) = &verdict {
                 if v.allow {
                     tracing::info!("auto-review allowed {} for {}: {}", b.tool_name, bot.name, v.reason);

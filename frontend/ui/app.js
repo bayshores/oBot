@@ -7864,6 +7864,46 @@
     if (days <= 0) return 'Resets today';
     return `Resets in ${days} day${days === 1 ? '' : 's'}`;
   }
+  const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? '' : 's'}`;
+  const fmtTokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n || 0));
+  // Settings › Usage and plan › "Usage by model": what each model used for chats, routines and
+  // background checks, this week or all time, under the models set now.
+  function usageByModel(rows, s) {
+    const range = S.settingsUI.usageRange || 'week';
+    const seg = h(
+      'div',
+      { class: 'segmented', role: 'radiogroup', 'aria-label': 'Time range' },
+      [
+        ['week', 'This week'],
+        ['total', 'All time'],
+      ].map(([v, l]) => h('button', { class: range === v ? 'on' : '', role: 'radio', 'aria-checked': String(range === v), onclick: () => ((S.settingsUI.usageRange = v), rerenderSettings(true)) }, l))
+    );
+    const chatModel = modelName((s && (s.default_model || s.model_default)) || 'claude-sonnet-5-5');
+    const routineModel = s && s.routine_model ? `${modelName(s.routine_model)}, ${(EFFORTS.find(([v]) => v === (s.routine_effort || 'high')) || [, 'High'])[1].toLowerCase()} effort` : 'the Bot’s own model';
+    const KINDS = [
+      ['chat', 'Chats', `The Bot’s own model. Now ${chatModel}, unless a Bot picks its own.`],
+      ['routine', 'Routines', `Now ${routineModel}. The Bot’s model also runs a routine when it writes the routine’s steps or takes over.`],
+      ['check', 'Background checks', 'Auto-Review checking an action, and picking who answers in a group chat.'],
+      ['', 'Earlier', 'Before oBot recorded models and tokens.'],
+    ];
+    const tokens = (t) => [`${fmtTokens(t.input)} in`, `${fmtTokens(t.output)} out`, `${fmtTokens(t.cache_read)} cache read`, `${fmtTokens(t.cache_write)} cache write`].join(' · ');
+    const groups = KINDS.map(([kind, label, sub]) => {
+      const mine = rows.filter((r) => r.kind === kind && r[range].runs > 0).sort((a, b) => b[range].cost_usd - a[range].cost_usd);
+      if (!mine.length) return null;
+      const sum = mine.reduce((n, r) => n + r[range].cost_usd, 0);
+      return section(
+        label,
+        card(mine.map((r) => row(kind ? modelName(r.model) || 'Unknown model' : 'All models', h('span', { class: 'val' }, fmtUsd(r[range].cost_usd)), `${plural(r[range].runs, kind === 'check' ? 'check' : 'turn')} · ${tokens(r[range])}`))),
+        note(`${sub} Total ${fmtUsd(sum)}.`)
+      );
+    }).filter(Boolean);
+    return h(
+      'div',
+      null,
+      section('Usage by model', card(row('Show', seg, range === 'week' ? 'The last 7 days' : 'Since oBot started counting'))),
+      groups.length ? groups : note(range === 'week' ? 'Nothing used in the last 7 days.' : 'Nothing used yet.')
+    );
+  }
   function tabUsage() {
     const s = S.settings;
     const u = S.usage;
@@ -7931,6 +7971,7 @@
         )
       );
     }
+    if (u && (u.by_model || []).length) out.append(usageByModel(u.by_model, s));
     if (u && (u.per_bot || []).length) {
       const per = u.per_bot.slice().sort((a, b) => (b.cost_usd || 0) - (a.cost_usd || 0));
       out.append(
@@ -7939,7 +7980,7 @@
           card(
             per.map((p) => {
               const b = S.bots.get(p.bot_id);
-              return row(h('span', { class: 'bot-inline' }, avatar(b || {}, 22), h('span', null, b ? b.name : 'Deleted Bot')), h('span', { class: 'val' }, fmtUsd(p.cost_usd)), `${p.turns || 0} turn${p.turns === 1 ? '' : 's'}`);
+              return row(h('span', { class: 'bot-inline' }, avatar(b || {}, 22), h('span', null, b ? b.name : 'Deleted Bot')), h('span', { class: 'val' }, fmtUsd(p.cost_usd)), [plural(p.chat_turns || 0, 'chat turn'), p.routine_runs && plural(p.routine_runs, 'routine run')].filter(Boolean).join(' · '));
             })
           ),
           note(`This week ${fmtUsd(u.week_cost_usd)} · all time ${fmtUsd(u.total_cost_usd)}. Estimated by Claude Code. On a subscription you aren’t charged this. It shows what the same usage would cost with an API key.`)

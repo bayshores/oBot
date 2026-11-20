@@ -128,6 +128,22 @@ fn row_to_routine(r: &Row) -> rusqlite::Result<Routine> {
     })
 }
 
+/// What one model used for one kind of work: a row of the usage table, or a sum of rows.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Usage {
+    /// "chat" (the Bot's own model), "routine" (a routine run) or "check" (Auto-Review, picking
+    /// who answers in a group). "" for rows saved before this was recorded.
+    pub kind: String,
+    pub model: String,
+    pub cost_usd: f64,
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+    /// Sums only: how many rows (turns) were added up.
+    pub runs: i64,
+}
+
 pub struct Db {
     conn: Mutex<Connection>,
 }
@@ -264,6 +280,12 @@ impl Db {
             ("routines", "playbook", "TEXT NOT NULL DEFAULT ''"),
             ("routines", "playbook_prompt", "TEXT NOT NULL DEFAULT ''"),
             ("routines", "playbook_bot", "TEXT NOT NULL DEFAULT ''"),
+            ("usage", "kind", "TEXT NOT NULL DEFAULT ''"),
+            ("usage", "model", "TEXT NOT NULL DEFAULT ''"),
+            ("usage", "input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+            ("usage", "output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+            ("usage", "cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
+            ("usage", "cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             let exists: bool = conn
                 .prepare(&format!("SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1"))?
@@ -505,16 +527,18 @@ impl Db {
 
     // ---------- usage ----------
 
-    pub fn add_usage(&self, bot_id: &str, cost: f64, at: i64) -> anyhow::Result<()> {
+    pub fn add_usage(&self, bot_id: &str, u: &Usage, at: i64) -> anyhow::Result<()> {
         self.c().execute(
-            "INSERT INTO usage (bot_id, cost_usd, created_at) VALUES (?1, ?2, ?3)",
-            params![bot_id, cost, at],
+            "INSERT INTO usage (bot_id, cost_usd, created_at, kind, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![bot_id, u.cost_usd, at, u.kind, u.model, u.input, u.output, u.cache_read, u.cache_write],
         )?;
         Ok(())
     }
 
-    /// (week cost, total cost, per bot [(bot_id, cost, turns)])
-    pub fn usage_summary(&self, week_start: i64) -> anyhow::Result<(f64, f64, Vec<(String, f64, i64)>)> {
+    /// (week cost, total cost, per bot [(bot_id, cost, chat turns, routine runs)]). A turn that used
+    /// two models is two rows with the same time, so turns are counted by distinct times.
+    pub fn usage_summary(&self, week_start: i64) -> anyhow::Result<(f64, f64, Vec<(String, f64, i64, i64)>)> {
         let c = self.c();
         let week: f64 = c.query_row(
             "SELECT COALESCE(SUM(cost_usd),0) FROM usage WHERE created_at >= ?1",
@@ -523,12 +547,41 @@ impl Db {
         )?;
         let total: f64 = c.query_row("SELECT COALESCE(SUM(cost_usd),0) FROM usage", [], |r| r.get(0))?;
         let mut st = c.prepare(
-            "SELECT bot_id, SUM(cost_usd), COUNT(*) FROM usage GROUP BY bot_id ORDER BY SUM(cost_usd) DESC",
+            "SELECT bot_id, SUM(cost_usd),
+                    COUNT(DISTINCT CASE WHEN kind IN ('chat','') THEN created_at END),
+                    COUNT(DISTINCT CASE WHEN kind = 'routine' THEN created_at END)
+             FROM usage GROUP BY bot_id ORDER BY SUM(cost_usd) DESC",
         )?;
         let per = st
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok((week, total, per))
+    }
+
+    /// Usage added up per kind of work and model, since `since` (0 = all time). Each `Usage.runs`
+    /// counts the turns that used that model.
+    pub fn usage_by_model(&self, since: i64) -> anyhow::Result<Vec<Usage>> {
+        let c = self.c();
+        let mut st = c.prepare(
+            "SELECT kind, model, SUM(cost_usd), SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens),
+                    SUM(cache_write_tokens), COUNT(*)
+             FROM usage WHERE created_at >= ?1 GROUP BY kind, model ORDER BY SUM(cost_usd) DESC",
+        )?;
+        let v = st
+            .query_map([since], |r| {
+                Ok(Usage {
+                    kind: r.get(0)?,
+                    model: r.get(1)?,
+                    cost_usd: r.get(2)?,
+                    input: r.get(3)?,
+                    output: r.get(4)?,
+                    cache_read: r.get(5)?,
+                    cache_write: r.get(6)?,
+                    runs: r.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(v)
     }
 
     // ---------- key/value ----------
