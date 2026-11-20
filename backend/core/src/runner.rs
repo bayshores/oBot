@@ -1306,7 +1306,9 @@ fn persona(state: &Shared, bot: &Bot, cfg: &Config) -> String {
          memories and routines), update_bot, delete_bot (the user always confirms), move_routine, and the \"bot\" \
          option of remember, recall, create_routine and list_routines (act for another Bot). Only create, change or \
          delete Bots when the user asks or agrees to your plan. When splitting work across Bots, move each Bot's \
-         private facts and routines to it, and retire old Bots only after everything worth keeping has moved.\n",
+         private facts and routines to it, and retire old Bots only after everything worth keeping has moved. \
+         Another Bot may already have done a task: before you tell the user something is still to do, search \
+         every Bot's memory with recall (a few words, all:true).\n",
     );
     s.push_str(&crate::relay::persona(state, bot));
     if crate::screen::platform_ok().is_ok() {
@@ -3325,6 +3327,19 @@ echo '{"type":"result","subtype":"success","is_error":false,"session_id":"'$sid'
         let n = persona_changes("- [m1|user] Likes pasta\n- [m2|user] Old", "- [m3|user] New", &saved);
         assert!(n.contains("- [m3|user] New\n") && n.contains("- - [m2|user] Old\n") && !n.contains("m1"));
         assert_eq!(persona_changes("- [m1|user] Likes pasta\nSame", "Same", &saved), "");
+    }
+
+    #[tokio::test]
+    async fn a_bot_is_told_to_check_the_other_bots_before_calling_something_undone() {
+        let d = std::env::temp_dir().join(format!("ob-persona-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.workspace_root = d.join("bots").to_string_lossy().into();
+        let bot = crate::bots::create(&st, &crate::bots::NewBot { name: "A".into(), ..Default::default() }).await.unwrap();
+        let cfg = st.config.read().await.clone();
+        let p = persona(&st, &bot, &cfg);
+        assert!(p.contains("before you tell the user something is still to do, search every Bot's memory with recall (a few words, all:true)"), "{p}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

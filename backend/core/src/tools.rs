@@ -76,10 +76,11 @@ pub fn definitions() -> Value {
         },
         {
             "name": "recall",
-            "description": "Search your memory. Give \"query\" (a few words) to find matching facts in your profile and log; leave it out to list the profile and the newest log entries. Results have ids, so you can update_memory or forget them. Search before saying you don't know something about the user. Give \"bot\" to look in another Bot's memory.",
+            "description": "Search your memory. Give \"query\" (a few words) to find matching facts in your profile and log; leave it out to list the profile and the newest log entries. Results have ids, so you can update_memory or forget them. Search before saying you don't know something about the user. Give \"bot\" to look in another Bot's memory. Give all:true with a query to search every Bot's memory at once (what another Bot did or knows); each result names its Bot.",
             "inputSchema": {"type": "object", "properties": {
                 "query": {"type": "string"},
-                "bot": {"type": "string", "description": "Optional: another Bot's name or id"}
+                "bot": {"type": "string", "description": "Optional: another Bot's name or id"},
+                "all": {"type": "boolean", "description": "With a query: search every Bot's memory"}
             }}
         },
         {
@@ -375,9 +376,15 @@ pub struct ToolResult {
 pub const RECENT_LOG: usize = 15;
 
 /// `recall`: with a query, the best word matches across profile and log; without one, the
-/// profile plus the newest log entries.
-pub fn recall_text(mems: &[Memory], query: &str) -> String {
-    let line = |m: &Memory| format!("[{}] ({}, {}) {}", m.id, m.tier, if m.bot_id.is_some() { "me" } else { "user" }, m.text);
+/// profile plus the newest log entries. Each line says whose fact it is: "me" (the caller `me`),
+/// "user" (shared by every Bot) or the other Bot's name.
+pub fn recall_text(mems: &[Memory], query: &str, bots: &[Bot], me: &str) -> String {
+    let whose = |m: &Memory| match m.bot_id.as_deref() {
+        None => "user",
+        Some(id) if id == me => "me",
+        Some(id) => bots.iter().find(|b| b.id == id).map_or("another Bot", |b| b.name.as_str()),
+    };
+    let line = |m: &Memory| format!("[{}] ({}, {}) {}", m.id, m.tier, whose(m), m.text);
     let words: Vec<String> = query
         .to_lowercase()
         .split(|c: char| !c.is_alphanumeric())
@@ -674,12 +681,26 @@ async fn run(state: &Shared, bot_id: &str, name: &str, args: &Value) -> Result<S
         }
 
         "recall" => {
+            let query = s(args, "query");
+            let bots = state.db.list_bots().map_err(|e| e.to_string())?;
+            if args.get("all").and_then(Value::as_bool).unwrap_or(false) {
+                if query.is_empty() {
+                    return Err("recall with all:true needs a query".into());
+                }
+                // Every Bot's own facts, and the shared ones once (each Bot's list repeats them).
+                let mut mems = vec![];
+                for (i, b) in bots.iter().enumerate() {
+                    let of_bot = state.db.memories_for(&b.id).map_err(|e| e.to_string())?;
+                    mems.extend(of_bot.into_iter().filter(|m| i == 0 || m.bot_id.is_some()));
+                }
+                return Ok(recall_text(&mems, query, &bots, bot_id));
+            }
             let target = target_bot(state, &bot, args)?;
             let mems = state.db.memories_for(&target.id).map_err(|e| e.to_string())?;
             if mems.is_empty() {
                 return Ok(if target.id == bot_id { "You don't have any saved memories yet.".into() } else { format!("{} has no saved memories yet.", target.name) });
             }
-            Ok(recall_text(&mems, s(args, "query")))
+            Ok(recall_text(&mems, query, &bots, bot_id))
         }
 
         "update_memory" => {
@@ -1137,11 +1158,41 @@ mod tests {
             mem("c", "Allergic to peanuts", "profile", 3),
             mem("d", "Booked a dentist cleaning for December", "log", 4),
         ];
-        let found = recall_text(&m, "dentist");
+        let found = recall_text(&m, "dentist", &[], "me1");
         assert!(found.starts_with("[d]") && found.contains("[b]") && !found.contains("[a]"), "{found}");
-        assert!(recall_text(&m, "zebra").starts_with("Nothing in memory matches"));
-        let all = recall_text(&m, "");
+        assert!(recall_text(&m, "zebra", &[], "me1").starts_with("Nothing in memory matches"));
+        let all = recall_text(&m, "", &[], "me1");
         assert!(all.starts_with("Profile:") && all.contains("Newest log entries (2 of 2"), "{all}");
+    }
+
+    #[tokio::test]
+    async fn recall_all_finds_what_another_bot_did() {
+        let d = std::env::temp_dir().join(format!("ob-recall-all-{}", new_id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let st = crate::state::test_state(&d);
+        st.config.write().await.workspace_root = d.join("bots").to_string_lossy().into();
+        let a = crate::bots::create(&st, &crate::bots::NewBot { name: "A".into(), ..Default::default() }).await.unwrap();
+        let b = crate::bots::create(&st, &crate::bots::NewBot { name: "B".into(), ..Default::default() }).await.unwrap();
+        run(&st, &a.id, "remember", &json!({"fact": "Submitted the Ecotime timecard", "tier": "log"})).await.unwrap();
+        run(&st, &a.id, "remember", &json!({"fact": "Timecard is due every other Friday", "tier": "profile", "about": "user"})).await.unwrap();
+
+        // A plain recall stays in B's own memory: A's private note isn't there.
+        let own = run(&st, &b.id, "recall", &json!({"query": "timecard"})).await.unwrap();
+        assert!(!own.contains("Submitted the Ecotime"), "{own}");
+
+        // all:true searches every Bot: A's note is found under A's name, B's own as "me", the shared fact once.
+        run(&st, &b.id, "remember", &json!({"fact": "Asked about the timecard", "tier": "log"})).await.unwrap();
+        let all = run(&st, &b.id, "recall", &json!({"query": "timecard", "all": true})).await.unwrap();
+        assert!(all.contains("(log, A) Submitted the Ecotime timecard"), "{all}");
+        assert!(all.contains("(log, me) Asked about") && all.contains("(profile, user) Timecard is due"), "{all}");
+        // Looking in one other Bot's memory names that Bot too (it used to say "me").
+        let one = run(&st, &b.id, "recall", &json!({"query": "ecotime", "bot": "A"})).await.unwrap();
+        assert!(one.contains("(log, A) Submitted"), "{one}");
+        assert_eq!(all.matches("due every other Friday").count(), 1, "{all}");
+
+        let err = run(&st, &b.id, "recall", &json!({"all": true})).await.unwrap_err();
+        assert!(err.contains("needs a query"), "{err}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[tokio::test]
